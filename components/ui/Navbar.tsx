@@ -6,8 +6,10 @@ import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 
 const NAV = [
-  { href: '/send',      label: 'Send' },
-  { href: '/customers', label: 'Customers' },
+  { href: '/send',              label: 'Send' },
+  { href: '/customers',         label: 'Customers' },
+  { href: '/admin/topics',      label: 'Topics' },
+  { href: '/admin/templates',   label: 'Templates' },
 ]
 
 export default function Navbar() {

@@ -27,3 +27,11 @@ body {
 .card {
   @apply bg-white rounded-xl border border-gray-200;
 }
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
