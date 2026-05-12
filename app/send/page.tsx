@@ -237,11 +237,18 @@ export default function SendPage() {
       {/* Template picker bottom sheet */}
       {step === 'pick-template' && selectedCustomer && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={resetFlow}>
-          <div className="bg-white rounded-t-2xl p-5 max-h-[70vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-            <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
-            <p className="font-semibold text-gray-900 mb-1">Choose a message</p>
-            <p className="text-xs text-gray-500 mb-4">Sending to {selectedCustomer.name}</p>
-            <div className="space-y-2">
+          <div
+            className="bg-white rounded-t-2xl flex flex-col max-h-[80vh]"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Fixed header */}
+            <div className="flex-shrink-0 px-5 pt-5 pb-3">
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+              <p className="font-semibold text-gray-900">Choose a message</p>
+              <p className="text-xs text-gray-500 mt-0.5">Sending to {selectedCustomer.name}</p>
+            </div>
+            {/* Scrollable template list */}
+            <div className="flex-1 overflow-y-auto px-5 space-y-2 pb-2">
               {candidateTemplates.map(t => (
                 <button
                   key={t.id}
@@ -258,7 +265,10 @@ export default function SendPage() {
                 </button>
               ))}
             </div>
-            <button onClick={resetFlow} className="btn-secondary w-full mt-4">Cancel</button>
+            {/* Fixed footer */}
+            <div className="flex-shrink-0 px-5 pt-3 pb-8">
+              <button onClick={resetFlow} className="btn-secondary w-full">Cancel</button>
+            </div>
           </div>
         </div>
       )}
@@ -266,36 +276,45 @@ export default function SendPage() {
       {/* Preview bottom sheet */}
       {step === 'preview' && selectedCustomer && selectedTemplate && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={resetFlow}>
-          <div className="bg-white rounded-t-2xl p-5" onClick={e => e.stopPropagation()}>
-            <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <p className="font-semibold text-gray-900">{selectedCustomer.name}</p>
-                <p className="text-xs text-gray-500">+91 {selectedCustomer.phone}</p>
+          <div
+            className="bg-white rounded-t-2xl flex flex-col max-h-[85vh]"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Fixed header */}
+            <div className="flex-shrink-0 px-5 pt-5 pb-3">
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-gray-900">{selectedCustomer.name}</p>
+                  <p className="text-xs text-gray-500">+91 {selectedCustomer.phone}</p>
+                </div>
+                <span className="flex-shrink-0 text-xs bg-green-50 text-green-700 px-2 py-1 rounded-full border border-green-100 font-medium">
+                  {selectedTemplate.name}
+                </span>
               </div>
-              <span className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded-full border border-green-100 font-medium">
-                {selectedTemplate.name}
-              </span>
             </div>
-
-            {/* Message bubble preview */}
-            <div className="bg-[#dcf8c6] rounded-2xl rounded-tl-sm p-4 mb-5 text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
-              {previewMessage}
+            {/* Scrollable message preview */}
+            <div className="flex-1 overflow-y-auto px-5 pb-2">
+              <div className="bg-[#dcf8c6] rounded-2xl rounded-tl-sm p-4 text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+                {previewMessage}
+              </div>
             </div>
-
-            <button
-              onClick={handleOpenWhatsApp}
-              className="btn-primary w-full flex items-center justify-center gap-2"
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
-                <path d="M12 0C5.373 0 0 5.373 0 12c0 2.096.544 4.066 1.497 5.777L0 24l6.385-1.473A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.848 0-3.58-.497-5.071-1.366l-.361-.214-3.742.862.934-3.628-.235-.374A9.96 9.96 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
-              </svg>
-              Open WhatsApp
-            </button>
-            <button onClick={() => setStep('pick-template')} className="btn-secondary w-full mt-2">
-              ← Change Message
-            </button>
+            {/* Fixed footer buttons — always visible */}
+            <div className="flex-shrink-0 px-5 pt-3 pb-8 space-y-2">
+              <button
+                onClick={handleOpenWhatsApp}
+                className="btn-primary w-full flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+                  <path d="M12 0C5.373 0 0 5.373 0 12c0 2.096.544 4.066 1.497 5.777L0 24l6.385-1.473A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.848 0-3.58-.497-5.071-1.366l-.361-.214-3.742.862.934-3.628-.235-.374A9.96 9.96 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
+                </svg>
+                Open WhatsApp
+              </button>
+              <button onClick={() => setStep('pick-template')} className="btn-secondary w-full">
+                ← Change Message
+              </button>
+            </div>
           </div>
         </div>
       )}
