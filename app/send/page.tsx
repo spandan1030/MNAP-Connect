@@ -70,8 +70,16 @@ export default function SendPage() {
 
     const topicList: InterestTopic[] = topicsRes.data ?? []
     setAllTopics(topicList)
-    setTopics(topicList.filter(t => !t.parent_id))
+    const parentTopics = topicList.filter(t => !t.parent_id)
+    setTopics(parentTopics)
     setTemplates(templatesRes.data ?? [])
+
+    // Default filter to Daily Rates on first load
+    setActiveFilter(prev => {
+      if (prev !== 'all') return prev
+      const dailyRates = parentTopics.find(t => t.name === 'Daily Rates')
+      return dailyRates ? dailyRates.id : 'all'
+    })
     setTodayLogs(logsRes.data ?? [])
     setTodayRates(ratesRes.data ?? null)
 
