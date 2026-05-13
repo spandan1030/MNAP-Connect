@@ -10,6 +10,12 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
   -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+
+* {
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .input {
@@ -34,4 +40,14 @@ body {
 }
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+/* Safe area for iPhone home indicator */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Push content above the fixed bottom tab bar */
+main {
+  padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
 }
