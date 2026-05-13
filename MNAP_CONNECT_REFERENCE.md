@@ -29,9 +29,9 @@
 | App Name | MNAP Connect |
 | Purpose | WhatsApp customer engagement — enrollment, interest tracking, message sending, communication history |
 | Store | M N Alankar Palace |
-| Repo | TBD (new GitHub repo: `MNAP-Connect`) |
+| Repo | `https://github.com/spandan1030/MNAP-Connect.git` |
 | Local Folder | `C:\Users\spand\Desktop\Management Software\mnap-connect` |
-| Live URL | TBD (separate Vercel project) |
+| Live URL | `https://mnapconnect.vercel.app` |
 | Supabase Project | **Same as MNAP** — `https://tqnirshwiqpwbqdcrgbr.supabase.co` |
 | Database Namespace | All tables prefixed `wa_` — zero conflict with MNAP tables |
 | Primary Users | Salesmen (internal, authenticated) |
@@ -172,11 +172,9 @@ Pre-written message templates, linked to a topic.
 | `created_at` | TIMESTAMPTZ | DEFAULT NOW() | — |
 | `created_by` | UUID | FK → profiles | Admin who created this template |
 
-**Placeholder support (Phase 1):**
+**Supported placeholders (all live):**
 - `{name}` → customer's name
-
-**Placeholder support (Phase 2 — rate integration):**
-- `{rate_24kt}` → today's 24KT rate from `daily_rates`
+- `{rate_24kt}` → today's 24KT rate from `daily_rates` (auto-fetched at send time)
 - `{rate_22kt}` → today's 22KT rate
 - `{rate_18kt}` → today's 18KT rate
 
@@ -277,11 +275,11 @@ Salesman taps [Send →] on a customer row
 ```
 
 ### Preview Screen
-- Shows the full substituted message text (e.g. `{name}` replaced with "Priya")
+- Shows the full substituted message text (e.g. `{name}` replaced with "Priya", rates filled in)
 - Customer name and phone shown at top
+- **"Edit" button** in the header — toggles the green message bubble into an editable textarea so the salesman can tweak wording before sending; edited text is what gets sent and logged
 - "Open WhatsApp" button (WhatsApp green, full-width, prominent)
-- "Back" to change template
-- No editing of message at this stage (Phase 1 — keeps it simple and consistent)
+- "← Change Message" to go back to template picker
 
 ### Template Auto-Load Rule
 The **filter** determines the template, not the customer's other interests.
@@ -304,15 +302,21 @@ This means the salesman workflow is:
 ### Template Admin (`/admin/templates`)
 - List all templates, filterable by topic
 - Add / edit / toggle active
-- Body text input with `{name}` helper hint
-- Preview button shows example with substituted placeholder
+- **Placeholder chips** above the textarea — tap any chip to insert at cursor position:
+  - `{name}` — Customer name
+  - `{rate_24kt}` — 24KT rate per gram
+  - `{rate_22kt}` — 22KT rate per gram
+  - `{rate_18kt}` — 18KT rate per gram
+- Preview button shows example with all placeholders substituted (sample rates used; disclaimer shown)
 
-### `{name}` Substitution Rule
+### Placeholder Substitution Rule
 At send time (when wa.me link is constructed):
 ```
-final_message = template.body_text.replace('{name}', customer.name)
+final_message = applyPlaceholders(template.body_text, customer.name, todayRates)
 ```
-`final_message` is URL-encoded and appended to the wa.me link. It is also stored verbatim in `wa_communication_log.message_sent`.
+Where `applyPlaceholders` replaces `{name}` with the customer's name and all `{rate_*}` tags with today's rates from the `daily_rates` table (formatted `en-IN` with 2 decimal places; `—` if rate not available).
+
+`final_message` (after any inline edits by the salesman) is URL-encoded and appended to the wa.me link. It is also stored verbatim in `wa_communication_log.message_sent`.
 
 ### Template Deactivation
 - Inactive templates do not appear in the send flow
@@ -417,8 +421,8 @@ final_message = template.body_text.replace('{name}', customer.name)
 1. Admin opens /admin/templates
 2. Taps "Add Template"
 3. Selects topic (or General), enters name, writes body_text
-4. Uses {name} in body as needed
-5. Taps Preview to verify substitution
+4. Taps placeholder chips to insert {name}, {rate_24kt}, {rate_22kt}, {rate_18kt} at cursor
+5. Taps "Preview message" to verify — sample rates used in preview; actual rates filled at send time
 6. Saves → INSERT wa_message_templates
 7. Template immediately available in send flow
 ```
@@ -466,22 +470,23 @@ wa.me link: https://wa.me/919876543210?text=Hello%20Priya%20Sharma!%20Today's%20
 
 ## 12. Build Phases
 
-### Phase 1 — Core (Build First)
-- [ ] New Next.js project setup (`mnap-connect`)
-- [ ] Supabase: create all `wa_` tables + RLS policies
-- [ ] Auth: login page, middleware (reuse MNAP Supabase project)
-- [ ] Interest Topic Master (`/admin/topics`) — CRUD, 2-level tree
-- [ ] Template Master (`/admin/templates`) — CRUD, topic association, `{name}` preview
-- [ ] Customer Enrollment by salesman (`/customers/new`)
-- [ ] Customer List (`/customers`) — search, filter by status
-- [ ] Customer Profile (`/customers/[id]`) — interests, history, opt-out
-- [ ] **Send Module (`/`)** — filter chips, customer list, send button, template resolution, preview, wa.me link, log
-- [ ] Self-Enroll page (`/enroll`) — public, duplicate phone handling
-- [ ] Opt-out flow
+### Phase 1 — Core ✅ Complete
+- [x] New Next.js project setup (`mnap-connect`)
+- [x] Supabase: create all `wa_` tables + RLS policies
+- [x] Auth: login page, middleware (reuse MNAP Supabase project)
+- [x] Interest Topic Master (`/admin/topics`) — CRUD, 2-level tree
+- [x] Template Master (`/admin/templates`) — CRUD, topic association, placeholder chips, preview
+- [x] Customer Enrollment by salesman (`/customers/new`)
+- [x] Customer List (`/customers`) — search, filter by status
+- [x] Customer Profile (`/customers/[id]`) — interests, history, opt-out
+- [x] **Send Module (`/`)** — filter chips, customer list, send button, template resolution, preview, inline edit, wa.me link, log
+- [x] Self-Enroll page (`/enroll`) — public, duplicate phone handling
+- [x] Opt-out flow
 
-### Phase 2 — Rate Integration
-- [ ] Pull today's rates from `daily_rates` table (shared Supabase)
-- [ ] Support `{rate_24kt}`, `{rate_22kt}`, `{rate_18kt}` placeholders in templates
+### Phase 2 — Rate Integration ✅ Complete
+- [x] Pull today's rates from `daily_rates` table (shared Supabase) — auto-fetched on Send page load
+- [x] Support `{rate_24kt}`, `{rate_22kt}`, `{rate_18kt}` placeholders in templates — substituted at send time
+- [x] Rate status pill on Send module — green if rates loaded, amber warning if not yet synced
 - [ ] Rate template quick-action: one-tap send from customer card when filter = "Daily Rates"
 
 ### Phase 3 — Broadcast (Requires WhatsApp Business API)
@@ -502,7 +507,7 @@ wa.me link: https://wa.me/919876543210?text=Hello%20Priya%20Sharma!%20Today's%20
 
 | Feature | Notes |
 |---------|-------|
-| `{rate_24kt}` in templates | Pull from `daily_rates` in shared DB — trivial |
+| `{rate_24kt}` in templates | ✅ Live — pulled from `daily_rates` table at send time |
 | Photo sharing | Requires WhatsApp Business API — wa.me cannot attach files |
 | Broadcast to interest groups | Requires API — plan budget ~₹2,500–5,000/month (AiSensy/WATI/Interakt) |
 | Product catalog app | Separate build — jewellery items tagged by design/weight/type/metal |
@@ -528,7 +533,7 @@ wa.me link: https://wa.me/919876543210?text=Hello%20Priya%20Sharma!%20Today's%20
 
 ---
 
-*Document created: 12 May 2026*
+*Document created: 12 May 2026 — last updated: 13 May 2026*
 *Project folder: `C:\Users\spand\Desktop\Management Software\mnap-connect`*
 *Supabase project: shared with MNAP — `tqnirshwiqpwbqdcrgbr`*
 *Migrations: see `MNAP_CONNECT_MIGRATIONS.md`*
