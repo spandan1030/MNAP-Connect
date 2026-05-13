@@ -24,6 +24,24 @@ export function buildWhatsAppUrl(phone: string, message: string) {
   return `https://wa.me/${number}?text=${encodeURIComponent(message)}`
 }
 
-export function applyPlaceholders(template: string, customerName: string) {
-  return template.replace(/\{name\}/g, customerName)
+interface Rates {
+  rate_24kt: number | null
+  rate_22kt: number | null
+  rate_18kt: number | null
+}
+
+function fmtRate(val: number | null) {
+  if (val == null) return '—'
+  return val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+export function applyPlaceholders(template: string, customerName: string, rates?: Rates | null) {
+  let out = template.replace(/\{name\}/g, customerName)
+  if (rates) {
+    out = out
+      .replace(/\{rate_24kt\}/g, fmtRate(rates.rate_24kt))
+      .replace(/\{rate_22kt\}/g, fmtRate(rates.rate_22kt))
+      .replace(/\{rate_18kt\}/g, fmtRate(rates.rate_18kt))
+  }
+  return out
 }

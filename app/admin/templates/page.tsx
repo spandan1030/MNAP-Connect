@@ -113,7 +113,12 @@ export default function TemplatesPage() {
               placeholder={`Message body. Use {name} for customer name.\n\nExample:\nHello {name}! Today's gold rates at MNAP...`}
               required
             />
-            <p className="text-xs text-gray-400 mt-1">Use <code className="bg-gray-100 px-1 rounded">{'{name}'}</code> — replaced with customer's name when sent</p>
+            <p className="text-xs text-gray-400 mt-1">
+              Placeholders: <code className="bg-gray-100 px-1 rounded">{'{name}'}</code> customer name &nbsp;·&nbsp;
+              <code className="bg-gray-100 px-1 rounded">{'{rate_24kt}'}</code> &nbsp;
+              <code className="bg-gray-100 px-1 rounded">{'{rate_22kt}'}</code> &nbsp;
+              <code className="bg-gray-100 px-1 rounded">{'{rate_18kt}'}</code> today's gold rates
+            </p>
           </div>
 
           {formBody && (

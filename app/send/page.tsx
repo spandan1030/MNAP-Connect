@@ -15,6 +15,12 @@ interface TodayLog {
   topic_id: string | null
 }
 
+interface TodayRates {
+  rate_24kt: number | null
+  rate_22kt: number | null
+  rate_18kt: number | null
+}
+
 type Step = 'list' | 'pick-template' | 'preview' | 'confirm-resend'
 
 export default function SendPage() {
@@ -28,6 +34,7 @@ export default function SendPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [todayLogs, setTodayLogs] = useState<TodayLog[]>([])
+  const [todayRates, setTodayRates] = useState<TodayRates | null>(null)
 
   // Send flow state
   const [step, setStep] = useState<Step>('list')
@@ -43,7 +50,7 @@ export default function SendPage() {
 
   async function loadData() {
     setLoading(true)
-    const [topicsRes, customersRes, interestsRes, templatesRes, logsRes] = await Promise.all([
+    const [topicsRes, customersRes, interestsRes, templatesRes, logsRes, ratesRes] = await Promise.all([
       supabase.from('wa_interest_topics').select('*').eq('is_active', true).order('sort_order'),
       supabase.from('wa_customers').select('*').eq('is_active', true).eq('is_opted_out', false).order('name'),
       supabase.from('wa_customer_interests').select('customer_id, topic_id'),
@@ -53,6 +60,11 @@ export default function SendPage() {
         .select('customer_id, topic_id')
         .gte('sent_at', `${todayStr}T00:00:00`)
         .lt('sent_at', `${todayStr}T23:59:59`),
+      supabase
+        .from('daily_rates')
+        .select('rate_24kt, rate_22kt, rate_18kt')
+        .eq('date', todayStr)
+        .maybeSingle(),
     ])
 
     const topicList: InterestTopic[] = topicsRes.data ?? []
@@ -60,6 +72,7 @@ export default function SendPage() {
     setTopics(topicList.filter(t => !t.parent_id))
     setTemplates(templatesRes.data ?? [])
     setTodayLogs(logsRes.data ?? [])
+    setTodayRates(ratesRes.data ?? null)
 
     const interestMap: Record<string, string[]> = {}
     for (const row of (interestsRes.data ?? [])) {
@@ -125,7 +138,7 @@ export default function SendPage() {
     }
 
     if (candidates.length === 1) {
-      const msg = applyPlaceholders(candidates[0].body_text, customer.name)
+      const msg = applyPlaceholders(candidates[0].body_text, customer.name, todayRates)
       setSelectedTemplate(candidates[0])
       setPreviewMessage(msg)
       setStep('preview')
@@ -136,7 +149,7 @@ export default function SendPage() {
   }
 
   function handlePickTemplate(template: MessageTemplate) {
-    const msg = applyPlaceholders(template.body_text, selectedCustomer!.name)
+    const msg = applyPlaceholders(template.body_text, selectedCustomer!.name, todayRates)
     setSelectedTemplate(template)
     setPreviewMessage(msg)
     setStep('preview')
@@ -209,6 +222,25 @@ export default function SendPage() {
             </button>
           ))}
         </div>
+
+        {/* Today's rates status */}
+        {!loading && (
+          todayRates ? (
+            <div className="flex items-center gap-2 text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+              <span className="w-1.5 h-1.5 bg-green-500 rounded-full flex-shrink-0" />
+              <span>
+                Today's rates loaded — 24KT ₹{todayRates.rate_24kt?.toLocaleString('en-IN') ?? '—'} &nbsp;·&nbsp;
+                22KT ₹{todayRates.rate_22kt?.toLocaleString('en-IN') ?? '—'} &nbsp;·&nbsp;
+                18KT ₹{todayRates.rate_18kt?.toLocaleString('en-IN') ?? '—'}
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+              <span className="w-1.5 h-1.5 bg-amber-400 rounded-full flex-shrink-0" />
+              <span>Today's rates not yet synced — rate placeholders will show —</span>
+            </div>
+          )
+        )}
 
         {/* Search */}
         <input
@@ -312,7 +344,7 @@ export default function SendPage() {
                     <p className="text-xs text-green-600 mt-0.5">{topicName(t.topic_id)}</p>
                   )}
                   <p className="text-xs text-gray-500 mt-1 line-clamp-2">
-                    {applyPlaceholders(t.body_text, selectedCustomer.name)}
+                    {applyPlaceholders(t.body_text, selectedCustomer.name, todayRates)}
                   </p>
                 </button>
               ))}
