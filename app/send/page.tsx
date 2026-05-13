@@ -42,6 +42,7 @@ export default function SendPage() {
   const [candidateTemplates, setCandidateTemplates] = useState<MessageTemplate[]>([])
   const [selectedTemplate, setSelectedTemplate] = useState<MessageTemplate | null>(null)
   const [previewMessage, setPreviewMessage] = useState('')
+  const [editMode, setEditMode] = useState(false)
 
   useEffect(() => { loadData() }, [])
 
@@ -185,6 +186,7 @@ export default function SendPage() {
     setSelectedTemplate(null)
     setCandidateTemplates([])
     setPreviewMessage('')
+    setEditMode(false)
   }
 
   function topicName(id: string) {
@@ -367,15 +369,37 @@ export default function SendPage() {
                   <p className="font-semibold text-gray-900">{selectedCustomer.name}</p>
                   <p className="text-xs text-gray-500">+91 {selectedCustomer.phone}</p>
                 </div>
-                <span className="flex-shrink-0 text-xs bg-green-50 text-green-700 px-2 py-1 rounded-full border border-green-100 font-medium">
-                  {selectedTemplate.name}
-                </span>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => setEditMode(m => !m)}
+                    className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+                      editMode
+                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : 'bg-gray-50 text-gray-600 border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    {editMode ? 'Done' : 'Edit'}
+                  </button>
+                  <span className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded-full border border-green-100 font-medium">
+                    {selectedTemplate.name}
+                  </span>
+                </div>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto px-5 pb-2">
-              <div className="bg-[#dcf8c6] rounded-2xl rounded-tl-sm p-4 text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
-                {previewMessage}
-              </div>
+              {editMode ? (
+                <textarea
+                  value={previewMessage}
+                  onChange={e => setPreviewMessage(e.target.value)}
+                  className="input resize-none text-sm leading-relaxed"
+                  rows={8}
+                  autoFocus
+                />
+              ) : (
+                <div className="bg-[#dcf8c6] rounded-2xl rounded-tl-sm p-4 text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+                  {previewMessage}
+                </div>
+              )}
             </div>
             <div className="flex-shrink-0 px-5 pt-3 pb-8 space-y-2">
               <button
@@ -388,7 +412,7 @@ export default function SendPage() {
                 </svg>
                 Open WhatsApp
               </button>
-              <button onClick={() => setStep('pick-template')} className="btn-secondary w-full">
+              <button onClick={() => { setStep('pick-template'); setEditMode(false) }} className="btn-secondary w-full">
                 ← Change Message
               </button>
             </div>
