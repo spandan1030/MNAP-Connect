@@ -114,6 +114,8 @@ export async function POST(req: NextRequest) {
       }
       if (parameters.length) components.push({ type: 'body', parameters })
 
+      console.log('[send] template components:', JSON.stringify(components, null, 2))
+
       wamid = await sendTemplateMessage(
         cleanPhone,
         template.meta_template_name,
