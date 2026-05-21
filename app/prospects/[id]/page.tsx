@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import Navbar from '@/components/ui/Navbar'
 import { SEGMENT_COLORS } from '@/lib/segmentation'
@@ -35,6 +35,7 @@ function readable(field: string, value: string | null) {
 
 export default function ProspectProfilePage() {
   const { id } = useParams<{ id: string }>()
+  const router = useRouter()
   const supabase = createClient()
 
   const [customer, setCustomer] = useState<WaBCustomer | null>(null)
@@ -114,9 +115,17 @@ export default function ProspectProfilePage() {
               <h1 className="text-base font-bold text-gray-900">{customer.name}</h1>
               <p className="text-xs text-gray-500">+91 {customer.phone}</p>
             </div>
-            <span className={`text-xs px-2.5 py-1 rounded-full border font-medium flex-shrink-0 ${segColor}`}>
-              {segment?.primary_segment ?? 'Unqualified Prospect'}
-            </span>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${segColor}`}>
+                {segment?.primary_segment ?? 'Unqualified Prospect'}
+              </span>
+              <button
+                onClick={() => router.push(`/prospects/${id}/edit`)}
+                className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 px-2.5 py-1 rounded-lg hover:border-gray-400 transition-colors"
+              >
+                Edit
+              </button>
+            </div>
           </div>
           {customer.notes && <p className="text-xs text-gray-500 border-t border-gray-100 pt-2">{customer.notes}</p>}
           {profile?.is_vip && (
