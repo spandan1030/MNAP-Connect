@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
-import { verifySignature } from '@/lib/whatsapp/api'
+import { verifySignature, sendTextMessage } from '@/lib/whatsapp/api'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { applyPlaceholders } from '@/lib/utils'
 
 // ---------------------------------------------------------------------------
 // GET — Meta webhook verification (one-time, when you register the URL)
@@ -150,6 +151,83 @@ async function handleInboundMessage(
   })
 
   if (msgError) console.error('[webhook] Failed to insert inbound message:', msgError)
+
+  // Auto-reply if message contains "rate"
+  if (msg.type === 'text' && body.toLowerCase().includes('rate')) {
+    const customerName = customer?.name ?? contactName ?? 'there'
+    await handleAutoReply(phone, threadId, customerName).catch(err =>
+      console.error('[webhook] Auto-reply error:', err)
+    )
+  }
+}
+
+async function handleAutoReply(phone: string, threadId: string, customerName: string) {
+  // Find the Daily Rates topic
+  const { data: topic } = await supabaseAdmin
+    .from('wa_interest_topics')
+    .select('id')
+    .ilike('name', '%rate%')
+    .eq('is_active', true)
+    .limit(1)
+    .maybeSingle()
+
+  // Get the first active template for that topic (or any rate template if no topic match)
+  let template = null
+  if (topic) {
+    const { data } = await supabaseAdmin
+      .from('wa_message_templates')
+      .select('*')
+      .eq('topic_id', topic.id)
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle()
+    template = data
+  }
+  if (!template) {
+    const { data } = await supabaseAdmin
+      .from('wa_message_templates')
+      .select('*')
+      .ilike('name', '%rate%')
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle()
+    template = data
+  }
+  if (!template) {
+    console.warn('[webhook] Auto-reply: no rate template found')
+    return
+  }
+
+  // Fetch today's rates
+  const todayStr = new Date().toLocaleDateString('en-CA')
+  const { data: rates } = await supabaseAdmin
+    .from('daily_rates')
+    .select('rate_24kt, rate_22kt, rate_18kt')
+    .eq('date', todayStr)
+    .maybeSingle()
+
+  const messageBody = applyPlaceholders(template.body_text, customerName, rates)
+
+  // Send via Meta API
+  const wamid = await sendTextMessage(phone, messageBody)
+
+  const now = new Date().toISOString()
+
+  // Log outbound message
+  await supabaseAdmin.from('wa_messages').insert({
+    thread_id:     threadId,
+    direction:     'outbound',
+    wa_message_id: wamid,
+    body:          messageBody,
+    template_name: template.name,
+    status:        'sent',
+  })
+
+  // Update thread preview
+  await supabaseAdmin
+    .from('wa_threads')
+    .update({ last_message_at: now, last_message_preview: messageBody.slice(0, 60) })
+    .eq('id', threadId)
 }
 
 async function handleStatusUpdate(status: WaStatusUpdate) {
