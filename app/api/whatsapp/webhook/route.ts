@@ -1,11 +1,20 @@
 import { NextRequest } from 'next/server'
-import { verifySignature, sendTextMessage, getMediaDownloadUrl, downloadMediaBuffer } from '@/lib/whatsapp/api'
+import { verifySignature, sendTextMessage, sendTemplateMessage, getMediaDownloadUrl, downloadMediaBuffer } from '@/lib/whatsapp/api'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { applyPlaceholders } from '@/lib/utils'
 
 // Module-level cache for the rate template — avoids 2 DB round trips on warm instances.
 // Expires after 1 hour so template edits eventually take effect.
-let cachedRateTemplate: { body_text: string; name: string; id: string } | null = null
+let cachedRateTemplate: {
+  id: string
+  name: string
+  body_text: string
+  meta_template_name: string | null
+  meta_template_lang: string | null
+  meta_variables: string[] | null
+  header_type: string | null
+  header_image_url: string | null
+} | null = null
 let cacheExpiresAt = 0
 
 // ---------------------------------------------------------------------------
@@ -195,6 +204,8 @@ async function fetchAndStoreInboundMedia(mediaId: string, mimeType: string): Pro
 async function getRateTemplate() {
   if (cachedRateTemplate && Date.now() < cacheExpiresAt) return cachedRateTemplate
 
+  const TEMPLATE_COLS = 'id, name, body_text, meta_template_name, meta_template_lang, meta_variables, header_type, header_image_url'
+
   // Topic lookup and a broad name-based fallback query run in parallel
   const [{ data: topic }, { data: nameMatch }] = await Promise.all([
     supabaseAdmin
@@ -206,7 +217,7 @@ async function getRateTemplate() {
       .maybeSingle(),
     supabaseAdmin
       .from('wa_message_templates')
-      .select('id, name, body_text')
+      .select(TEMPLATE_COLS)
       .ilike('name', '%rate%')
       .eq('is_active', true)
       .limit(1)
@@ -217,7 +228,7 @@ async function getRateTemplate() {
   if (topic) {
     const { data } = await supabaseAdmin
       .from('wa_message_templates')
-      .select('id, name, body_text')
+      .select(TEMPLATE_COLS)
       .eq('topic_id', topic.id)
       .eq('is_active', true)
       .limit(1)
@@ -255,7 +266,40 @@ async function handleAutoReply(phone: string, threadId: string, customerName: st
   }
 
   const messageBody = applyPlaceholders(template.body_text, customerName, rates)
-  const wamid = await sendTextMessage(phone, messageBody)
+
+  let wamid: string
+
+  if (template.meta_template_name) {
+    // Use Meta-approved template — works outside the 24h window
+    const variables = (template.meta_variables as string[] | null) ?? []
+    const parameters = variables.map(varName => {
+      const v = varName.toLowerCase()
+      if (v === 'name') return { type: 'text', parameter_name: 'customer_name', text: customerName }
+      if (v === 'rate_24kt') return { type: 'text', text: rates?.rate_24kt != null ? String(rates.rate_24kt) : '—' }
+      if (v === 'rate_22kt') return { type: 'text', text: rates?.rate_22kt != null ? String(rates.rate_22kt) : '—' }
+      if (v === 'rate_18kt') return { type: 'text', text: rates?.rate_18kt != null ? String(rates.rate_18kt) : '—' }
+      return { type: 'text', text: '' }
+    })
+
+    const components: object[] = []
+    if (template.header_type === 'image' && template.header_image_url) {
+      components.push({
+        type: 'header',
+        parameters: [{ type: 'image', image: { link: template.header_image_url } }],
+      })
+    }
+    if (parameters.length) components.push({ type: 'body', parameters })
+
+    wamid = await sendTemplateMessage(
+      phone,
+      template.meta_template_name,
+      template.meta_template_lang ?? 'en',
+      components
+    )
+  } else {
+    // Fallback: free-form text (only works within 24h customer reply window)
+    wamid = await sendTextMessage(phone, messageBody)
+  }
 
   const now = new Date().toISOString()
 
