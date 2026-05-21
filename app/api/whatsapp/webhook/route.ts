@@ -30,17 +30,17 @@ export async function GET(req: NextRequest) {
 
 // ---------------------------------------------------------------------------
 // POST — Receive events from Meta
-// Always return 200 immediately. Meta retries if it doesn't get 200 within 20s.
-// Process events asynchronously after responding.
+// We await all processing before returning 200.
+// Our total work (~500ms) is well within Meta's 20-second delivery timeout,
+// and awaiting ensures Vercel doesn't freeze the Lambda before the auto-reply
+// finishes (fire-and-forget gets cut off on serverless after the response).
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest) {
   const rawBody  = await req.text()
   const sigHeader = req.headers.get('x-hub-signature-256') ?? ''
 
-  // Verify signature — reject spoofed requests
   if (!verifySignature(rawBody, sigHeader)) {
     console.error('[webhook] Invalid signature — request rejected')
-    // Still return 200 so Meta doesn't flood retries for a misconfigured secret
     return Response.json({ status: 'ok' })
   }
 
@@ -51,10 +51,11 @@ export async function POST(req: NextRequest) {
     return Response.json({ status: 'ok' })
   }
 
-  // Process async — do NOT await (return 200 first)
-  handlePayload(payload).catch(err =>
+  try {
+    await handlePayload(payload)
+  } catch (err) {
     console.error('[webhook] Processing error:', err)
-  )
+  }
 
   return Response.json({ status: 'ok' })
 }
@@ -189,8 +190,11 @@ async function getRateTemplate() {
   template = template ?? nameMatch
 
   if (template) {
+    console.log('[webhook] Rate template resolved:', template.name)
     cachedRateTemplate = template
     cacheExpiresAt = Date.now() + 60 * 60 * 1000 // 1 hour
+  } else {
+    console.warn('[webhook] No rate template found — check Templates tab')
   }
 
   return template
