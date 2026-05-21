@@ -3,6 +3,11 @@ import { verifySignature, sendTextMessage } from '@/lib/whatsapp/api'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { applyPlaceholders } from '@/lib/utils'
 
+// Module-level cache for the rate template — avoids 2 DB round trips on warm instances.
+// Expires after 1 hour so template edits eventually take effect.
+let cachedRateTemplate: { body_text: string; name: string; id: string } | null = null
+let cacheExpiresAt = 0
+
 // ---------------------------------------------------------------------------
 // GET — Meta webhook verification (one-time, when you register the URL)
 // Meta sends: hub.mode=subscribe, hub.verify_token, hub.challenge
@@ -82,45 +87,39 @@ async function handleInboundMessage(
   msg: WaInboundMessage,
   contacts: WaContact[]
 ) {
-  // Strip country code → 10-digit phone for DB storage
-  const rawPhone: string = msg.from // e.g. "919876543210"
+  const rawPhone: string = msg.from
   const phone = rawPhone.startsWith('91') ? rawPhone.slice(2) : rawPhone
 
-  // Message body — handle text; mark other types descriptively
   const body =
     msg.type === 'text'
       ? msg.text?.body ?? ''
       : `[${msg.type} message]`
 
-  // Contact display name from Meta (may differ from our DB)
   const contactName =
     contacts.find(c => c.wa_id === rawPhone)?.profile?.name ?? null
 
-  // Look up enrolled customer
-  const { data: customer } = await supabaseAdmin
-    .from('wa_customers')
-    .select('id, name')
-    .eq('phone', phone)
-    .single()
-
-  // Get or create thread
-  const { data: existingThread } = await supabaseAdmin
-    .from('wa_threads')
-    .select('id')
-    .eq('phone', phone)
-    .single()
+  // Customer lookup and thread lookup are independent — run in parallel
+  const [{ data: customer }, { data: existingThread }] = await Promise.all([
+    supabaseAdmin.from('wa_customers').select('id, name').eq('phone', phone).maybeSingle(),
+    supabaseAdmin.from('wa_threads').select('id').eq('phone', phone).maybeSingle(),
+  ])
 
   let threadId: string
+  const now = new Date().toISOString()
 
   if (existingThread) {
     threadId = existingThread.id
-    await supabaseAdmin
-      .from('wa_threads')
-      .update({
-        last_message_at:      new Date().toISOString(),
-        last_message_preview: body.slice(0, 60),
-      })
-      .eq('id', threadId)
+    // Update thread and insert inbound message in parallel
+    await Promise.all([
+      supabaseAdmin
+        .from('wa_threads')
+        .update({ last_message_at: now, last_message_preview: body.slice(0, 60) })
+        .eq('id', threadId),
+      supabaseAdmin.from('wa_messages').insert({
+        thread_id: threadId, direction: 'inbound',
+        wa_message_id: msg.id, body, status: 'received',
+      }),
+    ])
   } else {
     const { data: newThread, error } = await supabaseAdmin
       .from('wa_threads')
@@ -128,7 +127,7 @@ async function handleInboundMessage(
         phone,
         customer_name:        customer?.name ?? contactName,
         customer_id:          customer?.id ?? null,
-        last_message_at:      new Date().toISOString(),
+        last_message_at:      now,
         last_message_preview: body.slice(0, 60),
       })
       .select('id')
@@ -139,18 +138,12 @@ async function handleInboundMessage(
       return
     }
     threadId = newThread.id
+
+    await supabaseAdmin.from('wa_messages').insert({
+      thread_id: threadId, direction: 'inbound',
+      wa_message_id: msg.id, body, status: 'received',
+    })
   }
-
-  // Insert the inbound message
-  const { error: msgError } = await supabaseAdmin.from('wa_messages').insert({
-    thread_id:     threadId,
-    direction:     'inbound',
-    wa_message_id: msg.id,
-    body,
-    status:        'received',
-  })
-
-  if (msgError) console.error('[webhook] Failed to insert inbound message:', msgError)
 
   // Auto-reply if message contains "rate"
   if (msg.type === 'text' && body.toLowerCase().includes('rate')) {
@@ -161,73 +154,85 @@ async function handleInboundMessage(
   }
 }
 
-async function handleAutoReply(phone: string, threadId: string, customerName: string) {
-  // Find the Daily Rates topic
-  const { data: topic } = await supabaseAdmin
-    .from('wa_interest_topics')
-    .select('id')
-    .ilike('name', '%rate%')
-    .eq('is_active', true)
-    .limit(1)
-    .maybeSingle()
+async function getRateTemplate() {
+  if (cachedRateTemplate && Date.now() < cacheExpiresAt) return cachedRateTemplate
 
-  // Get the first active template for that topic (or any rate template if no topic match)
+  // Topic lookup and a broad name-based fallback query run in parallel
+  const [{ data: topic }, { data: nameMatch }] = await Promise.all([
+    supabaseAdmin
+      .from('wa_interest_topics')
+      .select('id')
+      .ilike('name', '%rate%')
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from('wa_message_templates')
+      .select('id, name, body_text')
+      .ilike('name', '%rate%')
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle(),
+  ])
+
   let template = null
   if (topic) {
     const { data } = await supabaseAdmin
       .from('wa_message_templates')
-      .select('*')
+      .select('id, name, body_text')
       .eq('topic_id', topic.id)
       .eq('is_active', true)
       .limit(1)
       .maybeSingle()
     template = data
   }
-  if (!template) {
-    const { data } = await supabaseAdmin
-      .from('wa_message_templates')
-      .select('*')
-      .ilike('name', '%rate%')
-      .eq('is_active', true)
-      .limit(1)
-      .maybeSingle()
-    template = data
+  template = template ?? nameMatch
+
+  if (template) {
+    cachedRateTemplate = template
+    cacheExpiresAt = Date.now() + 60 * 60 * 1000 // 1 hour
   }
+
+  return template
+}
+
+async function handleAutoReply(phone: string, threadId: string, customerName: string) {
+  // Template (cached) and today's rates fetched in parallel
+  const todayStr = new Date().toLocaleDateString('en-CA')
+  const [template, { data: rates }] = await Promise.all([
+    getRateTemplate(),
+    supabaseAdmin
+      .from('daily_rates')
+      .select('rate_24kt, rate_22kt, rate_18kt')
+      .eq('date', todayStr)
+      .maybeSingle(),
+  ])
+
   if (!template) {
     console.warn('[webhook] Auto-reply: no rate template found')
     return
   }
 
-  // Fetch today's rates
-  const todayStr = new Date().toLocaleDateString('en-CA')
-  const { data: rates } = await supabaseAdmin
-    .from('daily_rates')
-    .select('rate_24kt, rate_22kt, rate_18kt')
-    .eq('date', todayStr)
-    .maybeSingle()
-
   const messageBody = applyPlaceholders(template.body_text, customerName, rates)
-
-  // Send via Meta API
   const wamid = await sendTextMessage(phone, messageBody)
 
   const now = new Date().toISOString()
 
-  // Log outbound message
-  await supabaseAdmin.from('wa_messages').insert({
-    thread_id:     threadId,
-    direction:     'outbound',
-    wa_message_id: wamid,
-    body:          messageBody,
-    template_name: template.name,
-    status:        'sent',
-  })
-
-  // Update thread preview
-  await supabaseAdmin
-    .from('wa_threads')
-    .update({ last_message_at: now, last_message_preview: messageBody.slice(0, 60) })
-    .eq('id', threadId)
+  // Log outbound message and update thread in parallel
+  await Promise.all([
+    supabaseAdmin.from('wa_messages').insert({
+      thread_id:     threadId,
+      direction:     'outbound',
+      wa_message_id: wamid,
+      body:          messageBody,
+      template_name: template.name,
+      status:        'sent',
+    }),
+    supabaseAdmin
+      .from('wa_threads')
+      .update({ last_message_at: now, last_message_preview: messageBody.slice(0, 60) })
+      .eq('id', threadId),
+  ])
 }
 
 async function handleStatusUpdate(status: WaStatusUpdate) {
