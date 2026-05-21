@@ -73,9 +73,10 @@ export async function POST(req: NextRequest) {
     try {
       let wamid: string
 
-      if (template.meta_template_name && template.meta_variables?.length) {
+      if (template.meta_template_name) {
         // Use Meta-approved template — works outside the 24h window
-        const parameters = (template.meta_variables as string[]).map(v => ({
+        const variables = (template.meta_variables as string[] | null) ?? []
+        const parameters = variables.map(v => ({
           type: 'text',
           text: resolveVar(v, customer.name),
         }))
@@ -83,7 +84,7 @@ export async function POST(req: NextRequest) {
           customer.phone,
           template.meta_template_name,
           template.meta_template_lang ?? 'en',
-          [{ type: 'body', parameters }]
+          parameters.length ? [{ type: 'body', parameters }] : []
         )
       } else {
         // Fallback to free-form text (only works within 24h window)

@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
   try {
     let wamid: string
 
-    if (template?.meta_template_name && template.meta_variables?.length) {
+    if (template?.meta_template_name) {
       // Approved template — works outside the 24h window
       // Resolve customer name for variable substitution
       let customerName = 'there'
@@ -96,7 +96,8 @@ export async function POST(req: NextRequest) {
         if (c?.name) customerName = c.name
       }
 
-      const parameters = (template.meta_variables as string[]).map(varName => {
+      const variables = (template.meta_variables as string[] | null) ?? []
+      const parameters = variables.map(varName => {
         if (varName === 'name')      return { type: 'text', text: customerName }
         if (varName === 'rate_24kt') return { type: 'text', text: rates?.rate_24kt != null ? String(rates.rate_24kt) : '—' }
         if (varName === 'rate_22kt') return { type: 'text', text: rates?.rate_22kt != null ? String(rates.rate_22kt) : '—' }
@@ -108,7 +109,7 @@ export async function POST(req: NextRequest) {
         cleanPhone,
         template.meta_template_name,
         template.meta_template_lang ?? 'en',
-        [{ type: 'body', parameters }]
+        parameters.length ? [{ type: 'body', parameters }] : []
       )
     } else {
       // Free-form text — only works within 24h customer reply window
