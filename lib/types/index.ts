@@ -122,3 +122,34 @@ export interface WaBInteraction {
   interaction_date: string
   logged_at: string
 }
+
+// ── WhatsApp Messaging (wa_004) ───────────────────────────────────────────────
+
+export interface WaThread {
+  id: string
+  phone: string
+  customer_name: string | null
+  customer_id: string | null
+  last_message_at: string | null
+  last_message_preview: string | null
+  unread_count: number
+  created_at: string
+}
+
+export type WaMessageStatus = 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'received'
+export type WaMessageDirection = 'outbound' | 'inbound'
+
+export interface WaMessage {
+  id: string
+  thread_id: string
+  direction: WaMessageDirection
+  wa_message_id: string | null
+  body: string | null
+  template_name: string | null
+  status: WaMessageStatus
+  sent_by: string | null
+  delivered_at: string | null
+  read_at: string | null
+  failed_reason: string | null
+  created_at: string
+}
