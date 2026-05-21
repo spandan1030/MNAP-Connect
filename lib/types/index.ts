@@ -41,6 +41,8 @@ export interface MessageTemplate {
   meta_template_name: string | null
   meta_template_lang: string
   meta_variables: string[] | null   // ["name","rate_24kt",...] — maps to {{1}},{{2}}...
+  header_type: 'none' | 'image'     // 'image' = fixed image header sent with every use
+  header_image_url: string | null   // publicly accessible URL for the header image
 }
 
 export interface CommunicationLog {

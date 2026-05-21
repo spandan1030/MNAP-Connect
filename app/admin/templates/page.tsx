@@ -36,6 +36,8 @@ export default function TemplatesPage() {
   const [metaName, setMetaName] = useState('')
   const [metaLang, setMetaLang] = useState('en')
   const [metaVars, setMetaVars] = useState('')   // comma-separated variable names
+  const [headerType, setHeaderType] = useState<'none' | 'image'>('none')
+  const [headerImageUrl, setHeaderImageUrl] = useState('')
   const [showMetaSection, setShowMetaSection] = useState(false)
 
   useEffect(() => { loadData() }, [])
@@ -75,6 +77,8 @@ export default function TemplatesPage() {
     setMetaName(t.meta_template_name ?? '')
     setMetaLang(t.meta_template_lang ?? 'en')
     setMetaVars(t.meta_variables?.join(', ') ?? '')
+    setHeaderType(t.header_type ?? 'none')
+    setHeaderImageUrl(t.header_image_url ?? '')
     setShowMetaSection(!!(t.meta_template_name))
     setShowPreview(false)
     setError('')
@@ -83,7 +87,7 @@ export default function TemplatesPage() {
 
   function resetForm() {
     setEditingId(null); setFormName(''); setFormTopic('none'); setFormBody('')
-    setMetaName(''); setMetaLang('en'); setMetaVars(''); setShowMetaSection(false)
+    setMetaName(''); setMetaLang('en'); setMetaVars(''); setHeaderType('none'); setHeaderImageUrl(''); setShowMetaSection(false)
     setError(''); setShowPreview(false)
   }
 
@@ -104,6 +108,8 @@ export default function TemplatesPage() {
       meta_template_name: metaName.trim() || null,
       meta_template_lang: metaLang || 'en',
       meta_variables:     parsedVars,
+      header_type:        headerType,
+      header_image_url:   headerType === 'image' ? (headerImageUrl.trim() || null) : null,
     }
     if (editingId) {
       await supabase.from('wa_message_templates').update(payload).eq('id', editingId)
@@ -275,6 +281,49 @@ export default function TemplatesPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Header type */}
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-gray-500">Header type</label>
+                  <div className="flex gap-2">
+                    {(['none', 'image'] as const).map(type => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => setHeaderType(type)}
+                        className={`flex-1 py-2 rounded-lg border text-xs font-medium transition-colors ${
+                          headerType === type
+                            ? 'bg-green-600 text-white border-green-600'
+                            : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        {type === 'none' ? 'No header' : '🖼 Image'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {headerType === 'image' && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-500">Header image URL</label>
+                    <input
+                      type="url"
+                      value={headerImageUrl}
+                      onChange={e => setHeaderImageUrl(e.target.value)}
+                      className="input text-sm"
+                      placeholder="https://your-domain.com/image.jpg"
+                    />
+                    <p className="text-[10px] text-gray-400">Must be a publicly accessible URL. This image is sent as the header with every use of this template.</p>
+                    {headerImageUrl && (
+                      <img
+                        src={headerImageUrl}
+                        alt="Header preview"
+                        className="mt-2 rounded-lg w-full object-cover max-h-32"
+                        onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+                      />
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

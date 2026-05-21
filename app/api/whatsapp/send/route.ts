@@ -105,11 +105,20 @@ export async function POST(req: NextRequest) {
         return { type: 'text', text: '' }
       })
 
+      const components: object[] = []
+      if (template.header_type === 'image' && template.header_image_url) {
+        components.push({
+          type: 'header',
+          parameters: [{ type: 'image', image: { link: template.header_image_url } }],
+        })
+      }
+      if (parameters.length) components.push({ type: 'body', parameters })
+
       wamid = await sendTemplateMessage(
         cleanPhone,
         template.meta_template_name,
         template.meta_template_lang ?? 'en',
-        parameters.length ? [{ type: 'body', parameters }] : []
+        components
       )
     } else {
       // Free-form text — only works within 24h customer reply window
