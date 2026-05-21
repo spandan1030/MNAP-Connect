@@ -98,11 +98,18 @@ export async function POST(req: NextRequest) {
 
       const variables = (template.meta_variables as string[] | null) ?? []
       const parameters = variables.map(varName => {
-        if (varName === 'name')      return { type: 'text', text: customerName }
-        if (varName === 'rate_24kt') return { type: 'text', text: rates?.rate_24kt != null ? String(rates.rate_24kt) : '—' }
-        if (varName === 'rate_22kt') return { type: 'text', text: rates?.rate_22kt != null ? String(rates.rate_22kt) : '—' }
-        if (varName === 'rate_18kt') return { type: 'text', text: rates?.rate_18kt != null ? String(rates.rate_18kt) : '—' }
-        return { type: 'text', text: '' }
+        const v = varName.toLowerCase()
+        let text = ''
+        if (v === 'name' || v.includes('customer') || v.includes('client'))
+          text = customerName
+        else if (v === 'rate_24kt' || v.includes('24'))
+          text = rates?.rate_24kt != null ? String(rates.rate_24kt) : '—'
+        else if (v === 'rate_22kt' || v.includes('22'))
+          text = rates?.rate_22kt != null ? String(rates.rate_22kt) : '—'
+        else if (v === 'rate_18kt' || v.includes('18'))
+          text = rates?.rate_18kt != null ? String(rates.rate_18kt) : '—'
+        // parameter_name is required for named-variable templates ({{customer_name}} style)
+        return { type: 'text', parameter_name: varName, text }
       })
 
       const components: object[] = []

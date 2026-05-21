@@ -250,14 +250,14 @@ export default function TemplatesPage() {
 
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-gray-500">
-                    Variable order — maps <code className="bg-gray-100 px-1 rounded">{'{{1}}'}</code>, <code className="bg-gray-100 px-1 rounded">{'{{2}}'}</code>… in your Meta template
+                    Variable names — use the <strong>exact names</strong> from your Meta template (e.g. <code className="bg-gray-100 px-1 rounded">customer_name</code> if your template uses <code className="bg-gray-100 px-1 rounded">{'{{customer_name}}'}</code>)
                   </label>
                   <input
                     type="text"
                     value={metaVars}
                     onChange={e => setMetaVars(e.target.value)}
                     className="input font-mono text-sm"
-                    placeholder="name, rate_24kt, rate_22kt, rate_18kt"
+                    placeholder="customer_name, rate_24kt, rate_22kt"
                   />
                   <div className="flex flex-wrap gap-1.5">
                     {PLACEHOLDERS.map(({ varName, desc }) => (

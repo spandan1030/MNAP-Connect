@@ -59,11 +59,13 @@ export async function POST(req: NextRequest) {
   const now = new Date().toISOString()
 
   // Helper: resolve a variable name to its current value
+  // Handles both our internal names (name, rate_24kt) and Meta named variables (customer_name, etc.)
   function resolveVar(varName: string, customerName: string) {
-    if (varName === 'name')       return customerName
-    if (varName === 'rate_24kt')  return rates?.rate_24kt != null ? String(rates.rate_24kt) : '—'
-    if (varName === 'rate_22kt')  return rates?.rate_22kt != null ? String(rates.rate_22kt) : '—'
-    if (varName === 'rate_18kt')  return rates?.rate_18kt != null ? String(rates.rate_18kt) : '—'
+    const v = varName.toLowerCase()
+    if (v === 'name' || v.includes('customer') || v.includes('client')) return customerName
+    if (v === 'rate_24kt' || v.includes('24')) return rates?.rate_24kt != null ? String(rates.rate_24kt) : '—'
+    if (v === 'rate_22kt' || v.includes('22')) return rates?.rate_22kt != null ? String(rates.rate_22kt) : '—'
+    if (v === 'rate_18kt' || v.includes('18')) return rates?.rate_18kt != null ? String(rates.rate_18kt) : '—'
     return ''
   }
 
@@ -78,6 +80,7 @@ export async function POST(req: NextRequest) {
         const variables = (template.meta_variables as string[] | null) ?? []
         const parameters = variables.map(v => ({
           type: 'text',
+          parameter_name: v,
           text: resolveVar(v, customer.name),
         }))
         const components: object[] = []
