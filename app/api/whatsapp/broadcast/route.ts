@@ -58,20 +58,16 @@ export async function POST(req: NextRequest) {
 
   const now = new Date().toISOString()
 
-  // Helper: resolve a variable name to its text value
-  function resolveVar(varName: string, customerName: string) {
+  // Build a single Meta API parameter object for a variable.
+  // 'name' → named variable {{customer_name}}, needs parameter_name: 'customer_name'
+  // rate variables → positional {{1}}, {{2}}…, must NOT have parameter_name
+  function buildParam(varName: string, customerName: string) {
     const v = varName.toLowerCase()
-    if (v === 'name' || v.includes('customer') || v.includes('client') || (v.includes('name') && !v.includes('rate'))) return customerName
-    if (v === 'rate_24kt' || v.includes('24')) return rates?.rate_24kt != null ? String(rates.rate_24kt) : '—'
-    if (v === 'rate_22kt' || v.includes('22')) return rates?.rate_22kt != null ? String(rates.rate_22kt) : '—'
-    if (v === 'rate_18kt' || v.includes('18')) return rates?.rate_18kt != null ? String(rates.rate_18kt) : '—'
-    return ''
-  }
-
-  // Named variables like {{customer_name}} need parameter_name. Positional like {{1}} must not have it.
-  function isNamedVar(varName: string) {
-    const v = varName.toLowerCase()
-    return v === 'name' || v.includes('customer') || v.includes('client') || (v.includes('name') && !v.includes('rate'))
+    if (v === 'name') return { type: 'text', parameter_name: 'customer_name', text: customerName }
+    if (v === 'rate_24kt') return { type: 'text', text: rates?.rate_24kt != null ? String(rates.rate_24kt) : '—' }
+    if (v === 'rate_22kt') return { type: 'text', text: rates?.rate_22kt != null ? String(rates.rate_22kt) : '—' }
+    if (v === 'rate_18kt') return { type: 'text', text: rates?.rate_18kt != null ? String(rates.rate_18kt) : '—' }
+    return { type: 'text', text: '' }
   }
 
   for (const customer of (customers ?? [])) {
@@ -83,11 +79,7 @@ export async function POST(req: NextRequest) {
       if (template.meta_template_name) {
         // Use Meta-approved template — works outside the 24h window
         const variables = (template.meta_variables as string[] | null) ?? []
-        const parameters = variables.map(v =>
-          isNamedVar(v)
-            ? { type: 'text', parameter_name: v, text: resolveVar(v, customer.name) }
-            : { type: 'text', text: resolveVar(v, customer.name) }
-        )
+        const parameters = variables.map(v => buildParam(v, customer.name))
         const components: object[] = []
         if (template.header_type === 'image' && template.header_image_url) {
           components.push({
