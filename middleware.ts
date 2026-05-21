@@ -24,7 +24,7 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const { pathname } = request.nextUrl
 
-  if (!user && pathname !== '/login' && pathname !== '/enroll' && pathname !== '/enroll/success') {
+  if (!user && pathname !== '/login' && pathname !== '/enroll' && pathname !== '/enroll/success' && !pathname.startsWith('/api/whatsapp/')) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
