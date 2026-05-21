@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { sendTextMessage } from '@/lib/whatsapp/api'
+import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/api'
 import { applyPlaceholders } from '@/lib/utils'
 
 export async function POST(req: NextRequest) {
@@ -58,11 +58,37 @@ export async function POST(req: NextRequest) {
 
   const now = new Date().toISOString()
 
+  // Helper: resolve a variable name to its current value
+  function resolveVar(varName: string, customerName: string) {
+    if (varName === 'name')       return customerName
+    if (varName === 'rate_24kt')  return rates?.rate_24kt != null ? String(rates.rate_24kt) : '—'
+    if (varName === 'rate_22kt')  return rates?.rate_22kt != null ? String(rates.rate_22kt) : '—'
+    if (varName === 'rate_18kt')  return rates?.rate_18kt != null ? String(rates.rate_18kt) : '—'
+    return ''
+  }
+
   for (const customer of (customers ?? [])) {
     const messageBody = applyPlaceholders(template.body_text, customer.name, rates)
 
     try {
-      const wamid = await sendTextMessage(customer.phone, messageBody)
+      let wamid: string
+
+      if (template.meta_template_name && template.meta_variables?.length) {
+        // Use Meta-approved template — works outside the 24h window
+        const parameters = (template.meta_variables as string[]).map(v => ({
+          type: 'text',
+          text: resolveVar(v, customer.name),
+        }))
+        wamid = await sendTemplateMessage(
+          customer.phone,
+          template.meta_template_name,
+          template.meta_template_lang ?? 'en',
+          [{ type: 'body', parameters }]
+        )
+      } else {
+        // Fallback to free-form text (only works within 24h window)
+        wamid = await sendTextMessage(customer.phone, messageBody)
+      }
 
       // Upsert thread and insert message record
       const { data: thread } = await supabaseAdmin

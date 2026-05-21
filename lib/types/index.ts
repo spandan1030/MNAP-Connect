@@ -37,6 +37,10 @@ export interface MessageTemplate {
   is_active: boolean
   created_by: string | null
   created_at: string
+  // Meta-approved WhatsApp Business Template fields
+  meta_template_name: string | null
+  meta_template_lang: string
+  meta_variables: string[] | null   // ["name","rate_24kt",...] — maps to {{1}},{{2}}...
 }
 
 export interface CommunicationLog {
