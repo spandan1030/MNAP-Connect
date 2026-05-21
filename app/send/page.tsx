@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Navbar from '@/components/ui/Navbar'
-import { buildWhatsAppUrl, applyPlaceholders } from '@/lib/utils'
+import { applyPlaceholders } from '@/lib/utils'
 import type { InterestTopic, Customer, MessageTemplate } from '@/lib/types'
 
 interface CustomerWithInterests extends Customer {
@@ -58,6 +58,8 @@ export default function SendPage() {
   const [selectedTemplate, setSelectedTemplate] = useState<MessageTemplate | null>(null)
   const [previewMessage, setPreviewMessage] = useState('')
   const [editMode, setEditMode] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
 
   // Broadcast state
   const [broadcastTemplate, setBroadcastTemplate] = useState<MessageTemplate | null>(null)
@@ -180,25 +182,40 @@ export default function SendPage() {
     setStep('preview')
   }
 
-  async function handleOpenWhatsApp() {
-    if (!selectedCustomer || !selectedTemplate) return
-
-    const url = buildWhatsAppUrl(selectedCustomer.phone, previewMessage)
-    window.open(url, '_blank')
+  async function handleSend() {
+    if (!selectedCustomer || !selectedTemplate || sending) return
+    setSending(true)
+    setSendError(null)
 
     const loggedTopicId = activeFilter !== 'all' ? activeFilter : selectedTemplate.topic_id
 
-    const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('wa_communication_log').insert({
-      customer_id: selectedCustomer.id,
-      template_id: selectedTemplate.id,
-      topic_id: loggedTopicId,
-      message_sent: previewMessage,
-      sent_by: user!.id,
-    })
+    try {
+      const res = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone:      selectedCustomer.phone,
+          body:       previewMessage,
+          templateId: selectedTemplate.id,
+          customerId: selectedCustomer.id,
+          topicId:    loggedTopicId,
+        }),
+      })
 
-    setTodayLogs(prev => [...prev, { customer_id: selectedCustomer.id, topic_id: loggedTopicId }])
-    resetFlow()
+      const data = await res.json()
+
+      if (!res.ok) {
+        setSendError(data.error ?? 'Failed to send message')
+        setSending(false)
+        return
+      }
+
+      setTodayLogs(prev => [...prev, { customer_id: selectedCustomer.id, topic_id: loggedTopicId }])
+      resetFlow()
+    } catch {
+      setSendError('Network error — please try again')
+      setSending(false)
+    }
   }
 
   function resetFlow() {
@@ -208,6 +225,8 @@ export default function SendPage() {
     setCandidateTemplates([])
     setPreviewMessage('')
     setEditMode(false)
+    setSending(false)
+    setSendError(null)
     setBroadcastTemplate(null)
     setBroadcastResult(null)
   }
@@ -494,17 +513,31 @@ export default function SendPage() {
               )}
             </div>
             <div className="flex-shrink-0 px-5 pt-3 pb-8 space-y-2">
+              {sendError && (
+                <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-center">
+                  {sendError}
+                </p>
+              )}
               <button
-                onClick={handleOpenWhatsApp}
-                className="btn-primary w-full flex items-center justify-center gap-2"
+                onClick={handleSend}
+                disabled={sending}
+                className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-60"
               >
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
-                  <path d="M12 0C5.373 0 0 5.373 0 12c0 2.096.544 4.066 1.497 5.777L0 24l6.385-1.473A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.848 0-3.58-.497-5.071-1.366l-.361-.214-3.742.862.934-3.628-.235-.374A9.96 9.96 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
-                </svg>
-                Open WhatsApp
+                {sending ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13" />
+                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                  </svg>
+                )}
+                {sending ? 'Sending…' : 'Send'}
               </button>
-              <button onClick={() => { setStep('pick-template'); setEditMode(false) }} className="btn-secondary w-full">
+              <button
+                onClick={() => { setStep('pick-template'); setEditMode(false) }}
+                disabled={sending}
+                className="btn-secondary w-full disabled:opacity-60"
+              >
                 ← Change Message
               </button>
             </div>
