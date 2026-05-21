@@ -99,17 +99,23 @@ export async function POST(req: NextRequest) {
       const variables = (template.meta_variables as string[] | null) ?? []
       const parameters = variables.map(varName => {
         const v = varName.toLowerCase()
+        // Named variables like {{customer_name}} need parameter_name in the API call.
+        // Positional variables like {{1}} must NOT have parameter_name.
+        // Heuristic: name/customer/client → named. rate/kt → positional.
+        const isNamed = v === 'name' || v.includes('customer') || v.includes('client') || (v.includes('name') && !v.includes('rate'))
         let text = ''
-        if (v === 'name' || v.includes('customer') || v.includes('client'))
+        if (isNamed) {
           text = customerName
-        else if (v === 'rate_24kt' || v.includes('24'))
+        } else if (v === 'rate_24kt' || v.includes('24')) {
           text = rates?.rate_24kt != null ? String(rates.rate_24kt) : '—'
-        else if (v === 'rate_22kt' || v.includes('22'))
+        } else if (v === 'rate_22kt' || v.includes('22')) {
           text = rates?.rate_22kt != null ? String(rates.rate_22kt) : '—'
-        else if (v === 'rate_18kt' || v.includes('18'))
+        } else if (v === 'rate_18kt' || v.includes('18')) {
           text = rates?.rate_18kt != null ? String(rates.rate_18kt) : '—'
-        // parameter_name is required for named-variable templates ({{customer_name}} style)
-        return { type: 'text', parameter_name: varName, text }
+        }
+        return isNamed
+          ? { type: 'text', parameter_name: varName, text }
+          : { type: 'text', text }
       })
 
       const components: object[] = []
