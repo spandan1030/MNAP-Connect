@@ -68,6 +68,87 @@ export async function sendTextMessage(phone: string, body: string): Promise<stri
 }
 
 // ---------------------------------------------------------------------------
+// Send an image message
+// Pass a publicly accessible URL — Meta fetches the image from it.
+// Optional caption appears below the image in WhatsApp.
+// ---------------------------------------------------------------------------
+export async function sendImageMessage(
+  phone: string,
+  imageUrl: string,
+  caption?: string
+): Promise<string> {
+  if (!process.env.WHATSAPP_ACCESS_TOKEN) {
+    throw new Error('WHATSAPP_ACCESS_TOKEN is not configured')
+  }
+
+  const digits = phone.replace(/\D/g, '')
+  const to = digits.startsWith('91') ? digits : `91${digits}`
+
+  const res = await fetch(`${API_BASE}/${PHONE_ID}/messages`, {
+    method: 'POST',
+    headers: {
+      Authorization:  `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'image',
+      image: { link: imageUrl, ...(caption ? { caption } : {}) },
+    }),
+  })
+
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(
+      data.error?.message ?? `Meta API error ${res.status}: ${JSON.stringify(data)}`
+    )
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (data as any).messages[0].id as string
+}
+
+// ---------------------------------------------------------------------------
+// Fetch a Meta media object's temporary download URL
+// Used when an inbound image arrives — Meta gives us a media_id, not the file.
+// ---------------------------------------------------------------------------
+export async function getMediaDownloadUrl(
+  mediaId: string
+): Promise<{ url: string; mimeType: string }> {
+  const res = await fetch(`${API_BASE}/${mediaId}`, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
+  })
+
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(
+      data.error?.message ?? `Meta media API error ${res.status}`
+    )
+  }
+
+  return { url: data.url as string, mimeType: data.mime_type as string }
+}
+
+// ---------------------------------------------------------------------------
+// Download a Meta media file as a Buffer
+// The URL comes from getMediaDownloadUrl and requires Bearer auth.
+// ---------------------------------------------------------------------------
+export async function downloadMediaBuffer(
+  url: string
+): Promise<{ buffer: Buffer; contentType: string }> {
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
+  })
+
+  if (!res.ok) throw new Error(`Media download failed: ${res.status}`)
+
+  const contentType = res.headers.get('content-type') ?? 'application/octet-stream'
+  const arrayBuffer = await res.arrayBuffer()
+  return { buffer: Buffer.from(arrayBuffer), contentType }
+}
+
+// ---------------------------------------------------------------------------
 // Send a template message
 // Required for all outbound messages outside the 24-hour customer reply window.
 // ---------------------------------------------------------------------------

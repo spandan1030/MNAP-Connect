@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { verifySignature, sendTextMessage } from '@/lib/whatsapp/api'
+import { verifySignature, sendTextMessage, getMediaDownloadUrl, downloadMediaBuffer } from '@/lib/whatsapp/api'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { applyPlaceholders } from '@/lib/utils'
 
@@ -92,9 +92,14 @@ async function handleInboundMessage(
   const phone = rawPhone.startsWith('91') ? rawPhone.slice(2) : rawPhone
 
   const body =
-    msg.type === 'text'
-      ? msg.text?.body ?? ''
-      : `[${msg.type} message]`
+    msg.type === 'text'  ? msg.text?.body ?? ''
+    : msg.type === 'image' ? (msg.image?.caption ?? null)
+    : `[${msg.type} message]`
+
+  const messageType =
+    msg.type === 'text'  ? 'text'
+    : msg.type === 'image' ? 'image'
+    : 'other'
 
   const contactName =
     contacts.find(c => c.wa_id === rawPhone)?.profile?.name ?? null
@@ -108,17 +113,28 @@ async function handleInboundMessage(
   let threadId: string
   const now = new Date().toISOString()
 
+  // For inbound images, download from Meta and store in Supabase Storage
+  let mediaUrl: string | null = null
+  if (msg.type === 'image' && msg.image?.id) {
+    mediaUrl = await fetchAndStoreInboundMedia(msg.image.id, msg.image.mime_type ?? 'image/jpeg')
+      .catch(err => { console.error('[webhook] Media store error:', err); return null })
+  }
+
+  const preview = messageType === 'image'
+    ? ('📷 Photo' + (body ? `: ${body.slice(0, 40)}` : ''))
+    : (body ?? '').slice(0, 60)
+
   if (existingThread) {
     threadId = existingThread.id
-    // Update thread and insert inbound message in parallel
     await Promise.all([
       supabaseAdmin
         .from('wa_threads')
-        .update({ last_message_at: now, last_message_preview: body.slice(0, 60) })
+        .update({ last_message_at: now, last_message_preview: preview })
         .eq('id', threadId),
       supabaseAdmin.from('wa_messages').insert({
         thread_id: threadId, direction: 'inbound',
-        wa_message_id: msg.id, body, status: 'received',
+        wa_message_id: msg.id, body, message_type: messageType,
+        media_url: mediaUrl, status: 'received',
       }),
     ])
   } else {
@@ -129,7 +145,7 @@ async function handleInboundMessage(
         customer_name:        customer?.name ?? contactName,
         customer_id:          customer?.id ?? null,
         last_message_at:      now,
-        last_message_preview: body.slice(0, 60),
+        last_message_preview: preview,
       })
       .select('id')
       .single()
@@ -142,17 +158,38 @@ async function handleInboundMessage(
 
     await supabaseAdmin.from('wa_messages').insert({
       thread_id: threadId, direction: 'inbound',
-      wa_message_id: msg.id, body, status: 'received',
+      wa_message_id: msg.id, body, message_type: messageType,
+      media_url: mediaUrl, status: 'received',
     })
   }
 
-  // Auto-reply if message contains "rate"
-  if (msg.type === 'text' && body.toLowerCase().includes('rate')) {
+  // Auto-reply if text message contains "rate"
+  if (msg.type === 'text' && body && body.toLowerCase().includes('rate')) {
     const customerName = customer?.name ?? contactName ?? 'there'
     await handleAutoReply(phone, threadId, customerName).catch(err =>
       console.error('[webhook] Auto-reply error:', err)
     )
   }
+}
+
+async function fetchAndStoreInboundMedia(mediaId: string, mimeType: string): Promise<string> {
+  const { url } = await getMediaDownloadUrl(mediaId)
+  const { buffer, contentType } = await downloadMediaBuffer(url)
+
+  const ext      = mimeType.split('/')[1]?.split(';')[0] || 'jpg'
+  const filename = `inbound/${Date.now()}-${mediaId}.${ext}`
+
+  const { data, error } = await supabaseAdmin.storage
+    .from('wa-media')
+    .upload(filename, buffer, { contentType, upsert: false })
+
+  if (error || !data) throw new Error(error?.message ?? 'Storage upload failed')
+
+  const { data: { publicUrl } } = supabaseAdmin.storage
+    .from('wa-media')
+    .getPublicUrl(data.path)
+
+  return publicUrl
 }
 
 async function getRateTemplate() {
@@ -289,6 +326,7 @@ interface WaInboundMessage {
   timestamp: string
   type: string
   text?: { body: string }
+  image?: { id: string; mime_type?: string; caption?: string; sha256?: string }
 }
 
 interface WaStatusUpdate {

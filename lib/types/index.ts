@@ -138,6 +138,7 @@ export interface WaThread {
 
 export type WaMessageStatus = 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'received'
 export type WaMessageDirection = 'outbound' | 'inbound'
+export type WaMessageType = 'text' | 'image' | 'document' | 'audio' | 'video' | 'other'
 
 export interface WaMessage {
   id: string
@@ -146,6 +147,8 @@ export interface WaMessage {
   wa_message_id: string | null
   body: string | null
   template_name: string | null
+  message_type: WaMessageType
+  media_url: string | null
   status: WaMessageStatus
   sent_by: string | null
   delivered_at: string | null
