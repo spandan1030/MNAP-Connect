@@ -115,9 +115,14 @@ export default function MessagesPage() {
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-gray-500 truncate mt-0.5">
-                    {thread.last_message_preview ?? 'No messages yet'}
-                  </p>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    {thread.needs_agent && (
+                      <span className="flex-shrink-0 text-[10px] font-semibold text-white bg-green-600 px-1.5 py-0.5 rounded-full">Reply</span>
+                    )}
+                    <p className="text-xs text-gray-500 truncate">
+                      {thread.last_message_preview ?? 'No messages yet'}
+                    </p>
+                  </div>
                 </div>
 
                 <svg className="w-4 h-4 text-gray-300 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">

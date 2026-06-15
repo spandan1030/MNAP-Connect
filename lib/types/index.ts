@@ -139,6 +139,27 @@ export interface WaThread {
   last_message_at: string | null
   last_message_preview: string | null
   unread_count: number
+  bot_state: 'active' | 'awaiting_care' | 'with_agent'
+  needs_agent: boolean
+  created_at: string
+}
+
+export interface WaBotMessage {
+  key: string
+  content: string
+  image_url: string | null
+  updated_by: string | null
+  updated_at: string
+}
+
+export interface WaLeadCapture {
+  id: string
+  customer_id: string | null
+  thread_id: string | null
+  intent: string | null
+  metal: string | null
+  product_topic_id: string | null
+  wants_designs: boolean | null
   created_at: string
 }
 

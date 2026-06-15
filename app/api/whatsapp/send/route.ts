@@ -135,7 +135,7 @@ export async function POST(req: NextRequest) {
         .update({ wa_message_id: wamid, status: 'sent' })
         .eq('id', message.id),
       supabase.from('wa_threads')
-        .update({ last_message_at: now, last_message_preview: messageBody.slice(0, 60) })
+        .update({ last_message_at: now, last_message_preview: messageBody.slice(0, 60), needs_agent: false })
         .eq('id', threadId),
     ])
 

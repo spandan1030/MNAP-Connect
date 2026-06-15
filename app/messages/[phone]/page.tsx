@@ -140,6 +140,7 @@ export default function ConversationPage({
   const [previewTemplate,  setPreviewTemplate]  = useState<MessageTemplate | null>(null)
   const [previewBody,      setPreviewBody]      = useState('')
   const [tplSending,       setTplSending]       = useState(false)
+  const [lead,             setLead]             = useState<{ intent: string | null; metal: string | null; product: string | null; wants_designs: boolean | null } | null>(null)
 
   // Scroll to bottom
   const scrollToBottom = useCallback((smooth = false) => {
@@ -169,15 +170,27 @@ export default function ConversationPage({
       setTodayRates((ratesRes.data ?? null) as TodayRates | null)
 
       if (th) {
-        const [msgsRes, interestsRes] = await Promise.all([
+        const [msgsRes, interestsRes, leadRes] = await Promise.all([
           supabase.from('wa_messages').select('*').eq('thread_id', th.id).order('created_at', { ascending: true }),
           th.customer_id
             ? supabase.from('wa_customer_interests').select('topic_id').eq('customer_id', th.customer_id)
             : Promise.resolve({ data: [] as { topic_id: string }[] }),
+          th.customer_id
+            ? supabase
+                .from('wa_lead_captures')
+                .select('intent, metal, wants_designs, product:wa_interest_topics(name)')
+                .eq('customer_id', th.customer_id)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+            : Promise.resolve({ data: null }),
         ])
         setMessages((msgsRes.data ?? []) as WaMessage[])
         setCustomerId(th.customer_id ?? null)
         setSelectedTopics(new Set((interestsRes.data ?? []).map(r => r.topic_id)))
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ld = leadRes.data as any
+        setLead(ld ? { intent: ld.intent, metal: ld.metal, product: ld.product?.name ?? null, wants_designs: ld.wants_designs } : null)
       }
 
       setLoading(false)
@@ -342,6 +355,21 @@ export default function ConversationPage({
   const displayName  = thread?.customer_name || formatPhone(phone)
   const customerName = thread?.customer_name || 'Customer'
 
+  // One-line "what this customer wants" summary from the latest captured lead
+  const leadParts = lead
+    ? [
+        lead.metal ? lead.metal.charAt(0).toUpperCase() + lead.metal.slice(1) : null,
+        lead.product,
+        lead.wants_designs ? 'wants designs' : null,
+      ].filter(Boolean) as string[]
+    : []
+  const intentLabel = lead?.intent === 'rate' ? "Today's rate"
+    : lead?.intent === 'offers' ? 'Offers & sale'
+    : lead?.intent === 'designs' ? 'New designs'
+    : lead?.intent === 'care' ? 'Has a question'
+    : ''
+  const leadSummary = leadParts.length ? leadParts.join(' · ') : intentLabel
+
   // 24h free-text window: open only if the customer messaged us within 24h
   const lastInboundAt = useMemo(() => {
     const inbound = messages.filter(m => m.direction === 'inbound')
@@ -499,6 +527,15 @@ export default function ConversationPage({
           </svg>
         </button>
       </div>
+
+      {/* Captured-intent context — what the customer told the bot they want */}
+      {leadSummary && (
+        <div className="flex-shrink-0 bg-blue-50 border-b border-blue-100 px-4 py-1.5">
+          <p className="text-xs text-blue-800">
+            <span className="font-semibold">Interested in:</span> {leadSummary}
+          </p>
+        </div>
+      )}
 
       {/* Messages scroll area */}
       <div className="flex-1 overflow-y-auto px-3 py-3 bg-gray-50" style={{ paddingBottom: '80px' }}>

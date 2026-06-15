@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { verifySignature, sendTextMessage, sendTemplateMessage, sendInteractiveList, getMediaDownloadUrl, downloadMediaBuffer } from '@/lib/whatsapp/api'
+import { verifySignature, sendTextMessage, sendImageMessage, sendTemplateMessage, sendInteractiveList, sendInteractiveButtons, getMediaDownloadUrl, downloadMediaBuffer } from '@/lib/whatsapp/api'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { applyPlaceholders } from '@/lib/utils'
 
@@ -124,7 +124,7 @@ async function handleInboundMessage(
   // Customer lookup and thread lookup are independent — run in parallel
   const [{ data: existingCustomer }, { data: existingThread }] = await Promise.all([
     supabaseAdmin.from('wa_customers').select('id, name').eq('phone', phone).maybeSingle(),
-    supabaseAdmin.from('wa_threads').select('id, customer_id').eq('phone', phone).maybeSingle(),
+    supabaseAdmin.from('wa_threads').select('id, customer_id, bot_state').eq('phone', phone).maybeSingle(),
   ])
 
   // --- Auto-enroll: every inbound contact lands in the customer book ---
@@ -206,20 +206,35 @@ async function handleInboundMessage(
   }
 
   // ----- Automated, rules-based response -----
-  const text = msg.type === 'text' ? (body ?? '') : ''
+  const text     = msg.type === 'text' ? (body ?? '') : ''
+  const botState = existingThread?.bot_state ?? 'active'
 
   try {
     if (interactiveReply) {
-      // Customer tapped a menu option
-      await handleMenuSelection(phone, threadId, interactiveReply.id, customer, displayName)
+      // An explicit button/menu tap — always honour it
+      await handleFlowReply(phone, threadId, interactiveReply.id, customer, displayName)
+    } else if (isGreeting(text)) {
+      // A greeting always restarts a fresh conversation (and reactivates the bot)
+      await setBotState(threadId, 'active')
+      await sendWelcomeMenu(phone, threadId)
+    } else if (botState === 'awaiting_care') {
+      // We asked them to type their question — this message is it. Hand to a human.
+      await handleCareQuestion(phone, threadId)
     } else if (isRateKeyword(text)) {
-      // "rate" / "bhav" → ensure Daily Rates interest, then send today's rate
+      // "rate" / "bhav" is always answered, even mid-conversation
       await ensureRateInterest(customer?.id)
-      await handleAutoReply(phone, threadId, displayName)
-    } else if (isGreeting(text) || !existingThread) {
-      // A greeting, or a brand-new contact's first message → start the conversation
-      await sendInterestMenu(phone, threadId, displayName)
+      await sendRate(phone, threadId, displayName)
+    } else if (botState === 'with_agent') {
+      // A human has taken over — stay silent so we don't talk over the salesman
+    } else if (isOffersKeyword(text)) {
+      await startOffersFlow(phone, threadId, customer)
+    } else if (isDesignKeyword(text)) {
+      await sendMetalStep(phone, threadId, 'designs')
+    } else if (!existingThread) {
+      // Brand-new contact's first message → start the conversation
+      await sendWelcomeMenu(phone, threadId)
     }
+    // Any other free text on an active thread: stay silent (the salesman handles it)
   } catch (err) {
     console.error('[webhook] Automated response error:', err)
   }
@@ -247,35 +262,74 @@ function isRateKeyword(raw: string): boolean {
   return /\b(rate|rates|bhav|bhaav|gold rate|todays? rate)\b/.test(t)
 }
 
-async function getTopLevelTopics(): Promise<Array<{ id: string; name: string }>> {
-  const { data } = await supabaseAdmin
-    .from('wa_interest_topics')
-    .select('id, name')
-    .is('parent_id', null)
-    .eq('is_active', true)
-    .order('sort_order')
-  return data ?? []
+function isOffersKeyword(raw: string): boolean {
+  return /\b(offer|offers|sale|discount|deal|deals)\b/.test(raw.trim().toLowerCase())
 }
 
+function isDesignKeyword(raw: string): boolean {
+  return /\b(design|designs|new design|necklace|ring|bangle|earring|chain|mangalsutra|pendant)\b/.test(raw.trim().toLowerCase())
+}
+
+// ---------------------------------------------------------------------------
+// Small data helpers
+// ---------------------------------------------------------------------------
 async function addInterest(customerId: string, topicId: string) {
   await supabaseAdmin
     .from('wa_customer_interests')
     .upsert({ customer_id: customerId, topic_id: topicId }, { onConflict: 'customer_id,topic_id', ignoreDuplicates: true })
 }
 
-async function ensureRateInterest(customerId?: string) {
-  if (!customerId) return
-  const { data: topic } = await supabaseAdmin
+async function findTopicId(namePattern: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
     .from('wa_interest_topics')
     .select('id')
-    .ilike('name', '%rate%')
+    .ilike('name', namePattern)
     .eq('is_active', true)
     .limit(1)
     .maybeSingle()
-  if (topic) await addInterest(customerId, topic.id)
+  return data?.id ?? null
 }
 
-// Log an outbound message we sent ourselves (auto-reply / menu) and bump the thread
+async function ensureRateInterest(customerId?: string) {
+  if (!customerId) return
+  const id = await findTopicId('%rate%')
+  if (id) await addInterest(customerId, id)
+}
+
+// Product list for the design funnel = sub-topics under "New Designs" (capped to
+// leave room for a "Talk to our team" row within WhatsApp's 10-row list limit).
+async function getDesignSubtopics(): Promise<Array<{ id: string; name: string }>> {
+  const parentId = await findTopicId('%new design%') ?? await findTopicId('%design%')
+  if (!parentId) return []
+  const { data } = await supabaseAdmin
+    .from('wa_interest_topics')
+    .select('id, name')
+    .eq('parent_id', parentId)
+    .eq('is_active', true)
+    .order('sort_order')
+    .limit(9)
+  return data ?? []
+}
+
+async function setBotState(threadId: string, state: 'active' | 'awaiting_care' | 'with_agent') {
+  await supabaseAdmin.from('wa_threads').update({ bot_state: state }).eq('id', threadId)
+}
+
+async function flagAgent(threadId: string) {
+  await supabaseAdmin.from('wa_threads').update({ needs_agent: true }).eq('id', threadId)
+}
+
+async function recordLead(
+  threadId: string,
+  customerId: string | undefined,
+  fields: { intent: string; metal?: string; product_topic_id?: string; wants_designs?: boolean }
+) {
+  await supabaseAdmin.from('wa_lead_captures').insert({
+    thread_id: threadId, customer_id: customerId ?? null, ...fields,
+  })
+}
+
+// Log an outbound message we sent ourselves (auto-reply / flow) and bump the thread
 async function logOutbound(threadId: string, wamid: string, body: string) {
   const now = new Date().toISOString()
   await Promise.all([
@@ -290,59 +344,193 @@ async function logOutbound(threadId: string, wamid: string, body: string) {
   ])
 }
 
-// Send the interactive "what are you interested in?" menu, built from real topics
-async function sendInterestMenu(phone: string, threadId: string, name: string) {
-  const topics = await getTopLevelTopics()
-  const rows = topics.map(t => ({ id: `topic:${t.id}`, title: t.name }))
-  rows.push({ id: 'more:salesman', title: 'Something else' })
-
-  const bodyText =
-    `Hello ${name}! 🙏 Welcome to M N Alankar Palace.\n\n` +
-    `What are you looking for today? Tap "Choose" below to pick.`
-
-  const wamid = await sendInteractiveList(phone, bodyText, 'Choose', rows, 'M N Alankar Palace')
-  await logOutbound(threadId, wamid, bodyText)
+// ---------------------------------------------------------------------------
+// Editable bot copy (admin-managed via wa_bot_messages; falls back to defaults)
+// ---------------------------------------------------------------------------
+const BOT_DEFAULTS: Record<string, string> = {
+  welcome:     '🙏 Welcome to M N Alankar Palace!\nHow can we help you today?',
+  offer:       '✨ Our latest offers are running now! Please visit us to know more.',
+  rate_outro:  'Would you like to see anything else?',
+  ask_metal:   'Which are you interested in?',
+  ask_product: 'Which item would you like to see?',
+  ask_designs: 'Shall we send you a few designs?',
+  designs_ack: 'Thank you! 🙏 Our team will send you a few designs shortly.',
+  care_prompt: 'Please type your question below. 🙏 Our team will reply to you shortly.',
+  care_ack:    'Thank you! 🙏 Our team will reply to you shortly.',
+  closing:     'Okay! 🙏 If you need anything, just message us anytime.',
 }
 
-// Handle a tap on the interest menu
-async function handleMenuSelection(
+async function getBotMessage(key: string): Promise<{ content: string; image_url: string | null }> {
+  const { data } = await supabaseAdmin
+    .from('wa_bot_messages')
+    .select('content, image_url')
+    .eq('key', key)
+    .maybeSingle()
+  return {
+    content: (data?.content?.trim() ? data.content : BOT_DEFAULTS[key]) ?? '',
+    image_url: data?.image_url ?? null,
+  }
+}
+
+// Send a plain (or image+caption) bot message and log it
+async function sendBot(phone: string, threadId: string, key: string) {
+  const { content, image_url } = await getBotMessage(key)
+  if (image_url) {
+    const wamid = await sendImageMessage(phone, image_url, content || undefined)
+    await logOutbound(threadId, wamid, content || '📷 Image')
+  } else {
+    const wamid = await sendTextMessage(phone, content)
+    await logOutbound(threadId, wamid, content)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The engagement flow (built around 4 real customer needs)
+// ---------------------------------------------------------------------------
+
+// Welcome screen — 3 big tappable buttons. "Talk to our team" is reachable on
+// every following step, so a human is always one tap away.
+async function sendWelcomeMenu(phone: string, threadId: string) {
+  const { content } = await getBotMessage('welcome')
+  const wamid = await sendInteractiveButtons(phone, content, [
+    { id: 'i:rate',    title: "Today's Rate" },
+    { id: 'i:offers',  title: 'Offers & Sale' },
+    { id: 'i:designs', title: 'New Designs' },
+  ])
+  await logOutbound(threadId, wamid, content)
+}
+
+// Today's rate, then one gentle follow-up with the next options
+async function sendRate(phone: string, threadId: string, displayName: string) {
+  await handleAutoReply(phone, threadId, displayName) // sends today's rate (template or text)
+  const { content } = await getBotMessage('rate_outro')
+  const wamid = await sendInteractiveButtons(phone, content, [
+    { id: 'i:offers',  title: 'Offers & Sale' },
+    { id: 'i:designs', title: 'New Designs' },
+    { id: 'care',      title: 'Talk to our team' },
+  ])
+  await logOutbound(threadId, wamid, content)
+}
+
+async function startOffersFlow(phone: string, threadId: string, customer: { id: string } | null) {
+  if (customer?.id) {
+    const offersTopic = await findTopicId('%offer%')
+    if (offersTopic) await addInterest(customer.id, offersTopic)
+  }
+  await sendBot(phone, threadId, 'offer') // owner's offer message (text and/or image)
+  await sendMetalStep(phone, threadId, 'offers')
+}
+
+// Ask metal (gold / silver / diamond) — 3 buttons, carries the intent forward
+async function sendMetalStep(phone: string, threadId: string, intent: 'offers' | 'designs') {
+  const { content } = await getBotMessage('ask_metal')
+  const wamid = await sendInteractiveButtons(phone, content, [
+    { id: `mt:${intent}:gold`,    title: 'Gold' },
+    { id: `mt:${intent}:silver`,  title: 'Silver' },
+    { id: `mt:${intent}:diamond`, title: 'Diamond' },
+  ])
+  await logOutbound(threadId, wamid, content)
+}
+
+// Ask which product — list of jewellery items + a "Talk to our team" row
+async function sendProductStep(phone: string, threadId: string, intent: string, metal: string) {
+  const subs = await getDesignSubtopics()
+  const rows = subs.map(s => ({ id: `pr:${intent}:${metal}:${s.id}`, title: s.name }))
+  rows.push({ id: 'care', title: 'Talk to our team' })
+  const { content } = await getBotMessage('ask_product')
+  const wamid = await sendInteractiveList(phone, content, 'View Items', rows)
+  await logOutbound(threadId, wamid, content)
+}
+
+// Ask if they want designs sent — yes / no / talk to team
+async function sendDesignsStep(phone: string, threadId: string, intent: string, metal: string, topicId: string) {
+  const { content } = await getBotMessage('ask_designs')
+  const wamid = await sendInteractiveButtons(phone, content, [
+    { id: `dz:${intent}:${metal}:${topicId}:yes`, title: 'Yes, please' },
+    { id: `dz:${intent}:${metal}:${topicId}:no`,  title: 'No, thank you' },
+    { id: 'care',                                  title: 'Talk to our team' },
+  ])
+  await logOutbound(threadId, wamid, content)
+}
+
+async function sendCarePrompt(phone: string, threadId: string) {
+  await sendBot(phone, threadId, 'care_prompt')
+  await setBotState(threadId, 'awaiting_care')
+  await flagAgent(threadId)
+}
+
+async function handleCareQuestion(phone: string, threadId: string) {
+  // The customer just typed their question (already stored). Ack once, hand to human.
+  await setBotState(threadId, 'with_agent')
+  await flagAgent(threadId)
+  await sendBot(phone, threadId, 'care_ack')
+}
+
+// Route a button/menu tap through the flow
+async function handleFlowReply(
   phone: string,
   threadId: string,
   replyId: string,
   customer: { id: string; name: string } | null,
   displayName: string
 ) {
-  if (replyId === 'more:salesman') {
-    const text = 'Thank you! 🙏 Our team will get back to you shortly to help you better.'
-    const wamid = await sendTextMessage(phone, text)
-    await logOutbound(threadId, wamid, text)
+  if (replyId === 'care') {
+    await sendCarePrompt(phone, threadId)
     return
   }
+  if (replyId === 'i:rate') {
+    await ensureRateInterest(customer?.id)
+    await sendRate(phone, threadId, displayName)
+    return
+  }
+  if (replyId === 'i:offers') {
+    await startOffersFlow(phone, threadId, customer)
+    return
+  }
+  if (replyId === 'i:designs') {
+    await sendMetalStep(phone, threadId, 'designs')
+    return
+  }
+  if (replyId.startsWith('mt:')) {
+    const [, intent, metal] = replyId.split(':')
+    await sendProductStep(phone, threadId, intent, metal)
+    return
+  }
+  if (replyId.startsWith('pr:')) {
+    const [, intent, metal, topicId] = replyId.split(':')
+    await sendDesignsStep(phone, threadId, intent, metal, topicId)
+    return
+  }
+  if (replyId.startsWith('dz:')) {
+    const [, intent, metal, topicId, ans] = replyId.split(':')
+    await handleDesignsAnswer(phone, threadId, customer, intent, metal, topicId, ans === 'yes')
+    return
+  }
+}
 
-  if (!replyId.startsWith('topic:')) return
-  const topicId = replyId.slice('topic:'.length)
+async function handleDesignsAnswer(
+  phone: string,
+  threadId: string,
+  customer: { id: string } | null,
+  intent: string,
+  metal: string,
+  topicId: string,
+  wantsDesigns: boolean
+) {
+  // Tag interests so the customer flows into the right broadcasts
+  if (customer?.id) {
+    const newDesigns = await findTopicId('%new design%')
+    if (newDesigns) await addInterest(customer.id, newDesigns)
+    if (topicId)    await addInterest(customer.id, topicId)
+  }
 
-  const { data: topic } = await supabaseAdmin
-    .from('wa_interest_topics')
-    .select('id, name')
-    .eq('id', topicId)
-    .maybeSingle()
-  if (!topic) return
+  await recordLead(threadId, customer?.id, { intent, metal, product_topic_id: topicId, wants_designs: wantsDesigns })
 
-  if (customer?.id) await addInterest(customer.id, topic.id)
-
-  if (/rate/i.test(topic.name)) {
-    // Rate topic → educate on the shortcut, then send today's rate
-    const tip = `Sure! 📈 You can get today's gold rate anytime — just send *rate*. Here is today's rate:`
-    const wamid = await sendTextMessage(phone, tip)
-    await logOutbound(threadId, wamid, tip)
-    await handleAutoReply(phone, threadId, displayName)
+  if (wantsDesigns) {
+    await flagAgent(threadId) // salesman will send the actual design pictures
+    await sendBot(phone, threadId, 'designs_ack')
   } else {
-    const text =
-      `Great choice! ✨ We've noted your interest in *${topic.name}*. ` +
-      `Our team will share the latest ${topic.name} updates with you shortly. 😊`
-    const wamid = await sendTextMessage(phone, text)
-    await logOutbound(threadId, wamid, text)
+    await sendBot(phone, threadId, 'closing')
   }
 }
 
