@@ -1,9 +1,18 @@
 'use client'
 
-import { use, useEffect, useRef, useState, useCallback } from 'react'
+import { use, useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import type { WaMessage, WaThread } from '@/lib/types'
+import { applyPlaceholders } from '@/lib/utils'
+import type { WaMessage, WaThread, MessageTemplate, InterestTopic } from '@/lib/types'
+
+interface TodayRates {
+  rate_24kt: number | null
+  rate_22kt: number | null
+  rate_18kt: number | null
+}
+
+const WINDOW_MS = 24 * 60 * 60 * 1000 // WhatsApp free-text reply window
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB
 
@@ -119,6 +128,19 @@ export default function ConversationPage({
   const [pendingImage,  setPendingImage]  = useState<File | null>(null)
   const [imagePreview,  setImagePreview]  = useState<string | null>(null)
 
+  // Templates + interests (in-chat tools)
+  const [sheet,            setSheet]            = useState<'none' | 'templates' | 'template-preview' | 'interests'>('none')
+  const [templates,        setTemplates]        = useState<MessageTemplate[]>([])
+  const [topics,           setTopics]           = useState<InterestTopic[]>([])
+  const [todayRates,       setTodayRates]       = useState<TodayRates | null>(null)
+  const [customerId,       setCustomerId]       = useState<string | null>(null)
+  const [selectedTopics,   setSelectedTopics]   = useState<Set<string>>(new Set())
+  const [interestsSaving,  setInterestsSaving]  = useState(false)
+  const [interestsSaved,   setInterestsSaved]   = useState(false)
+  const [previewTemplate,  setPreviewTemplate]  = useState<MessageTemplate | null>(null)
+  const [previewBody,      setPreviewBody]      = useState('')
+  const [tplSending,       setTplSending]       = useState(false)
+
   // Scroll to bottom
   const scrollToBottom = useCallback((smooth = false) => {
     bottomRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'instant' })
@@ -126,26 +148,36 @@ export default function ConversationPage({
 
   // Load thread + messages
   useEffect(() => {
+    const todayStr = new Date().toLocaleDateString('en-CA')
+
     async function load() {
       setLoading(true)
 
-      // Thread (may not exist yet — first message creates it)
-      const { data: th } = await supabase
-        .from('wa_threads')
-        .select('*')
-        .eq('phone', phone)
-        .single()
+      // Thread + supporting data (templates / topics / rates) in parallel.
+      // Thread may not exist yet — the first outbound message creates it.
+      const [thRes, tplRes, topicRes, ratesRes] = await Promise.all([
+        supabase.from('wa_threads').select('*').eq('phone', phone).single(),
+        supabase.from('wa_message_templates').select('*').eq('is_active', true).order('name'),
+        supabase.from('wa_interest_topics').select('*').eq('is_active', true).order('sort_order'),
+        supabase.from('daily_rates').select('rate_24kt, rate_22kt, rate_18kt').eq('date', todayStr).maybeSingle(),
+      ])
 
+      const th = thRes.data as WaThread | null
       setThread(th ?? null)
+      setTemplates((tplRes.data ?? []) as MessageTemplate[])
+      setTopics((topicRes.data ?? []) as InterestTopic[])
+      setTodayRates((ratesRes.data ?? null) as TodayRates | null)
 
       if (th) {
-        const { data: msgs } = await supabase
-          .from('wa_messages')
-          .select('*')
-          .eq('thread_id', th.id)
-          .order('created_at', { ascending: true })
-
-        setMessages((msgs ?? []) as WaMessage[])
+        const [msgsRes, interestsRes] = await Promise.all([
+          supabase.from('wa_messages').select('*').eq('thread_id', th.id).order('created_at', { ascending: true }),
+          th.customer_id
+            ? supabase.from('wa_customer_interests').select('topic_id').eq('customer_id', th.customer_id)
+            : Promise.resolve({ data: [] as { topic_id: string }[] }),
+        ])
+        setMessages((msgsRes.data ?? []) as WaMessage[])
+        setCustomerId(th.customer_id ?? null)
+        setSelectedTopics(new Set((interestsRes.data ?? []).map(r => r.topic_id)))
       }
 
       setLoading(false)
@@ -307,7 +339,118 @@ export default function ConversationPage({
     }
   }
 
-  const displayName = thread?.customer_name || formatPhone(phone)
+  const displayName  = thread?.customer_name || formatPhone(phone)
+  const customerName = thread?.customer_name || 'Customer'
+
+  // 24h free-text window: open only if the customer messaged us within 24h
+  const lastInboundAt = useMemo(() => {
+    const inbound = messages.filter(m => m.direction === 'inbound')
+    return inbound.length ? inbound[inbound.length - 1].created_at : null
+  }, [messages])
+  const [withinWindow, setWithinWindow] = useState(false)
+  useEffect(() => {
+    const check = () =>
+      setWithinWindow(!!lastInboundAt && (Date.now() - new Date(lastInboundAt).getTime()) < WINDOW_MS)
+    check()
+    const id = setInterval(check, 60_000) // re-check so it flips when the window expires
+    return () => clearInterval(id)
+  }, [lastInboundAt])
+
+  // Ensure a Type A customer record exists for this phone (link to thread)
+  async function ensureCustomer(): Promise<string | null> {
+    if (customerId) return customerId
+    const { data: existing } = await supabase
+      .from('wa_customers').select('id').eq('phone', phone).maybeSingle()
+    let id = existing?.id ?? null
+    if (!id) {
+      const { data: created } = await supabase
+        .from('wa_customers')
+        .insert({ name: thread?.customer_name ?? `WhatsApp ${phone.slice(-4)}`, phone, enrolled_via: 'whatsapp' })
+        .select('id').single()
+      id = created?.id ?? null
+    }
+    if (id) {
+      setCustomerId(id)
+      if (thread && !thread.customer_id) {
+        await supabase.from('wa_threads').update({ customer_id: id }).eq('id', thread.id)
+        setThread({ ...thread, customer_id: id })
+      }
+    }
+    return id
+  }
+
+  async function openInterests() {
+    setError(null)
+    await ensureCustomer()
+    setSheet('interests')
+  }
+
+  function toggleTopic(id: string) {
+    setSelectedTopics(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  async function saveInterests() {
+    const cid = await ensureCustomer()
+    if (!cid) { setError('Could not link this chat to a customer record.'); return }
+    setInterestsSaving(true)
+    await supabase.from('wa_customer_interests').delete().eq('customer_id', cid)
+    if (selectedTopics.size > 0) {
+      await supabase.from('wa_customer_interests').insert(
+        [...selectedTopics].map(tid => ({ customer_id: cid, topic_id: tid }))
+      )
+    }
+    setInterestsSaving(false)
+    setInterestsSaved(true)
+    setTimeout(() => { setInterestsSaved(false); setSheet('none') }, 1200)
+  }
+
+  function pickTemplate(t: MessageTemplate) {
+    setPreviewTemplate(t)
+    setPreviewBody(applyPlaceholders(t.body_text, customerName, todayRates))
+    setSheet('template-preview')
+  }
+
+  async function sendTemplate() {
+    if (!previewTemplate || tplSending) return
+    setTplSending(true)
+    setError(null)
+    const cid = await ensureCustomer()
+    try {
+      const res = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone,
+          body:       previewBody,
+          templateId: previewTemplate.id,
+          customerId: cid,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error ?? 'Failed to send template')
+      } else {
+        setSheet('none')
+        setPreviewTemplate(null)
+        if (!thread) {
+          const { data: th } = await supabase.from('wa_threads').select('*').eq('phone', phone).single()
+          setThread(th ?? null)
+        }
+        setTimeout(() => scrollToBottom(true), 100)
+      }
+    } catch {
+      setError('Network error — please try again')
+    } finally {
+      setTplSending(false)
+    }
+  }
+
+  const parentTopics = topics.filter(t => !t.parent_id)
+  const childTopics  = (parentId: string) => topics.filter(t => t.parent_id === parentId)
 
   return (
     // Full-screen flex column, sitting between sticky top bar and fixed bottom nav
@@ -331,6 +474,30 @@ export default function ConversationPage({
           <p className="font-semibold text-gray-900 text-sm truncate">{displayName}</p>
           <p className="text-xs text-gray-400">{formatPhone(phone)}</p>
         </div>
+
+        {/* Assign interests */}
+        <button
+          onClick={openInterests}
+          className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-gray-500 hover:text-green-600 hover:bg-green-50 transition-colors"
+          aria-label="Assign interests"
+          title="Assign interests"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z" />
+          </svg>
+        </button>
+
+        {/* Send a template */}
+        <button
+          onClick={() => { setError(null); setSheet('templates') }}
+          className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-gray-500 hover:text-green-600 hover:bg-green-50 transition-colors"
+          aria-label="Send template"
+          title="Send template"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+        </button>
       </div>
 
       {/* Messages scroll area */}
@@ -401,6 +568,21 @@ export default function ConversationPage({
         </div>
       )}
 
+      {/* 24h window-closed notice — free text won't deliver, must use a template */}
+      {!loading && !withinWindow && messages.length > 0 && (
+        <div className="flex-shrink-0 bg-amber-50 border-t border-amber-200 px-4 py-2 flex items-center justify-between gap-3">
+          <p className="text-xs text-amber-700 leading-snug">
+            24h reply window closed — a free message won’t deliver. Send an approved template instead.
+          </p>
+          <button
+            onClick={() => { setError(null); setSheet('templates') }}
+            className="flex-shrink-0 text-xs font-semibold text-white bg-amber-500 hover:bg-amber-600 px-3 py-1.5 rounded-lg transition-colors"
+          >
+            Template
+          </button>
+        </div>
+      )}
+
       {/* Send box */}
       <div
         className="flex-shrink-0 bg-white border-t border-gray-200 px-3 py-2 flex items-end gap-2"
@@ -444,6 +626,140 @@ export default function ConversationPage({
           )}
         </button>
       </div>
+
+      {/* ── Template picker sheet ──────────────────────────────────────────── */}
+      {sheet === 'templates' && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={() => setSheet('none')}>
+          <div className="bg-white rounded-t-2xl flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-5 pb-3">
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+              <p className="font-semibold text-gray-900">Choose a template</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Approved templates can be sent any time. Plain templates only deliver inside the 24h window.
+              </p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 space-y-2 pb-2">
+              {templates.length === 0 && (
+                <p className="text-sm text-gray-400 text-center py-6">No active templates. Add some in the Templates tab.</p>
+              )}
+              {templates.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => pickTemplate(t)}
+                  className="w-full text-left card p-4 hover:border-green-300 hover:bg-green-50 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium text-sm text-gray-900 truncate">{t.name}</p>
+                    {t.meta_template_name ? (
+                      <span className="flex-shrink-0 text-[10px] font-semibold text-green-700 bg-green-100 border border-green-200 px-1.5 py-0.5 rounded-full">Approved</span>
+                    ) : (
+                      <span className="flex-shrink-0 text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-full">24h only</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1 line-clamp-2">
+                    {applyPlaceholders(t.body_text, customerName, todayRates)}
+                  </p>
+                </button>
+              ))}
+            </div>
+            <div className="flex-shrink-0 px-5 pt-3 pb-8">
+              <button onClick={() => setSheet('none')} className="btn-secondary w-full">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Template preview + send ────────────────────────────────────────── */}
+      {sheet === 'template-preview' && previewTemplate && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={() => setSheet('none')}>
+          <div className="bg-white rounded-t-2xl flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-5 pb-3">
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-semibold text-gray-900">Preview</p>
+                <span className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded-full border border-green-100 font-medium">{previewTemplate.name}</span>
+              </div>
+              {!previewTemplate.meta_template_name && !withinWindow && (
+                <p className="text-xs text-amber-600 mt-2">
+                  ⚠ This template isn’t Meta-approved, so it may not deliver outside the 24h window.
+                </p>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 pb-2">
+              <div className="bg-[#dcf8c6] rounded-2xl rounded-tl-sm p-4 text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+                {previewBody}
+              </div>
+            </div>
+            <div className="flex-shrink-0 px-5 pt-3 pb-8 space-y-2">
+              {error && (
+                <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-center">{error}</p>
+              )}
+              <button onClick={sendTemplate} disabled={tplSending} className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-60">
+                {tplSending ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : 'Send'}
+              </button>
+              <button onClick={() => setSheet('templates')} disabled={tplSending} className="btn-secondary w-full disabled:opacity-60">← Back</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Assign interests sheet ─────────────────────────────────────────── */}
+      {sheet === 'interests' && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={() => setSheet('none')}>
+          <div className="bg-white rounded-t-2xl flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-5 pb-3">
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+              <p className="font-semibold text-gray-900">Assign interests</p>
+              <p className="text-xs text-gray-500 mt-0.5">Tag what {displayName} is interested in — they’ll be included in those broadcasts.</p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 space-y-3 pb-2">
+              {parentTopics.map(parent => {
+                const subs = childTopics(parent.id)
+                return (
+                  <div key={parent.id}>
+                    <button
+                      type="button"
+                      onClick={() => toggleTopic(parent.id)}
+                      className={`w-full text-left px-3 py-2.5 rounded-xl border text-sm font-medium transition-colors ${
+                        selectedTopics.has(parent.id) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-700 border-gray-300'
+                      }`}
+                    >
+                      {parent.name}
+                    </button>
+                    {subs.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-2 pl-2">
+                        {subs.map(sub => (
+                          <button
+                            key={sub.id}
+                            type="button"
+                            onClick={() => toggleTopic(sub.id)}
+                            className={`px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${
+                              selectedTopics.has(sub.id) ? 'bg-green-100 text-green-800 border-green-400' : 'bg-white text-gray-600 border-gray-300'
+                            }`}
+                          >
+                            {sub.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <div className="flex-shrink-0 px-5 pt-3 pb-8 space-y-2">
+              {error && (
+                <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-center">{error}</p>
+              )}
+              <button onClick={saveInterests} disabled={interestsSaving} className="btn-primary w-full disabled:opacity-60">
+                {interestsSaving ? 'Saving…' : interestsSaved ? '✓ Saved' : 'Save interests'}
+              </button>
+              <button onClick={() => setSheet('none')} className="btn-secondary w-full">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { verifySignature, sendTextMessage, sendTemplateMessage, getMediaDownloadUrl, downloadMediaBuffer } from '@/lib/whatsapp/api'
+import { verifySignature, sendTextMessage, sendTemplateMessage, sendInteractiveList, getMediaDownloadUrl, downloadMediaBuffer } from '@/lib/whatsapp/api'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { applyPlaceholders } from '@/lib/utils'
 
@@ -100,24 +100,54 @@ async function handleInboundMessage(
   const rawPhone: string = msg.from
   const phone = rawPhone.startsWith('91') ? rawPhone.slice(2) : rawPhone
 
+  // A tap on an interactive menu/button comes back as an interactive reply.
+  const interactiveReply =
+    msg.type === 'interactive'
+      ? (msg.interactive?.list_reply ?? msg.interactive?.button_reply ?? null)
+      : null
+
   const body =
-    msg.type === 'text'  ? msg.text?.body ?? ''
-    : msg.type === 'image' ? (msg.image?.caption ?? null)
+    msg.type === 'text'        ? msg.text?.body ?? ''
+    : msg.type === 'image'       ? (msg.image?.caption ?? null)
+    : interactiveReply           ? interactiveReply.title
     : `[${msg.type} message]`
 
   const messageType =
-    msg.type === 'text'  ? 'text'
-    : msg.type === 'image' ? 'image'
+    msg.type === 'text'        ? 'text'
+    : msg.type === 'image'       ? 'image'
+    : msg.type === 'interactive' ? 'text'
     : 'other'
 
   const contactName =
     contacts.find(c => c.wa_id === rawPhone)?.profile?.name ?? null
 
   // Customer lookup and thread lookup are independent — run in parallel
-  const [{ data: customer }, { data: existingThread }] = await Promise.all([
+  const [{ data: existingCustomer }, { data: existingThread }] = await Promise.all([
     supabaseAdmin.from('wa_customers').select('id, name').eq('phone', phone).maybeSingle(),
-    supabaseAdmin.from('wa_threads').select('id').eq('phone', phone).maybeSingle(),
+    supabaseAdmin.from('wa_threads').select('id, customer_id').eq('phone', phone).maybeSingle(),
   ])
+
+  // --- Auto-enroll: every inbound contact lands in the customer book ---
+  let customer = existingCustomer as { id: string; name: string } | null
+  if (!customer) {
+    const { data: created, error: createErr } = await supabaseAdmin
+      .from('wa_customers')
+      .insert({
+        name:         contactName ?? `WhatsApp ${phone.slice(-4)}`,
+        phone,
+        enrolled_via: 'whatsapp',
+      })
+      .select('id, name')
+      .single()
+    if (createErr) console.error('[webhook] Failed to auto-enroll customer:', createErr)
+    customer = created ?? null
+  } else if (contactName && customer.name?.startsWith('WhatsApp ')) {
+    // We learned the real WhatsApp profile name — upgrade the placeholder
+    await supabaseAdmin.from('wa_customers').update({ name: contactName }).eq('id', customer.id)
+    customer = { ...customer, name: contactName }
+  }
+
+  const displayName = customer?.name ?? contactName ?? 'there'
 
   let threadId: string
   const now = new Date().toISOString()
@@ -135,11 +165,14 @@ async function handleInboundMessage(
 
   if (existingThread) {
     threadId = existingThread.id
+    const threadUpdate: Record<string, unknown> = { last_message_at: now, last_message_preview: preview }
+    // Backfill the customer link on older threads created before auto-enroll
+    if (!existingThread.customer_id && customer) {
+      threadUpdate.customer_id   = customer.id
+      threadUpdate.customer_name = customer.name
+    }
     await Promise.all([
-      supabaseAdmin
-        .from('wa_threads')
-        .update({ last_message_at: now, last_message_preview: preview })
-        .eq('id', threadId),
+      supabaseAdmin.from('wa_threads').update(threadUpdate).eq('id', threadId),
       supabaseAdmin.from('wa_messages').insert({
         thread_id: threadId, direction: 'inbound',
         wa_message_id: msg.id, body, message_type: messageType,
@@ -172,12 +205,144 @@ async function handleInboundMessage(
     })
   }
 
-  // Auto-reply if text message contains "rate"
-  if (msg.type === 'text' && body && body.toLowerCase().includes('rate')) {
-    const customerName = customer?.name ?? contactName ?? 'there'
-    await handleAutoReply(phone, threadId, customerName).catch(err =>
-      console.error('[webhook] Auto-reply error:', err)
-    )
+  // ----- Automated, rules-based response -----
+  const text = msg.type === 'text' ? (body ?? '') : ''
+
+  try {
+    if (interactiveReply) {
+      // Customer tapped a menu option
+      await handleMenuSelection(phone, threadId, interactiveReply.id, customer, displayName)
+    } else if (isRateKeyword(text)) {
+      // "rate" / "bhav" → ensure Daily Rates interest, then send today's rate
+      await ensureRateInterest(customer?.id)
+      await handleAutoReply(phone, threadId, displayName)
+    } else if (isGreeting(text) || !existingThread) {
+      // A greeting, or a brand-new contact's first message → start the conversation
+      await sendInterestMenu(phone, threadId, displayName)
+    }
+  } catch (err) {
+    console.error('[webhook] Automated response error:', err)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Conversation flow helpers (rules-based — keyword + menu driven)
+// ---------------------------------------------------------------------------
+const GREETING_WORDS = new Set([
+  'hi', 'hii', 'hiii', 'hey', 'heyy', 'hello', 'helo', 'hellow',
+  'namaste', 'namaskar', 'hello there', 'start', 'menu', 'hi there',
+  'gm', 'good morning', 'good afternoon', 'good evening', 'good night',
+])
+
+function isGreeting(raw: string): boolean {
+  const t = raw.trim().toLowerCase().replace(/[!.।,]+$/, '')
+  if (!t) return false
+  if (GREETING_WORDS.has(t)) return true
+  // Short opener that starts with a greeting word (e.g. "hi sir", "hello bhai")
+  return t.length <= 20 && /^(hi+|hey+|hello+|namaste|namaskar)\b/.test(t)
+}
+
+function isRateKeyword(raw: string): boolean {
+  const t = raw.trim().toLowerCase()
+  return /\b(rate|rates|bhav|bhaav|gold rate|todays? rate)\b/.test(t)
+}
+
+async function getTopLevelTopics(): Promise<Array<{ id: string; name: string }>> {
+  const { data } = await supabaseAdmin
+    .from('wa_interest_topics')
+    .select('id, name')
+    .is('parent_id', null)
+    .eq('is_active', true)
+    .order('sort_order')
+  return data ?? []
+}
+
+async function addInterest(customerId: string, topicId: string) {
+  await supabaseAdmin
+    .from('wa_customer_interests')
+    .upsert({ customer_id: customerId, topic_id: topicId }, { onConflict: 'customer_id,topic_id', ignoreDuplicates: true })
+}
+
+async function ensureRateInterest(customerId?: string) {
+  if (!customerId) return
+  const { data: topic } = await supabaseAdmin
+    .from('wa_interest_topics')
+    .select('id')
+    .ilike('name', '%rate%')
+    .eq('is_active', true)
+    .limit(1)
+    .maybeSingle()
+  if (topic) await addInterest(customerId, topic.id)
+}
+
+// Log an outbound message we sent ourselves (auto-reply / menu) and bump the thread
+async function logOutbound(threadId: string, wamid: string, body: string) {
+  const now = new Date().toISOString()
+  await Promise.all([
+    supabaseAdmin.from('wa_messages').insert({
+      thread_id: threadId, direction: 'outbound', wa_message_id: wamid,
+      body, status: 'sent',
+    }),
+    supabaseAdmin
+      .from('wa_threads')
+      .update({ last_message_at: now, last_message_preview: body.slice(0, 60) })
+      .eq('id', threadId),
+  ])
+}
+
+// Send the interactive "what are you interested in?" menu, built from real topics
+async function sendInterestMenu(phone: string, threadId: string, name: string) {
+  const topics = await getTopLevelTopics()
+  const rows = topics.map(t => ({ id: `topic:${t.id}`, title: t.name }))
+  rows.push({ id: 'more:salesman', title: 'Something else' })
+
+  const bodyText =
+    `Hello ${name}! 🙏 Welcome to M N Alankar Palace.\n\n` +
+    `What are you looking for today? Tap "Choose" below to pick.`
+
+  const wamid = await sendInteractiveList(phone, bodyText, 'Choose', rows, 'M N Alankar Palace')
+  await logOutbound(threadId, wamid, bodyText)
+}
+
+// Handle a tap on the interest menu
+async function handleMenuSelection(
+  phone: string,
+  threadId: string,
+  replyId: string,
+  customer: { id: string; name: string } | null,
+  displayName: string
+) {
+  if (replyId === 'more:salesman') {
+    const text = 'Thank you! 🙏 Our team will get back to you shortly to help you better.'
+    const wamid = await sendTextMessage(phone, text)
+    await logOutbound(threadId, wamid, text)
+    return
+  }
+
+  if (!replyId.startsWith('topic:')) return
+  const topicId = replyId.slice('topic:'.length)
+
+  const { data: topic } = await supabaseAdmin
+    .from('wa_interest_topics')
+    .select('id, name')
+    .eq('id', topicId)
+    .maybeSingle()
+  if (!topic) return
+
+  if (customer?.id) await addInterest(customer.id, topic.id)
+
+  if (/rate/i.test(topic.name)) {
+    // Rate topic → educate on the shortcut, then send today's rate
+    const tip = `Sure! 📈 You can get today's gold rate anytime — just send *rate*. Here is today's rate:`
+    const wamid = await sendTextMessage(phone, tip)
+    await logOutbound(threadId, wamid, tip)
+    await handleAutoReply(phone, threadId, displayName)
+  } else {
+    const text =
+      `Great choice! ✨ We've noted your interest in *${topic.name}*. ` +
+      `Our team will share the latest ${topic.name} updates with you shortly. 😊`
+    const wamid = await sendTextMessage(phone, text)
+    await logOutbound(threadId, wamid, text)
   }
 }
 
@@ -364,6 +529,12 @@ interface WaContact {
   wa_id: string
 }
 
+interface WaInteractiveReply {
+  id: string
+  title: string
+  description?: string
+}
+
 interface WaInboundMessage {
   from: string
   id: string
@@ -371,6 +542,11 @@ interface WaInboundMessage {
   type: string
   text?: { body: string }
   image?: { id: string; mime_type?: string; caption?: string; sha256?: string }
+  interactive?: {
+    type: string
+    list_reply?: WaInteractiveReply
+    button_reply?: WaInteractiveReply
+  }
 }
 
 interface WaStatusUpdate {

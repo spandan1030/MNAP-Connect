@@ -149,6 +149,122 @@ export async function downloadMediaBuffer(
 }
 
 // ---------------------------------------------------------------------------
+// Send an interactive list message
+// Renders a tappable menu (a button that opens a list of up to 10 rows).
+// Only works inside the 24-hour customer reply window — which always holds
+// right after a customer messages us, so it's ideal for greeting auto-replies.
+// Each row's `id` comes back to the webhook as an interactive list_reply.
+// ---------------------------------------------------------------------------
+export async function sendInteractiveList(
+  phone: string,
+  bodyText: string,
+  buttonLabel: string,
+  rows: Array<{ id: string; title: string; description?: string }>,
+  headerText?: string
+): Promise<string> {
+  if (!process.env.WHATSAPP_ACCESS_TOKEN) {
+    throw new Error('WHATSAPP_ACCESS_TOKEN is not configured')
+  }
+
+  const digits = phone.replace(/\D/g, '')
+  const to = digits.startsWith('91') ? digits : `91${digits}`
+
+  // WhatsApp limits: max 10 rows, title <=24 chars, description <=72 chars.
+  const safeRows = rows.slice(0, 10).map(r => ({
+    id: r.id.slice(0, 200),
+    title: r.title.slice(0, 24),
+    ...(r.description ? { description: r.description.slice(0, 72) } : {}),
+  }))
+
+  const interactive: Record<string, unknown> = {
+    type: 'list',
+    body: { text: bodyText.slice(0, 1024) },
+    action: {
+      button: buttonLabel.slice(0, 20),
+      sections: [{ rows: safeRows }],
+    },
+  }
+  if (headerText) {
+    interactive.header = { type: 'text', text: headerText.slice(0, 60) }
+  }
+
+  const res = await fetch(`${API_BASE}/${PHONE_ID}/messages`, {
+    method: 'POST',
+    headers: {
+      Authorization:  `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive,
+    }),
+  })
+
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(
+      data.error?.message ?? `Meta API error ${res.status}: ${JSON.stringify(data)}`
+    )
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (data as any).messages[0].id as string
+}
+
+// ---------------------------------------------------------------------------
+// Send an interactive reply-buttons message (max 3 buttons)
+// Like the list above, only valid inside the 24-hour window. Each button's
+// `id` comes back to the webhook as an interactive button_reply.
+// ---------------------------------------------------------------------------
+export async function sendInteractiveButtons(
+  phone: string,
+  bodyText: string,
+  buttons: Array<{ id: string; title: string }>
+): Promise<string> {
+  if (!process.env.WHATSAPP_ACCESS_TOKEN) {
+    throw new Error('WHATSAPP_ACCESS_TOKEN is not configured')
+  }
+
+  const digits = phone.replace(/\D/g, '')
+  const to = digits.startsWith('91') ? digits : `91${digits}`
+
+  const res = await fetch(`${API_BASE}/${PHONE_ID}/messages`, {
+    method: 'POST',
+    headers: {
+      Authorization:  `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: bodyText.slice(0, 1024) },
+        action: {
+          buttons: buttons.slice(0, 3).map(b => ({
+            type: 'reply',
+            reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) },
+          })),
+        },
+      },
+    }),
+  })
+
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(
+      data.error?.message ?? `Meta API error ${res.status}: ${JSON.stringify(data)}`
+    )
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (data as any).messages[0].id as string
+}
+
+// ---------------------------------------------------------------------------
 // Send a template message
 // Required for all outbound messages outside the 24-hour customer reply window.
 // ---------------------------------------------------------------------------
