@@ -3,6 +3,7 @@
 import { use, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { compressImage } from '@/lib/image'
 import Navbar from '@/components/ui/Navbar'
 import type { WaProduct, WaProductImage } from '@/lib/types'
 
@@ -78,16 +79,15 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
 
   async function addPhotos(list: FileList) {
     setUploading(true); setError(null)
-    const imgs = Array.from(list).filter(f => f.type.startsWith('image/') && f.size <= 8 * 1024 * 1024)
+    const imgs = Array.from(list).filter(f => f.type.startsWith('image/') && f.size <= 30 * 1024 * 1024)
     let order = images.length
-    for (const f of imgs) {
-      const ext = f.name.split('.').pop() || 'jpg'
-      const { data: up } = await supabase.storage.from('wa-media').upload(`products/${id}/${Date.now()}-${order}.${ext}`, f, { upsert: false })
-      if (up) {
-        const { data: { publicUrl } } = supabase.storage.from('wa-media').getPublicUrl(up.path)
-        const { data: row } = await supabase.from('wa_product_images').insert({ product_id: id, image_url: publicUrl, sort_order: order }).select('*').single()
-        if (row) setImages(prev => [...prev, row as WaProductImage])
-      }
+    for (const raw of imgs) {
+      const f = await compressImage(raw)
+      const { data: up, error: upErr } = await supabase.storage.from('wa-media').upload(`products/${id}/${Date.now()}-${order}.jpg`, f, { upsert: false, contentType: 'image/jpeg' })
+      if (upErr || !up) { console.error('[catalogue] upload failed:', upErr); setError(`Photo upload failed: ${upErr?.message ?? 'unknown error'}`); continue }
+      const { data: { publicUrl } } = supabase.storage.from('wa-media').getPublicUrl(up.path)
+      const { data: row } = await supabase.from('wa_product_images').insert({ product_id: id, image_url: publicUrl, sort_order: order }).select('*').single()
+      if (row) setImages(prev => [...prev, row as WaProductImage])
       order++
     }
     setUploading(false)

@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { compressImage } from '@/lib/image'
 import Navbar from '@/components/ui/Navbar'
 
 const PURITY_OPTIONS = ['24KT', '22KT', '18KT', '14KT', '916', '750', '999', '925']
@@ -20,7 +21,8 @@ export default function NewProductPage() {
   function set(k: keyof typeof form, v: string) { setForm(f => ({ ...f, [k]: v })) }
 
   function addFiles(list: FileList) {
-    const imgs = Array.from(list).filter(f => f.type.startsWith('image/') && f.size <= 8 * 1024 * 1024)
+    const imgs = Array.from(list).filter(f => f.type.startsWith('image/') && f.size <= 30 * 1024 * 1024)
+    if (imgs.length === 0) { setError('That file is not a supported image (or is over 30 MB).'); return }
     setFiles(prev => [...prev, ...imgs])
     setPreviews(prev => [...prev, ...imgs.map(f => URL.createObjectURL(f))])
   }
@@ -57,18 +59,23 @@ export default function NewProductPage() {
       setSaving(false); return
     }
 
-    // Upload photos under this product
+    // Upload photos under this product (compressed client-side)
+    let uploadFailed = false
     for (let i = 0; i < files.length; i++) {
-      const f = files[i]
-      const ext = f.name.split('.').pop() || 'jpg'
-      const path = `products/${product.id}/${Date.now()}-${i}.${ext}`
-      const { data: up } = await supabase.storage.from('wa-media').upload(path, f, { upsert: false })
-      if (up) {
-        const { data: { publicUrl } } = supabase.storage.from('wa-media').getPublicUrl(up.path)
-        await supabase.from('wa_product_images').insert({ product_id: product.id, image_url: publicUrl, sort_order: i })
-      }
+      const f = await compressImage(files[i])
+      const path = `products/${product.id}/${Date.now()}-${i}.jpg`
+      const { data: up, error: upErr } = await supabase.storage.from('wa-media').upload(path, f, { upsert: false, contentType: 'image/jpeg' })
+      if (upErr || !up) { uploadFailed = true; console.error('[catalogue] upload failed:', upErr); continue }
+      const { data: { publicUrl } } = supabase.storage.from('wa-media').getPublicUrl(up.path)
+      await supabase.from('wa_product_images').insert({ product_id: product.id, image_url: publicUrl, sort_order: i })
     }
 
+    if (uploadFailed) {
+      // Product saved, but photos didn't upload — send them to the edit page to retry
+      setError('Saved, but a photo failed to upload. Opening the product so you can re-add photos.')
+      setTimeout(() => router.push(`/catalogue/${product.id}`), 1200)
+      return
+    }
     router.push(`/catalogue/${product.id}`)
   }
 
