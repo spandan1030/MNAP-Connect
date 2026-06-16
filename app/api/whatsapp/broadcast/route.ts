@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
     .in('id', customerIds)
     .eq('is_active', true)
     .eq('is_opted_out', false)
+    .eq('dnd', false)
 
   const total = (customers ?? []).length
   let sent = 0

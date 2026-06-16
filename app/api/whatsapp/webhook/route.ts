@@ -123,12 +123,12 @@ async function handleInboundMessage(
 
   // Customer lookup and thread lookup are independent — run in parallel
   const [{ data: existingCustomer }, { data: existingThread }] = await Promise.all([
-    supabaseAdmin.from('wa_customers').select('id, name').eq('phone', phone).maybeSingle(),
+    supabaseAdmin.from('wa_customers').select('id, name, dnd').eq('phone', phone).maybeSingle(),
     supabaseAdmin.from('wa_threads').select('id, customer_id, bot_state').eq('phone', phone).maybeSingle(),
   ])
 
   // --- Auto-enroll: every inbound contact lands in the customer book ---
-  let customer = existingCustomer as { id: string; name: string } | null
+  let customer = existingCustomer as { id: string; name: string; dnd?: boolean } | null
   if (!customer) {
     const { data: created, error: createErr } = await supabaseAdmin
       .from('wa_customers')
@@ -137,7 +137,7 @@ async function handleInboundMessage(
         phone,
         enrolled_via: 'whatsapp',
       })
-      .select('id, name')
+      .select('id, name, dnd')
       .single()
     if (createErr) console.error('[webhook] Failed to auto-enroll customer:', createErr)
     customer = created ?? null
@@ -210,7 +210,13 @@ async function handleInboundMessage(
   const botState = existingThread?.bot_state ?? 'active'
 
   try {
-    if (botState === 'with_agent') {
+    if (isStopKeyword(text)) {
+      // Opt out — flag DnD and never message this number again
+      await handleStop(phone, threadId, customer)
+    } else if (customer?.dnd) {
+      // Opted out: only "START" can bring them back; otherwise total silence
+      if (isStartKeyword(text)) await handleResume(phone, threadId, customer)
+    } else if (botState === 'with_agent') {
       // A human has taken over. Stay completely silent — even for "hi"/"hello" —
       // until staff resumes the bot from the chat. Don't talk over the salesman.
     } else if (interactiveReply) {
@@ -268,6 +274,14 @@ function isOffersKeyword(raw: string): boolean {
 
 function isSchemeKeyword(raw: string): boolean {
   return /\b(scheme|schemes|saving|savings|sip|gold scheme|gold savings)\b/.test(raw.trim().toLowerCase())
+}
+
+function isStopKeyword(raw: string): boolean {
+  return /^(stop|unsubscribe|stop messages?)\b/.test(raw.trim().toLowerCase())
+}
+
+function isStartKeyword(raw: string): boolean {
+  return /^(start|resume|subscribe)\b/.test(raw.trim().toLowerCase())
 }
 
 function isDesignKeyword(raw: string): boolean {
@@ -353,6 +367,8 @@ async function logOutbound(threadId: string, wamid: string, body: string) {
 // ---------------------------------------------------------------------------
 const BOT_DEFAULTS: Record<string, string> = {
   welcome:     '🙏 Welcome to M N Alankar Palace!\nHow can we help you today?',
+  stop_notice: 'Message STOP any time to stop receiving messages.',
+  stop_ack:    'You have been unsubscribed. 🙏 You will not receive any more messages from us. Message START anytime to resume.',
   more_options:'Here are all the options. 🙏 Please choose one:',
   offers_menu: 'What would you like to know? 🙏',
   offer:       '✨ Our latest offers are running now! Please visit us to know more.',
@@ -402,13 +418,37 @@ async function sendBot(phone: string, threadId: string, key: string) {
 // reveals the full list (rate, offers, new designs, gold savings scheme,
 // talk to our team).
 async function sendWelcomeMenu(phone: string, threadId: string) {
-  const { content } = await getBotMessage('welcome')
-  const wamid = await sendInteractiveButtons(phone, content, [
+  const [{ content }, notice] = await Promise.all([getBotMessage('welcome'), getBotMessage('stop_notice')])
+  // Append the opt-out line in italics (WhatsApp's lightest styling)
+  const body = notice.content ? `${content}\n\n_${notice.content}_` : content
+  const wamid = await sendInteractiveButtons(phone, body, [
     { id: 'i:rate',   title: "Today's Rate" },
     { id: 'i:offers', title: 'Offers & Sale' },
     { id: 'i:more',   title: 'More options' },
   ])
-  await logOutbound(threadId, wamid, content)
+  await logOutbound(threadId, wamid, body)
+}
+
+// STOP → flag Do-Not-Disturb, opt out of broadcasts, confirm once
+async function handleStop(phone: string, threadId: string, customer: { id: string; dnd?: boolean } | null) {
+  if (customer?.dnd) return // already opted out — stay silent
+  if (customer?.id) {
+    await supabaseAdmin.from('wa_customers')
+      .update({ dnd: true, is_opted_out: true, opted_out_at: new Date().toISOString() })
+      .eq('id', customer.id)
+  }
+  await sendBot(phone, threadId, 'stop_ack')
+}
+
+// START → clear DnD and re-engage
+async function handleResume(phone: string, threadId: string, customer: { id: string } | null) {
+  if (customer?.id) {
+    await supabaseAdmin.from('wa_customers')
+      .update({ dnd: false, is_opted_out: false, opted_out_at: null })
+      .eq('id', customer.id)
+  }
+  await setBotState(threadId, 'active')
+  await sendWelcomeMenu(phone, threadId)
 }
 
 // The full option list, shown when the customer taps "More options"
@@ -420,6 +460,7 @@ async function sendMoreOptions(phone: string, threadId: string) {
     { id: 'i:designs', title: 'New Designs' },
     { id: 'i:scheme',  title: 'Gold Savings Scheme' },
     { id: 'care',      title: 'Talk to our team' },
+    { id: 'stop',      title: 'Stop receiving msgs' },
   ])
   await logOutbound(threadId, wamid, content)
 }
@@ -551,6 +592,10 @@ async function handleFlowReply(
 ) {
   if (replyId === 'care') {
     await sendCarePrompt(phone, threadId)
+    return
+  }
+  if (replyId === 'stop') {
+    await handleStop(phone, threadId, customer)
     return
   }
   if (replyId === 'i:more') {

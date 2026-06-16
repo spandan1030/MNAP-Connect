@@ -29,6 +29,13 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Image must be under 5 MB' }, { status: 400 })
   }
 
+  // Respect Do-Not-Disturb (customer sent STOP)
+  const { data: dndCustomer } = await supabaseAdmin
+    .from('wa_customers').select('dnd').eq('phone', phone).maybeSingle()
+  if (dndCustomer?.dnd) {
+    return Response.json({ error: 'This number opted out (sent STOP) and cannot be messaged.' }, { status: 403 })
+  }
+
   // Upload to Supabase Storage
   const ext      = file.name.split('.').pop()?.toLowerCase() || 'jpg'
   const filename = `outbound/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`

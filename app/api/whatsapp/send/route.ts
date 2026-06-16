@@ -26,6 +26,14 @@ export async function POST(req: NextRequest) {
   if (!phone?.trim()) return Response.json({ error: 'phone is required' }, { status: 400 })
 
   const cleanPhone = phone.replace(/\D/g, '')
+
+  // Respect Do-Not-Disturb (customer sent STOP) — block all outbound, including 1:1
+  const { data: dndCustomer } = await supabaseAdmin
+    .from('wa_customers').select('dnd').eq('phone', cleanPhone).maybeSingle()
+  if (dndCustomer?.dnd) {
+    return Response.json({ error: 'This number opted out (sent STOP) and cannot be messaged.' }, { status: 403 })
+  }
+
   const now = new Date().toISOString()
   const todayStr = new Date().toLocaleDateString('en-CA')
 

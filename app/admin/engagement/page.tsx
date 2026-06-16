@@ -8,7 +8,9 @@ import Navbar from '@/components/ui/Navbar'
 // Editable bot copy. `image` = WhatsApp can carry a picture with this message
 // (only the plain-text replies can — the button/list screens are text-only).
 const FIELDS: Array<{ key: string; label: string; help: string; image: boolean }> = [
-  { key: 'welcome',     label: 'Welcome message',            help: 'Shown with the 2 main buttons + “More options” when a customer says hi.', image: false },
+  { key: 'welcome',     label: 'Welcome message',            help: 'Shown with the 2 main buttons + “More options” when a customer says hi. The opt-out line below is added automatically in italics.', image: false },
+  { key: 'stop_notice', label: 'Opt-out line (in welcome)',  help: 'Appended to the welcome in italics, e.g. “Message STOP any time…”. Clear it to hide.', image: false },
+  { key: 'stop_ack',    label: 'Unsubscribe confirmation',   help: 'Sent once when a customer messages STOP. After that they receive nothing until they send START.', image: false },
   { key: 'more_options',label: '“More options” heading',     help: 'Shown above the full list when a customer taps “More options”.', image: false },
   { key: 'offers_menu',   label: '“Offers & Sale” heading',     help: 'Shown above the Offers / Gold Exchange-Cash buttons.', image: false },
   { key: 'offer',         label: 'Offer / Sale message',        help: 'Sent when a customer taps “Offers”. Add a poster image if you like.', image: true },

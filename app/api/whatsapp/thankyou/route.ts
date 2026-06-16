@@ -71,6 +71,15 @@ export async function POST(req: NextRequest) {
     }
 
     try {
+      // Respect Do-Not-Disturb (buyer previously sent STOP)
+      const { data: existing } = await supabaseAdmin
+        .from('wa_customers').select('id, name, dnd').eq('phone', r.phone).maybeSingle()
+      if (existing?.dnd) {
+        failed++
+        results.push({ phone: r.phone, status: 'failed', error: 'Opted out (sent STOP)' })
+        continue
+      }
+
       const components: object[] = []
       if (config.header_image_url) {
         components.push({ type: 'header', parameters: [{ type: 'image', image: { link: config.header_image_url } }] })
@@ -84,8 +93,6 @@ export async function POST(req: NextRequest) {
       )
 
       // Auto-enroll buyer (don't overwrite an existing record)
-      const { data: existing } = await supabaseAdmin
-        .from('wa_customers').select('id, name').eq('phone', r.phone).maybeSingle()
       let customerId = existing?.id ?? null
       if (!customerId) {
         const { data: created } = await supabaseAdmin
