@@ -93,21 +93,30 @@ export default function NewProductPage() {
         {/* Photos */}
         <div className="card p-4 space-y-3">
           <p className="text-sm font-semibold text-gray-800">Photos</p>
-          <div className="flex flex-wrap gap-2">
-            {previews.map((src, i) => (
-              <div key={i} className="relative">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={src} alt="" className="w-16 h-16 object-cover rounded-lg border border-gray-200" />
-                <button onClick={() => removeFile(i)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
-              </div>
-            ))}
-            <label className="w-16 h-16 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 cursor-pointer">
-              <span className="text-2xl leading-none">+</span>
-              <input type="file" accept="image/*" capture="environment" multiple className="hidden"
+          {previews.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {previews.map((src, i) => (
+                <div key={i} className="relative">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={src} alt="" className="w-16 h-16 object-cover rounded-lg border border-gray-200" />
+                  <button onClick={() => removeFile(i)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <label className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 cursor-pointer active:bg-gray-50">
+              📷 Take photo
+              <input type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={e => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
+            </label>
+            <label className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 cursor-pointer active:bg-gray-50">
+              🖼 Gallery
+              <input type="file" accept="image/*" multiple className="hidden"
                 onChange={e => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
             </label>
           </div>
-          <p className="text-xs text-gray-400">Tap + to take a photo or pick from gallery. You can add photos later too.</p>
+          <p className="text-xs text-gray-400">You can add more photos later too.</p>
         </div>
 
         {/* Details */}

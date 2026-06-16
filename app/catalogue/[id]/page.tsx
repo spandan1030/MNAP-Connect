@@ -137,19 +137,28 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         {/* Photos */}
         <div className="card p-4 space-y-3">
           <p className="text-sm font-semibold text-gray-800">Photos</p>
-          <div className="flex flex-wrap gap-2">
-            {images.map(img => (
-              <div key={img.id} className="relative">
-                <a href={img.image_url} target="_blank" rel="noopener noreferrer">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={img.image_url} alt="" className="w-20 h-20 object-cover rounded-lg border border-gray-200" />
-                </a>
-                <button onClick={() => deleteImage(img)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
-              </div>
-            ))}
-            <label className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 cursor-pointer">
-              <span className="text-2xl leading-none">{uploading ? '…' : '+'}</span>
-              <input type="file" accept="image/*" capture="environment" multiple className="hidden" disabled={uploading}
+          {images.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {images.map(img => (
+                <div key={img.id} className="relative">
+                  <a href={img.image_url} target="_blank" rel="noopener noreferrer">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={img.image_url} alt="" className="w-20 h-20 object-cover rounded-lg border border-gray-200" />
+                  </a>
+                  <button onClick={() => deleteImage(img)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <label className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 cursor-pointer active:bg-gray-50 ${uploading ? 'opacity-50' : ''}`}>
+              {uploading ? 'Uploading…' : '📷 Take photo'}
+              <input type="file" accept="image/*" capture="environment" className="hidden" disabled={uploading}
+                onChange={e => { if (e.target.files) addPhotos(e.target.files); e.target.value = '' }} />
+            </label>
+            <label className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 cursor-pointer active:bg-gray-50 ${uploading ? 'opacity-50' : ''}`}>
+              🖼 Gallery
+              <input type="file" accept="image/*" multiple className="hidden" disabled={uploading}
                 onChange={e => { if (e.target.files) addPhotos(e.target.files); e.target.value = '' }} />
             </label>
           </div>
