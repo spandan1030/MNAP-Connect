@@ -152,6 +152,19 @@ export interface WaBotMessage {
   updated_at: string
 }
 
+export interface WaThankYouProduct {
+  id: string
+  product_label: string
+  is_default: boolean
+  meta_template_name: string | null
+  meta_template_lang: string
+  header_image_url: string | null
+  body_preview: string
+  is_active: boolean
+  updated_by: string | null
+  created_at: string
+}
+
 export interface WaLeadCapture {
   id: string
   customer_id: string | null
