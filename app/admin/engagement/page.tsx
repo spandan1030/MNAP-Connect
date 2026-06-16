@@ -10,7 +10,11 @@ import Navbar from '@/components/ui/Navbar'
 const FIELDS: Array<{ key: string; label: string; help: string; image: boolean }> = [
   { key: 'welcome',     label: 'Welcome message',            help: 'Shown with the 2 main buttons + “More options” when a customer says hi.', image: false },
   { key: 'more_options',label: '“More options” heading',     help: 'Shown above the full list when a customer taps “More options”.', image: false },
-  { key: 'offer',       label: 'Offer / Sale message',       help: 'Sent when a customer taps “Offers & Sale”. Add a poster image if you like.', image: true },
+  { key: 'offers_menu',   label: '“Offers & Sale” heading',     help: 'Shown above the Offers / Gold Exchange-Cash buttons.', image: false },
+  { key: 'offer',         label: 'Offer / Sale message',        help: 'Sent when a customer taps “Offers”. Add a poster image if you like.', image: true },
+  { key: 'exchange_menu', label: '“Gold Exchange/Cash” heading',help: 'Shown above the Gold Exchange / Instant Cash buttons.', image: false },
+  { key: 'exchange_info', label: 'Gold Exchange message',       help: 'Sent when a customer taps “Gold Exchange”. Add an image if you like.', image: true },
+  { key: 'cash_info',     label: 'Instant Cash message',        help: 'Sent when a customer taps “Instant Cash”. Add an image if you like.', image: true },
   { key: 'scheme_info', label: 'Gold Savings Scheme reply',  help: 'Sent when a customer is interested in the Gold Savings Scheme. Add a poster image if you like.', image: true },
   { key: 'rate_outro',  label: 'After sending the rate',     help: 'Follow-up shown with Offers / New Designs / Talk to our team.', image: false },
   { key: 'ask_metal',   label: 'Ask: which metal?',          help: 'Shown above the Gold / Silver / Diamond buttons.', image: false },

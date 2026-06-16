@@ -1,6 +1,13 @@
 # MNAP Connect — WhatsApp Customer Engagement App
 ## Complete Project Reference Document
 
+> ⚠️ **PARTIALLY OUTDATED (as of 16 June 2026).** Sections describing `wa.me` deep links and
+> "No API" (Tech Stack, WhatsApp Link Format) are superseded — the app now uses the **real
+> WhatsApp Business Cloud API** with a two-way inbox, rules-based inbound auto-engagement, and
+> topic-synced signal capture. For the current engagement layer, infrastructure, and roadmap
+> (including the Flow Builder and Topic↔Node linking plan), see **`ENGAGEMENT_SYSTEM.md`**.
+> The Type A / Type B data model and segmentation sections below remain accurate.
+
 ---
 
 ## Table of Contents

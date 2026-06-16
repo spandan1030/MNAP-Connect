@@ -140,7 +140,7 @@ export default function ConversationPage({
   const [previewTemplate,  setPreviewTemplate]  = useState<MessageTemplate | null>(null)
   const [previewBody,      setPreviewBody]      = useState('')
   const [tplSending,       setTplSending]       = useState(false)
-  const [lead,             setLead]             = useState<{ intent: string | null; metal: string | null; product: string | null; wants_designs: boolean | null } | null>(null)
+  const [leads,            setLeads]            = useState<Array<{ intent: string | null; metal: string | null }>>([])
 
   // Scroll to bottom
   const scrollToBottom = useCallback((smooth = false) => {
@@ -178,19 +178,16 @@ export default function ConversationPage({
           th.customer_id
             ? supabase
                 .from('wa_lead_captures')
-                .select('intent, metal, wants_designs, product:wa_interest_topics(name)')
+                .select('intent, metal')
                 .eq('customer_id', th.customer_id)
                 .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle()
-            : Promise.resolve({ data: null }),
+                .limit(30)
+            : Promise.resolve({ data: [] as Array<{ intent: string | null; metal: string | null }> }),
         ])
         setMessages((msgsRes.data ?? []) as WaMessage[])
         setCustomerId(th.customer_id ?? null)
         setSelectedTopics(new Set((interestsRes.data ?? []).map(r => r.topic_id)))
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const ld = leadRes.data as any
-        setLead(ld ? { intent: ld.intent, metal: ld.metal, product: ld.product?.name ?? null, wants_designs: ld.wants_designs } : null)
+        setLeads((leadRes.data ?? []) as Array<{ intent: string | null; metal: string | null }>)
       }
 
       setLoading(false)
@@ -355,13 +352,16 @@ export default function ConversationPage({
   const displayName  = thread?.customer_name || formatPhone(phone)
   const customerName = thread?.customer_name || 'Customer'
 
-  // "Interested in" banner — built from everything tagged across the whole
-  // conversation (the customer's interests) plus the metal they last picked.
+  // "Interested in" banner — the specific topics tagged across the whole
+  // conversation (Sale & Discounts, Gold Exchange, Necklaces, …) plus the metal
+  // they picked. Topics are the single source of truth, shared with the Send module.
   const interestNames = topics.filter(t => selectedTopics.has(t.id)).map(t => t.name)
-  const summaryParts: string[] = []
-  if (lead?.metal) summaryParts.push(lead.metal.charAt(0).toUpperCase() + lead.metal.slice(1))
-  summaryParts.push(...interestNames)
-  const leadSummary = summaryParts.join(' · ')
+  const metalNames    = [...new Set(leads.map(l => l.metal).filter(Boolean) as string[])]
+    .map(m => m.charAt(0).toUpperCase() + m.slice(1))
+  const seen = new Set<string>()
+  const leadSummary = [...metalNames, ...interestNames]
+    .filter(p => { const k = p.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true })
+    .join(' · ')
 
   // 24h free-text window: open only if the customer messaged us within 24h
   const lastInboundAt = useMemo(() => {

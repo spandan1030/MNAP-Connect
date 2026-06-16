@@ -225,7 +225,7 @@ async function handleInboundMessage(
       await ensureRateInterest(customer?.id)
       await sendRate(phone, threadId, displayName)
     } else if (isOffersKeyword(text)) {
-      await startOffersFlow(phone, threadId, customer)
+      await sendOffersMenu(phone, threadId)
     } else if (isSchemeKeyword(text)) {
       await handleScheme(phone, threadId, customer)
     } else if (isDesignKeyword(text)) {
@@ -354,7 +354,11 @@ async function logOutbound(threadId: string, wamid: string, body: string) {
 const BOT_DEFAULTS: Record<string, string> = {
   welcome:     '🙏 Welcome to M N Alankar Palace!\nHow can we help you today?',
   more_options:'Here are all the options. 🙏 Please choose one:',
+  offers_menu: 'What would you like to know? 🙏',
   offer:       '✨ Our latest offers are running now! Please visit us to know more.',
+  exchange_menu: 'Please choose one: 🙏',
+  exchange_info: 'You can exchange your old gold for new jewellery at the best value. 🙏 Our team will share the details with you shortly.',
+  cash_info:   'We offer instant cash for your gold. 🙏 Our team will contact you with the details shortly.',
   scheme_info: 'Our Gold Savings Scheme helps you save every month towards your jewellery. 🙏 Our representative will contact you shortly with all the details.',
   rate_outro:  'Would you like to see anything else?',
   ask_metal:   'Which are you interested in?',
@@ -443,13 +447,53 @@ async function sendRate(phone: string, threadId: string, displayName: string) {
   await logOutbound(threadId, wamid, content)
 }
 
-async function startOffersFlow(phone: string, threadId: string, customer: { id: string } | null) {
-  if (customer?.id) {
-    const offersTopic = await findTopicId('%offer%')
-    if (offersTopic) await addInterest(customer.id, offersTopic)
-  }
+// "Offers & Sale" → two choices: Offers, or Gold Exchange / Cash
+async function sendOffersMenu(phone: string, threadId: string) {
+  const { content } = await getBotMessage('offers_menu')
+  const wamid = await sendInteractiveButtons(phone, content, [
+    { id: 'o:offers', title: 'Offers' },
+    { id: 'o:exmenu', title: 'Gold Exchange/Cash' },
+    { id: 'care',     title: 'Talk to our team' },
+  ])
+  await logOutbound(threadId, wamid, content)
+}
+
+// "Gold Exchange/Cash" → two choices: Gold Exchange, or Instant Cash
+async function sendExchangeMenu(phone: string, threadId: string) {
+  const { content } = await getBotMessage('exchange_menu')
+  const wamid = await sendInteractiveButtons(phone, content, [
+    { id: 'o:exchange', title: 'Gold Exchange' },
+    { id: 'o:cash',     title: 'Instant Cash' },
+    { id: 'care',       title: 'Talk to our team' },
+  ])
+  await logOutbound(threadId, wamid, content)
+}
+
+// Tag the most specific topic for a choice (keeps the Send module in sync)
+async function tagTopic(customerId: string | undefined, namePattern: string) {
+  if (!customerId) return
+  const id = await findTopicId(namePattern)
+  if (id) await addInterest(customerId, id)
+}
+
+async function sendOffer(phone: string, threadId: string, customer: { id: string } | null) {
+  await tagTopic(customer?.id, '%discount%')   // "Sale & Discounts"
+  await recordLead(threadId, customer?.id, { intent: 'offer' })
   await sendBot(phone, threadId, 'offer') // owner's offer message (text and/or image)
-  await sendMetalStep(phone, threadId, 'offers')
+}
+
+async function sendExchangeInfo(phone: string, threadId: string, customer: { id: string } | null) {
+  await tagTopic(customer?.id, '%exchange%')   // "Gold Exchange"
+  await recordLead(threadId, customer?.id, { intent: 'exchange' })
+  await flagAgent(threadId)
+  await sendBot(phone, threadId, 'exchange_info')
+}
+
+async function sendCashInfo(phone: string, threadId: string, customer: { id: string } | null) {
+  await tagTopic(customer?.id, '%cash%')       // "Instant Cash"
+  await recordLead(threadId, customer?.id, { intent: 'cash' })
+  await flagAgent(threadId)
+  await sendBot(phone, threadId, 'cash_info')
 }
 
 // Ask metal (gold / silver / diamond) — 3 buttons, carries the intent forward
@@ -523,7 +567,23 @@ async function handleFlowReply(
     return
   }
   if (replyId === 'i:offers') {
-    await startOffersFlow(phone, threadId, customer)
+    await sendOffersMenu(phone, threadId)
+    return
+  }
+  if (replyId === 'o:offers') {
+    await sendOffer(phone, threadId, customer)
+    return
+  }
+  if (replyId === 'o:exmenu') {
+    await sendExchangeMenu(phone, threadId)
+    return
+  }
+  if (replyId === 'o:exchange') {
+    await sendExchangeInfo(phone, threadId, customer)
+    return
+  }
+  if (replyId === 'o:cash') {
+    await sendCashInfo(phone, threadId, customer)
     return
   }
   if (replyId === 'i:designs') {

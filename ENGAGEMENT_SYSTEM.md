@@ -1,0 +1,189 @@
+# MNAP Connect — WhatsApp Engagement System
+
+*Current-state reference + roadmap for the live two-way WhatsApp engagement layer.*
+*Last updated: 16 June 2026.*
+
+> **Supersedes the stale parts of `MNAP_CONNECT_REFERENCE.md`.** That document still
+> describes `wa.me` deep links with "no API". That is no longer true — the app runs on the
+> **real WhatsApp Business Cloud API** (Meta Graph v22.0) with inbound webhooks, a messaging
+> inbox, auto-engagement, and broadcasting.
+
+---
+
+## 1. Infrastructure
+
+| Piece | Where | Purpose |
+|---|---|---|
+| WhatsApp API client | `lib/whatsapp/api.ts` | `sendTextMessage`, `sendImageMessage`, `sendTemplateMessage`, `sendInteractiveButtons`, `sendInteractiveList`, `getMediaDownloadUrl`, `downloadMediaBuffer`, `verifySignature` |
+| Inbound webhook | `app/api/whatsapp/webhook/route.ts` | Verifies Meta signatures; ingests inbound messages + delivery/read statuses; **runs the conversation engine** |
+| Outbound send | `app/api/whatsapp/send/route.ts` | 1:1 send (text or approved template); clears `needs_agent` |
+| Media send | `app/api/whatsapp/send-media/route.ts` | Image reply from the inbox |
+| Broadcast | `app/api/whatsapp/broadcast/route.ts` | Topic-segment broadcast (Type A) |
+| Inbox UI | `app/messages/`, `app/messages/[phone]/` | WhatsApp-style threads, realtime, status ticks, image send/receive, in-chat tools |
+| Engagement admin | `app/admin/engagement/` | Edit all bot copy (gear icon, top-right) |
+| Config | `WHATSAPP_CONFIG.md` + `.env.local` / Vercel env | verify token, phone number id, app secret, access token, `SUPABASE_SERVICE_ROLE_KEY` |
+
+**Key env requirement:** `SUPABASE_SERVICE_ROLE_KEY` must be set in Vercel — the webhook uses
+the service-role client to bypass RLS for auto-enroll/auto-reply.
+
+### Database (migrations `wa_004` … `wa_013`)
+| Table / column | Migration | Purpose |
+|---|---|---|
+| `wa_threads` | `wa_004` | One row per phone; `customer_id`, `last_message_*`, `unread_count` |
+| `wa_messages` | `wa_004` (+`wa_006` media) | All messages, `direction`, `wa_message_id`, `status`, `message_type`, `media_url` |
+| `wa-media` storage bucket | `wa_006` | Inbound/outbound images, bot/offer images |
+| Meta template fields on `wa_message_templates` | `wa_007`, `wa_008` | `meta_template_name/lang/variables`, `header_type/header_image_url` |
+| `enrolled_via` allows `whatsapp`, `import` | `wa_009`, `wa_010` | Auto-enrolled inbound contacts; imported buyers |
+| `wa_bot_messages` | `wa_010` | **Editable bot copy** (key → content + optional image) |
+| `wa_threads.bot_state`, `wa_threads.needs_agent` | `wa_010` | Bot state machine + "needs a human" inbox flag |
+| `wa_lead_captures` | `wa_010` | Captured conversation signals (intent, metal, product, wants_designs) — analytics |
+| Bot copy seeds + scheme/offers/exchange | `wa_011`, `wa_012` | Default editable messages |
+| **Topic taxonomy sync** | `wa_013` | Renames + child topics so the bot tags real topics |
+
+---
+
+## 2. The conversation engine (rules-based, no AI)
+
+All in `webhook/route.ts`. **Stateless taps** (each button id encodes its path) + a small
+**`bot_state`** on the thread for the cases that need memory.
+
+### Dispatch order (what an inbound message becomes)
+1. `bot_state = with_agent` → **stay silent** (a human owns the chat; even "hi" is ignored)
+2. interactive tap → `handleFlowReply`
+3. `bot_state = awaiting_care` → the typed message is their question → hand to a human
+4. greeting (`hi/hello/namaste/…`) → welcome menu
+5. `rate`/`bhav` → today's rate
+6. `offer`/`sale` → offers menu
+7. `scheme`/`savings` → Gold Savings Scheme
+8. `design`/product words → new-designs funnel
+9. **anything else → welcome menu** (we always reply; never leave a customer hanging)
+
+### The flow (built around 4 real customer needs)
+```
+Welcome: [Today's Rate] [Offers & Sale] [More options]
+  More options (list): Today's Gold Rate · Offers & Sale · New Designs ·
+                       Gold Savings Scheme · Talk to our team
+
+Today's Rate → sends rate → [Offers & Sale] [New Designs] [Talk to our team]
+
+Offers & Sale → [Offers] [Gold Exchange/Cash] [Talk to our team]
+   Offers           → offer message
+   Gold Exchange/Cash → [Gold Exchange] [Instant Cash] [Talk to our team]
+        Gold Exchange → exchange message  (flags a rep)
+        Instant Cash  → cash message      (flags a rep)
+
+New Designs → metal [Gold/Silver/Diamond] → product (list) →
+              "Shall we send designs?" [Yes][No][Talk to our team]
+              Yes → flags a rep to send pictures
+
+Gold Savings Scheme → scheme message (flags a rep)
+
+Talk to our team (on every step) → "type your question" → handed to a human, bot goes silent
+```
+
+### Principles enforced
+- **Tapping, not typing** — every choice is a button (low-tech friendly).
+- **One message per step** — calm, not spammy.
+- **Always reply** — unrecognised text returns the menu.
+- **Human handover is sticky** — once `with_agent`, the bot stays out; greetings don't restart it.
+- **Staff control** — a `BOT ON/OFF` toggle in the chat header pauses/resumes auto-replies.
+- **Editable copy** — every message lives in `wa_bot_messages`, edited from the Engagement admin page (text + optional image where WhatsApp allows it).
+
+---
+
+## 3. Topics are the single source of truth
+
+This is the backbone that keeps the conversation and the **Send module** in sync.
+
+- Every interest the bot captures is tagged as a **topic** (`wa_interest_topics` →
+  `wa_customer_interests`), using the **most specific** topic:
+  | Choice | Topic tagged |
+  |---|---|
+  | Today's Rate | Daily Rates |
+  | Offers | Sale & Discounts |
+  | Gold Exchange | Gold Exchange |
+  | Instant Cash | Instant Cash |
+  | Gold Savings Scheme | Gold Savings Scheme |
+  | New Designs → product | New Designs + the product child (Necklaces, Rings, …) |
+- **Taxonomy (after `wa_013`):** `Daily Rates` · `New Designs → [products]` ·
+  `Offers → [Sale & Discounts, Gold Exchange, Instant Cash]` · `Gold Savings Scheme` ·
+  `Repair & Service`.
+- **Banner:** the "Interested in:" line in each chat reads the tagged topics (+ the metal
+  attribute), so it shows the *specific* interest, not just the master header.
+- **Send module:** because everything is a topic, any captured interest is immediately
+  broadcastable. A child-tagged customer is also caught under the parent filter.
+- **Metal** (Gold/Silver/Diamond) is a captured *attribute* (on `wa_lead_captures`), shown in
+  the banner but intentionally **not** a topic (avoids topic bloat).
+
+**Rule going forward:** never invent a parallel "interest" store. If the bot should capture a
+new signal, it should map to a topic.
+
+---
+
+## 4. Roadmap
+
+### 4.1 Thank-you-for-purchase broadcast (in progress)
+Send a thank-you to buyers uploaded from the daily sales report.
+- **Per-product** thank-you messages (not one-size-fits-all); default message when no product.
+- **Three input methods:** Excel (phone, product) · comma-separated phones (default message) ·
+  single phone + product.
+- **Hard constraint:** business-initiated messages to people who haven't messaged in 24h
+  **must use Meta-approved templates** — owner registers the template in Meta and mirrors it
+  in the app. Image optional.
+- A **thank-you product list** managed in settings, **separate** from the design topics.
+- Imported buyers are auto-added to the customer book (`enrolled_via = 'import'`).
+
+### 4.2 Visual Flow Builder (planned — biggest single feature)
+Move the conversation **structure** out of code into the database + an in-app builder, so the
+owner can create/edit flows, branches, and messages without code. Phased:
+1. Engine reads the flow from DB (behaves identically).
+2. Read-only flow map in the app.
+3. Edit messages/labels on existing nodes.
+4. Add/remove options & branches.
+5. Action toolbox (`send message`, `go to step`, `send today's rate`, `tag interest`,
+   `note choice`, `hand to representative`) + validation + a Preview/Test mode.
+
+Data model (design): `flow_nodes` (message, render type buttons/list) + `flow_options`
+(label, `next_node_id`, action). **WhatsApp guardrails** the UI must enforce: buttons ≤ 3,
+list rows ≤ 10, labels ≤ 20 chars, no dead-ends, no blank messages.
+
+### 4.3 ⭐ Topic ↔ Flow-node linking (design locked, build with the builder)
+**Goal:** the owner creates a topic in the app (e.g. "Instant Cash") and **links it to a chat
+option** so that tapping the option captures the signal — *without any code change or asking
+Claude.*
+
+**Design (the linchpin):**
+- `flow_options` carries a **`topic_id`** foreign key to `wa_interest_topics`.
+- The node editor shows a **"Tags interest → [dropdown of existing topics]"** on each option.
+- The engine auto-tags `option.topic_id` whenever that option is tapped — one rule, every option.
+- Renaming a topic updates everywhere (same row by id); deleting safely clears the link.
+
+**Why it stays clean & in sync:** one taxonomy (topics), referenced by id everywhere —
+conversation, banner, Send module, segments. No second copy of the truth → nothing can drift.
+Adding "an option that captures a new signal" becomes: *create topic → add button → pick topic
+in dropdown* (three taps, all in-app).
+
+**Build note:** design `flow_options` with `topic_id` from day one so this "just works" when the
+builder lands — no rework. Today's topic re-anchoring (`wa_013`) is the foundation for this.
+
+### 4.4 Reduce prompt-dependence
+The flow builder + topic-linking + the existing editable bot copy together remove the need to
+ask Claude for routine structure/copy/topic changes. Target end-state: the owner runs the whole
+engagement system from the app UI; Claude is for new capabilities, not edits.
+
+### 4.5 Type B (Intervention CRM) activation — later
+The segmentation/profiling layer exists but is inert. Highest-value unbuilt piece: the
+**Salesman Daily Dashboard** ("today's 10 actions"), journey triggers (dormant, scheme maturity,
+occasion), and segment campaigns. See `INTERVENTION_STRATEGY.md`.
+
+---
+
+## 5. Key source files
+| File | Purpose |
+|---|---|
+| `app/api/whatsapp/webhook/route.ts` | Inbound webhook + the conversation engine |
+| `lib/whatsapp/api.ts` | All Meta Graph API calls |
+| `app/messages/[phone]/page.tsx` | Conversation view + in-chat tools (templates, interests, BOT toggle, "Interested in" banner) |
+| `app/admin/engagement/page.tsx` | Editable bot copy |
+| `app/send/page.tsx`, `broadcast/route.ts` | Type A send + topic broadcast |
+| `supabase/migrations/wa_004 … wa_013` | Messaging, media, templates, bot copy, state, leads, topic sync |
