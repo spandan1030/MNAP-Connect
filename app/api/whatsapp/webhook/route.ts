@@ -210,31 +210,31 @@ async function handleInboundMessage(
   const botState = existingThread?.bot_state ?? 'active'
 
   try {
-    if (interactiveReply) {
+    if (botState === 'with_agent') {
+      // A human has taken over. Stay completely silent — even for "hi"/"hello" —
+      // until staff resumes the bot from the chat. Don't talk over the salesman.
+    } else if (interactiveReply) {
       // An explicit button/menu tap — always honour it
       await handleFlowReply(phone, threadId, interactiveReply.id, customer, displayName)
-    } else if (isGreeting(text)) {
-      // A greeting always restarts a fresh conversation (and reactivates the bot)
-      await setBotState(threadId, 'active')
-      await sendWelcomeMenu(phone, threadId)
     } else if (botState === 'awaiting_care') {
       // We asked them to type their question — this message is it. Hand to a human.
       await handleCareQuestion(phone, threadId)
+    } else if (isGreeting(text)) {
+      await sendWelcomeMenu(phone, threadId)
     } else if (isRateKeyword(text)) {
-      // "rate" / "bhav" is always answered, even mid-conversation
       await ensureRateInterest(customer?.id)
       await sendRate(phone, threadId, displayName)
-    } else if (botState === 'with_agent') {
-      // A human has taken over — stay silent so we don't talk over the salesman
     } else if (isOffersKeyword(text)) {
       await startOffersFlow(phone, threadId, customer)
+    } else if (isSchemeKeyword(text)) {
+      await handleScheme(phone, threadId, customer)
     } else if (isDesignKeyword(text)) {
       await sendMetalStep(phone, threadId, 'designs')
-    } else if (!existingThread) {
-      // Brand-new contact's first message → start the conversation
+    } else {
+      // Anything else (random text, an emoji, a photo) — always respond by
+      // showing the menu so the customer is never left without a reply.
       await sendWelcomeMenu(phone, threadId)
     }
-    // Any other free text on an active thread: stay silent (the salesman handles it)
   } catch (err) {
     console.error('[webhook] Automated response error:', err)
   }
@@ -264,6 +264,10 @@ function isRateKeyword(raw: string): boolean {
 
 function isOffersKeyword(raw: string): boolean {
   return /\b(offer|offers|sale|discount|deal|deals)\b/.test(raw.trim().toLowerCase())
+}
+
+function isSchemeKeyword(raw: string): boolean {
+  return /\b(scheme|schemes|saving|savings|sip|gold scheme|gold savings)\b/.test(raw.trim().toLowerCase())
 }
 
 function isDesignKeyword(raw: string): boolean {
@@ -349,7 +353,9 @@ async function logOutbound(threadId: string, wamid: string, body: string) {
 // ---------------------------------------------------------------------------
 const BOT_DEFAULTS: Record<string, string> = {
   welcome:     '🙏 Welcome to M N Alankar Palace!\nHow can we help you today?',
+  more_options:'Here are all the options. 🙏 Please choose one:',
   offer:       '✨ Our latest offers are running now! Please visit us to know more.',
+  scheme_info: 'Our Gold Savings Scheme helps you save every month towards your jewellery. 🙏 Our representative will contact you shortly with all the details.',
   rate_outro:  'Would you like to see anything else?',
   ask_metal:   'Which are you interested in?',
   ask_product: 'Which item would you like to see?',
@@ -388,16 +394,41 @@ async function sendBot(phone: string, threadId: string, key: string) {
 // The engagement flow (built around 4 real customer needs)
 // ---------------------------------------------------------------------------
 
-// Welcome screen — 3 big tappable buttons. "Talk to our team" is reachable on
-// every following step, so a human is always one tap away.
+// Welcome screen — 2 big buttons + "More options". Tapping "More options"
+// reveals the full list (rate, offers, new designs, gold savings scheme,
+// talk to our team).
 async function sendWelcomeMenu(phone: string, threadId: string) {
   const { content } = await getBotMessage('welcome')
   const wamid = await sendInteractiveButtons(phone, content, [
-    { id: 'i:rate',    title: "Today's Rate" },
-    { id: 'i:offers',  title: 'Offers & Sale' },
-    { id: 'i:designs', title: 'New Designs' },
+    { id: 'i:rate',   title: "Today's Rate" },
+    { id: 'i:offers', title: 'Offers & Sale' },
+    { id: 'i:more',   title: 'More options' },
   ])
   await logOutbound(threadId, wamid, content)
+}
+
+// The full option list, shown when the customer taps "More options"
+async function sendMoreOptions(phone: string, threadId: string) {
+  const { content } = await getBotMessage('more_options')
+  const wamid = await sendInteractiveList(phone, content, 'View Options', [
+    { id: 'i:rate',    title: "Today's Gold Rate" },
+    { id: 'i:offers',  title: 'Offers & Sale' },
+    { id: 'i:designs', title: 'New Designs' },
+    { id: 'i:scheme',  title: 'Gold Savings Scheme' },
+    { id: 'care',      title: 'Talk to our team' },
+  ])
+  await logOutbound(threadId, wamid, content)
+}
+
+// Gold Savings Scheme — note the interest and hand to a representative
+async function handleScheme(phone: string, threadId: string, customer: { id: string } | null) {
+  if (customer?.id) {
+    const schemeTopic = await findTopicId('%scheme%')
+    if (schemeTopic) await addInterest(customer.id, schemeTopic)
+  }
+  await recordLead(threadId, customer?.id, { intent: 'scheme' })
+  await flagAgent(threadId)                  // representative will reach out
+  await sendBot(phone, threadId, 'scheme_info') // editable text + optional image
 }
 
 // Today's rate, then one gentle follow-up with the next options
@@ -476,6 +507,14 @@ async function handleFlowReply(
 ) {
   if (replyId === 'care') {
     await sendCarePrompt(phone, threadId)
+    return
+  }
+  if (replyId === 'i:more') {
+    await sendMoreOptions(phone, threadId)
+    return
+  }
+  if (replyId === 'i:scheme') {
+    await handleScheme(phone, threadId, customer)
     return
   }
   if (replyId === 'i:rate') {

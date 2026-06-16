@@ -355,20 +355,13 @@ export default function ConversationPage({
   const displayName  = thread?.customer_name || formatPhone(phone)
   const customerName = thread?.customer_name || 'Customer'
 
-  // One-line "what this customer wants" summary from the latest captured lead
-  const leadParts = lead
-    ? [
-        lead.metal ? lead.metal.charAt(0).toUpperCase() + lead.metal.slice(1) : null,
-        lead.product,
-        lead.wants_designs ? 'wants designs' : null,
-      ].filter(Boolean) as string[]
-    : []
-  const intentLabel = lead?.intent === 'rate' ? "Today's rate"
-    : lead?.intent === 'offers' ? 'Offers & sale'
-    : lead?.intent === 'designs' ? 'New designs'
-    : lead?.intent === 'care' ? 'Has a question'
-    : ''
-  const leadSummary = leadParts.length ? leadParts.join(' · ') : intentLabel
+  // "Interested in" banner — built from everything tagged across the whole
+  // conversation (the customer's interests) plus the metal they last picked.
+  const interestNames = topics.filter(t => selectedTopics.has(t.id)).map(t => t.name)
+  const summaryParts: string[] = []
+  if (lead?.metal) summaryParts.push(lead.metal.charAt(0).toUpperCase() + lead.metal.slice(1))
+  summaryParts.push(...interestNames)
+  const leadSummary = summaryParts.join(' · ')
 
   // 24h free-text window: open only if the customer messaged us within 24h
   const lastInboundAt = useMemo(() => {
@@ -477,6 +470,15 @@ export default function ConversationPage({
     }
   }
 
+  // Staff control: pause/resume the auto-reply bot for this customer.
+  // When paused (with_agent), the bot stays silent even if the customer says "hi".
+  async function toggleBot() {
+    if (!thread) return
+    const next = thread.bot_state === 'active' ? 'with_agent' : 'active'
+    await supabase.from('wa_threads').update({ bot_state: next }).eq('id', thread.id)
+    setThread({ ...thread, bot_state: next })
+  }
+
   const parentTopics = topics.filter(t => !t.parent_id)
   const childTopics  = (parentId: string) => topics.filter(t => t.parent_id === parentId)
 
@@ -502,6 +504,21 @@ export default function ConversationPage({
           <p className="font-semibold text-gray-900 text-sm truncate">{displayName}</p>
           <p className="text-xs text-gray-400">{formatPhone(phone)}</p>
         </div>
+
+        {/* Bot on/off — staff can pause auto-replies and take over */}
+        {thread && (
+          <button
+            onClick={toggleBot}
+            title={thread.bot_state === 'active' ? 'Auto-replies ON — tap to pause' : 'Auto-replies OFF — tap to resume'}
+            className={`flex-shrink-0 text-[10px] font-bold px-2 py-1 rounded-full border transition-colors ${
+              thread.bot_state === 'active'
+                ? 'bg-green-50 text-green-700 border-green-200'
+                : 'bg-gray-100 text-gray-500 border-gray-300'
+            }`}
+          >
+            {thread.bot_state === 'active' ? 'BOT ON' : 'BOT OFF'}
+          </button>
+        )}
 
         {/* Assign interests */}
         <button
