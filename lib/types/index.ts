@@ -152,6 +152,31 @@ export interface WaBotMessage {
   updated_at: string
 }
 
+export interface WaProduct {
+  id: string
+  item_name: string | null
+  barcode: string | null
+  weight: number | null
+  purity: string | null
+  design: string | null
+  party: string | null
+  notes: string | null
+  is_active: boolean
+  is_sold: boolean
+  needs_review: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface WaProductImage {
+  id: string
+  product_id: string
+  image_url: string
+  sort_order: number
+  created_at: string
+}
+
 export interface WaThankYouProduct {
   id: string
   product_label: string
