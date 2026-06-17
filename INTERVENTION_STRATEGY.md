@@ -3,6 +3,12 @@
 
 *Finalised: 13 May 2026 — updated with ground intelligence*
 
+> **Scope:** the authoritative business rules, segment definitions, and profiling architecture
+> for the **Type B intervention CRM**. The data layer (segmentation engine, profiling form,
+> admin) is built; **activation** (salesman daily dashboard, journey triggers, segment
+> campaigns) is still pending — see `ENGAGEMENT_SYSTEM.md` §4.5. For the doc index, see
+> `README.md`.
+
 ---
 
 ## Core Architectural Decision

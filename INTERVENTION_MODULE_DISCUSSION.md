@@ -1,6 +1,9 @@
 # MNAP Connect — Intervention Module Discussion
 *Started: 13 May 2026*
 
+> **Scope:** historical decision log for the Type B module — kept for rationale/context. For
+> current rules see `INTERVENTION_STRATEGY.md`; for the doc index see `README.md`.
+
 ---
 
 ## What We Are Building Toward
