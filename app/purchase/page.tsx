@@ -343,14 +343,14 @@ export default function PurchasePage() {
                       const st = cellStatus(c.need, total)
                       if (mode === 'plan') {
                         return (
-                          <div key={c.bucket} className="flex items-center gap-2">
-                            <span className="w-10 text-sm font-semibold text-gray-700">{bLabel(c.bucket)}</span>
-                            <span className="flex-1 text-[11px] text-gray-400">in stock {c.stock}</span>
-                            <span className="text-[11px] text-gray-500">Need</span>
+                          <div key={c.bucket} className="flex items-center gap-3">
+                            <span className="w-10 flex-shrink-0 text-sm font-semibold text-gray-700">{bLabel(c.bucket)}</span>
+                            <span className="flex-1 text-[11px] text-gray-400 whitespace-nowrap">in stock {c.stock}</span>
+                            <span className="text-[11px] text-gray-500 flex-shrink-0">Need</span>
                             <input type="number" min={0} defaultValue={c.need || ''} key={`${c.reqId ?? 'new'}-${c.need}`}
                               onBlur={e => commitNeed(l, c, e.target.value)}
                               onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                              className="input w-16 !py-1.5 text-sm text-center" placeholder="0" />
+                              className="input !w-16 flex-shrink-0 !py-1.5 text-sm text-center" placeholder="0" />
                           </div>
                         )
                       }
@@ -387,7 +387,7 @@ function AddBucket({ onAdd }: { onAdd: (g: string) => void }) {
     <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
       <input type="number" min={1} value={v} onChange={e => setV(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && v) { onAdd(v); setV('') } }}
-        className="input w-20 !py-1.5 text-sm" placeholder="+ wt (g)" />
+        className="input !w-24 flex-shrink-0 !py-1.5 text-sm" placeholder="+ g" />
       <button onClick={() => { if (v) { onAdd(v); setV('') } }} disabled={!v}
         className="text-xs font-medium text-green-600 disabled:opacity-40">Add weight</button>
     </div>
