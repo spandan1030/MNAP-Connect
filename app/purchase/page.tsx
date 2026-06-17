@@ -4,68 +4,120 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
-import type { WaPurchaseRequirement, WaPurchaseLine } from '@/lib/types'
+import type { WaProduct, WaPurchaseRequirement, WaPurchaseLine } from '@/lib/types'
 
-type Tab = 'buy' | 'parties'
-type Filter = 'open' | 'done' | 'all'
+type Mode = 'plan' | 'buy' | 'parties'
+
+const norm = (s: string | null | undefined) => (s ?? '').trim()
+const lineKeyOf = (i: string | null, d: string | null, de: string | null, p: string | null) =>
+  [norm(i), norm(d), norm(de), norm(p)].join('')
+const bLabel = (b: number) => (b > 0 ? `${b}g` : '—')
+
+interface Cell { bucket: number; stock: number; reqId: string | null; need: number }
+interface DLine { key: string; item_name: string | null; design: string | null; description: string | null; purity: string | null; cells: Cell[] }
 
 export default function PurchasePage() {
   const supabase = createClient()
 
-  const [rows, setRows]       = useState<WaPurchaseRequirement[]>([])
-  const [lines, setLines]     = useState<WaPurchaseLine[]>([])
-  const [options, setOptions] = useState<Options>({ item_name: [], design: [], description: [], purity: [], party: [] })
-  const [loading, setLoading] = useState(true)
+  const [products, setProducts]         = useState<WaProduct[]>([])
+  const [requirements, setRequirements] = useState<WaPurchaseRequirement[]>([])
+  const [lines, setLines]               = useState<WaPurchaseLine[]>([])
+  const [options, setOptions]           = useState<Options>({ item_name: [], design: [], description: [], purity: [], party: [] })
+  const [extras, setExtras]             = useState<Record<string, Set<number>>>({}) // locally-added buckets, before a Need is typed
+  const [loading, setLoading]           = useState(true)
 
-  const [tab, setTab]         = useState<Tab>('buy')
-  const [filter, setFilter]   = useState<Filter>('open')
+  const [mode, setMode]       = useState<Mode>('plan')
+  const [itemFilter, setItem] = useState('')   // '' = all items
   const [party, setParty]     = useState('')   // active buying session
-
   const [adding, setAdding]   = useState(false)
-  const [draft, setDraft]     = useState({ item_name: '', design: '', description: '', purity: '22K', weight_bucket: '', qty_needed: '1', notes: '' })
-  const [busy, setBusy]       = useState(false)
+  const [draft, setDraft]     = useState({ item_name: '', design: '', description: '', purity: '22K', weight_bucket: '', qty_needed: '1' })
 
   async function reload() {
-    const [reqRes, lineRes] = await Promise.all([
-      supabase.from('wa_purchase_requirements').select('*').order('created_at', { ascending: false }),
+    const [prodRes, reqRes, lineRes] = await Promise.all([
+      supabase.from('wa_products').select('item_name, design, description, purity, weight').eq('is_active', true).eq('is_sold', false),
+      supabase.from('wa_purchase_requirements').select('*'),
       supabase.from('wa_purchase_lines').select('*'),
     ])
-    setRows((reqRes.data ?? []) as WaPurchaseRequirement[])
+    setProducts((prodRes.data ?? []) as WaProduct[])
+    setRequirements((reqRes.data ?? []) as WaPurchaseRequirement[])
     setLines((lineRes.data ?? []) as WaPurchaseLine[])
     setLoading(false)
   }
   useEffect(() => { reload(); fetchCatalogueOptions().then(setOptions) /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
-  // requirement_id -> total purchased across all parties
-  const purchasedTotal = useMemo(() => {
+  // Build the grid: design-lines from catalogue ∪ requirements, with stock/need per weight bucket
+  const grid = useMemo<DLine[]>(() => {
+    interface Acc { item: string | null; design: string | null; description: string | null; purity: string | null; cells: Map<number, Cell> }
+    const map = new Map<string, Acc>()
+    const ensure = (i: string | null, d: string | null, de: string | null, p: string | null) => {
+      const k = lineKeyOf(i, d, de, p)
+      let a = map.get(k)
+      if (!a) { a = { item: i, design: d, description: de, purity: p, cells: new Map() }; map.set(k, a) }
+      return { k, a }
+    }
+    for (const pr of products) {
+      if (pr.weight == null) continue
+      const b = Math.round(pr.weight)
+      const { a } = ensure(pr.item_name, pr.design, pr.description, pr.purity)
+      const c = a.cells.get(b) ?? { bucket: b, stock: 0, reqId: null, need: 0 }
+      c.stock++; a.cells.set(b, c)
+    }
+    for (const r of requirements) {
+      const b = r.weight_bucket ?? 0
+      const { a } = ensure(r.item_name, r.design, r.description, r.purity)
+      const c = a.cells.get(b) ?? { bucket: b, stock: 0, reqId: null, need: 0 }
+      c.reqId = r.id; c.need = r.qty_needed; a.cells.set(b, c)
+    }
+    for (const [lk, set] of Object.entries(extras)) {
+      const a = map.get(lk)
+      if (!a) continue
+      for (const b of set) if (!a.cells.get(b)) a.cells.set(b, { bucket: b, stock: 0, reqId: null, need: 0 })
+    }
+    const arr: DLine[] = [...map.entries()].map(([k, a]) => ({
+      key: k, item_name: a.item, design: a.design, description: a.description, purity: a.purity,
+      cells: [...a.cells.values()].sort((x, y) => x.bucket - y.bucket),
+    }))
+    arr.sort((x, y) => (norm(x.item_name) || '~').localeCompare(norm(y.item_name) || '~') || norm(x.design).localeCompare(norm(y.design)))
+    return arr
+  }, [products, requirements, extras])
+
+  const items = useMemo(() => {
+    const s = new Set<string>()
+    for (const l of grid) if (norm(l.item_name)) s.add(norm(l.item_name))
+    return [...s].sort()
+  }, [grid])
+
+  const filteredGrid = useMemo(
+    () => (itemFilter ? grid.filter(l => norm(l.item_name) === itemFilter) : grid),
+    [grid, itemFilter]
+  )
+
+  const boughtTotal = useMemo(() => {
     const m: Record<string, number> = {}
     for (const l of lines) m[l.requirement_id] = (m[l.requirement_id] ?? 0) + l.qty
     return m
   }, [lines])
-
-  // qty bought from the active party, per requirement
-  const partyQty = useMemo(() => {
+  const boughtHere = useMemo(() => {
     const m: Record<string, number> = {}
     for (const l of lines) if (l.party === party) m[l.requirement_id] = l.qty
     return m
   }, [lines, party])
 
-  const visible = useMemo(() => {
-    if (filter === 'open') return rows.filter(r => (purchasedTotal[r.id] ?? 0) < r.qty_needed)
-    if (filter === 'done') return rows.filter(r => (purchasedTotal[r.id] ?? 0) >= r.qty_needed)
-    return rows
-  }, [rows, filter, purchasedTotal])
-
+  // progress over the current item filter
   const totals = useMemo(() => {
-    const needed = rows.reduce((s, r) => s + r.qty_needed, 0)
-    const bought = rows.reduce((s, r) => s + Math.min(purchasedTotal[r.id] ?? 0, r.qty_needed), 0)
+    let needed = 0, bought = 0
+    for (const l of filteredGrid) for (const c of l.cells) {
+      if (c.need <= 0) continue
+      needed += c.need
+      bought += Math.min(c.reqId ? (boughtTotal[c.reqId] ?? 0) : 0, c.need)
+    }
     return { needed, bought }
-  }, [rows, purchasedTotal])
+  }, [filteredGrid, boughtTotal])
 
-  // Per-party summary: pieces + approx weight (qty * requirement bucket)
+  // Per-party summary: pieces + approx weight (qty * bucket)
   const parties = useMemo(() => {
     const bucketOf: Record<string, number | null> = {}
-    for (const r of rows) bucketOf[r.id] = r.weight_bucket
+    for (const r of requirements) bucketOf[r.id] = r.weight_bucket
     const m: Record<string, { qty: number; weight: number }> = {}
     for (const l of lines) {
       if (l.qty <= 0) continue
@@ -75,139 +127,166 @@ export default function PurchasePage() {
       if (b) e.weight += l.qty * b
     }
     return Object.entries(m).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.qty - a.qty)
-  }, [rows, lines])
+  }, [requirements, lines])
 
-  function setD(k: keyof typeof draft, v: string) { setDraft(d => ({ ...d, [k]: v })) }
+  const titleOf = (l: DLine) => [l.item_name, l.design, l.description].filter(Boolean).join(' · ') || 'Untitled'
 
-  async function addRow() {
+  // ── Mutations ──────────────────────────────────────────────────────────────
+  async function commitNeed(l: DLine, c: Cell, raw: string) {
+    const n = Math.max(0, parseInt(raw || '0', 10) || 0)
+    if (c.reqId) {
+      if (n === c.need) return
+      await supabase.from('wa_purchase_requirements').update({ qty_needed: n, updated_at: new Date().toISOString() }).eq('id', c.reqId)
+    } else if (n > 0) {
+      const { data: { user } } = await supabase.auth.getUser()
+      await supabase.from('wa_purchase_requirements').insert({
+        item_name: l.item_name, design: l.design, description: l.description, purity: l.purity,
+        weight_bucket: c.bucket || null, qty_needed: n, created_by: user?.id ?? null,
+      })
+    } else return
+    await reload()
+  }
+
+  function addBucket(l: DLine, raw: string) {
+    const g = Math.max(1, parseInt(raw, 10) || 0)
+    if (!g) return
+    setExtras(prev => {
+      const set = new Set(prev[l.key] ?? [])
+      set.add(g)
+      return { ...prev, [l.key]: set }
+    })
+  }
+
+  async function adjust(c: Cell, delta: number) {
+    if (!party.trim() || !c.reqId) return
+    const reqId = c.reqId
+    const existing = lines.find(x => x.requirement_id === reqId && x.party === party)
+    const nextQty = Math.max(0, (existing?.qty ?? 0) + delta)
+    setLines(prev => {
+      if (existing) return prev.map(x => x.id === existing.id ? { ...x, qty: nextQty } : x)
+      if (nextQty === 0) return prev
+      return [...prev, { id: `tmp-${reqId}-${party}`, requirement_id: reqId, party, qty: nextQty, created_at: '', updated_at: '' }]
+    })
+    if (existing) {
+      await supabase.from('wa_purchase_lines').update({ qty: nextQty, updated_at: new Date().toISOString() }).eq('id', existing.id)
+    } else if (nextQty > 0) {
+      await supabase.from('wa_purchase_lines').insert({ requirement_id: reqId, party, qty: nextQty })
+      await addCatalogueOptions([{ field: 'party', value: party }])
+      const { data: fresh } = await supabase.from('wa_purchase_lines').select('*')
+      if (fresh) setLines(fresh as WaPurchaseLine[])
+      fetchCatalogueOptions().then(setOptions)
+    }
+  }
+
+  async function addLine() {
     if (!draft.item_name.trim() && !draft.design.trim() && !draft.description.trim()) return
-    setBusy(true)
     const { data: { user } } = await supabase.auth.getUser()
     await supabase.from('wa_purchase_requirements').insert({
-      item_name:     draft.item_name.trim()   || null,
-      design:        draft.design.trim()      || null,
-      description:   draft.description.trim()  || null,
-      purity:        draft.purity.trim()       || null,
+      item_name: draft.item_name.trim() || null, design: draft.design.trim() || null,
+      description: draft.description.trim() || null, purity: draft.purity.trim() || null,
       weight_bucket: draft.weight_bucket ? Math.max(1, parseInt(draft.weight_bucket, 10)) : null,
-      qty_needed:    Math.max(1, parseInt(draft.qty_needed || '1', 10)),
-      notes:         draft.notes.trim()        || null,
-      created_by:    user?.id ?? null,
+      qty_needed: Math.max(0, parseInt(draft.qty_needed || '0', 10)), created_by: user?.id ?? null,
     })
     await addCatalogueOptions([
       { field: 'item_name', value: draft.item_name }, { field: 'design', value: draft.design },
       { field: 'description', value: draft.description }, { field: 'purity', value: draft.purity },
     ])
-    setDraft({ item_name: '', design: '', description: '', purity: '22K', weight_bucket: '', qty_needed: '1', notes: '' })
+    setDraft({ item_name: '', design: '', description: '', purity: '22K', weight_bucket: '', qty_needed: '1' })
     setAdding(false)
     await reload(); fetchCatalogueOptions().then(setOptions)
-    setBusy(false)
   }
 
-  // Adjust the active party's line for a requirement by +1 / -1
-  async function adjust(r: WaPurchaseRequirement, delta: number) {
-    if (!party.trim()) return
-    const existing = lines.find(l => l.requirement_id === r.id && l.party === party)
-    const nextQty = Math.max(0, (existing?.qty ?? 0) + delta)
-
-    // optimistic update
-    setLines(prev => {
-      if (existing) return prev.map(l => l.id === existing.id ? { ...l, qty: nextQty } : l)
-      if (nextQty === 0) return prev
-      return [...prev, { id: `tmp-${r.id}-${party}`, requirement_id: r.id, party, qty: nextQty, created_at: '', updated_at: '' }]
-    })
-
-    if (existing) {
-      await supabase.from('wa_purchase_lines').update({ qty: nextQty, updated_at: new Date().toISOString() }).eq('id', existing.id)
-    } else if (nextQty > 0) {
-      await supabase.from('wa_purchase_lines').insert({ requirement_id: r.id, party, qty: nextQty })
-      // register the party for future dropdowns
-      await addCatalogueOptions([{ field: 'party', value: party }])
-      // replace the optimistic temp row with the real one (gets its DB id)
-      const { data: fresh } = await supabase.from('wa_purchase_lines').select('*')
-      if (fresh) setLines(fresh as WaPurchaseLine[])
-    }
-    // keep the cached total/flag on the requirement in sync
-    const total = lines.filter(l => l.requirement_id === r.id && l.party !== party).reduce((s, l) => s + l.qty, 0) + nextQty
-    await supabase.from('wa_purchase_requirements')
-      .update({ qty_purchased: total, is_done: total >= r.qty_needed, updated_at: new Date().toISOString() })
-      .eq('id', r.id)
-    setRows(prev => prev.map(x => x.id === r.id ? { ...x, qty_purchased: total, is_done: total >= r.qty_needed } : x))
+  async function startNewRound() {
+    if (!confirm('Start a new buying round? This clears all “bought” counts but keeps your plan (Need values).')) return
+    await supabase.from('wa_purchase_lines').delete().not('id', 'is', null)
+    await reload()
   }
 
-  async function remove(r: WaPurchaseRequirement) {
-    if (!confirm('Remove this requirement?')) return
-    setRows(prev => prev.filter(x => x.id !== r.id))
-    setLines(prev => prev.filter(l => l.requirement_id !== r.id))
-    await supabase.from('wa_purchase_requirements').delete().eq('id', r.id)  // lines cascade
+  function cellStatus(need: number, bought: number): 'none' | 'under' | 'met' | 'over' {
+    if (need <= 0) return bought > 0 ? 'over' : 'none'
+    if (bought < need) return 'under'
+    if (bought === need) return 'met'
+    return 'over'
   }
-
-  const titleOf = (r: WaPurchaseRequirement) =>
-    [r.item_name, r.design, r.description].filter(Boolean).join(' · ') || 'Untitled'
-  const subOf = (r: WaPurchaseRequirement) =>
-    [r.purity || 'Any purity', r.weight_bucket ? `~${r.weight_bucket} g` : null, r.notes].filter(Boolean).join(' · ')
+  const STATUS_BG: Record<string, string> = {
+    none: 'bg-white border-gray-200', under: 'bg-amber-50 border-amber-300',
+    met: 'bg-green-50 border-green-300', over: 'bg-red-50 border-red-300',
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
       <main className="flex-1 max-w-lg mx-auto w-full px-4 py-4 space-y-3 pb-24">
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-bold text-gray-900">Purchase list</h1>
-          <button onClick={() => setAdding(a => !a)} className="text-xs font-semibold bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg">
-            {adding ? 'Close' : '+ Add'}
-          </button>
+          <h1 className="text-lg font-bold text-gray-900">Purchase plan</h1>
+          {mode === 'plan' && (
+            <button onClick={() => setAdding(a => !a)} className="text-xs font-semibold bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg">
+              {adding ? 'Close' : '+ Add line'}
+            </button>
+          )}
+          {mode === 'buy' && (
+            <button onClick={startNewRound} className="text-xs font-medium text-gray-600 border border-gray-300 px-3 py-1.5 rounded-lg active:bg-gray-50">
+              New round
+            </button>
+          )}
         </div>
 
-        {/* Tabs */}
+        {/* Mode toggle */}
         <div className="flex gap-2">
-          {([['buy', 'Buying'], ['parties', 'By party']] as const).map(([t, label]) => (
-            <button key={t} onClick={() => setTab(t)}
+          {([['plan', 'Plan'], ['buy', 'Buy'], ['parties', 'By party']] as const).map(([m, label]) => (
+            <button key={m} onClick={() => setMode(m)}
               className={`px-3 py-1.5 rounded-full text-xs font-medium border ${
-                tab === t ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300'
+                mode === m ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-300'
               }`}>{label}</button>
           ))}
         </div>
 
-        {/* Add form */}
-        {adding && (
+        {/* Add-line form (not-yet-stocked items) */}
+        {mode === 'plan' && adding && (
           <div className="card p-4 space-y-2.5">
-            <Field label="Item name"><input list="po-item_name" value={draft.item_name} onChange={e => setD('item_name', e.target.value)} className="input" placeholder="Pick or type" /></Field>
-            <Field label="Design"><input list="po-design" value={draft.design} onChange={e => setD('design', e.target.value)} className="input" placeholder="Pick or type" /></Field>
-            <Field label="Description"><input list="po-description" value={draft.description} onChange={e => setD('description', e.target.value)} className="input" placeholder="Pick or type" /></Field>
+            <p className="text-xs text-gray-500">Add a line for something you don’t stock yet. Items you already have appear automatically.</p>
+            <Field label="Item name"><input list="po-item_name" value={draft.item_name} onChange={e => setDraft(d => ({ ...d, item_name: e.target.value }))} className="input" placeholder="Pick or type" /></Field>
+            <Field label="Design"><input list="po-design" value={draft.design} onChange={e => setDraft(d => ({ ...d, design: e.target.value }))} className="input" placeholder="Pick or type" /></Field>
+            <Field label="Description"><input list="po-description" value={draft.description} onChange={e => setDraft(d => ({ ...d, description: e.target.value }))} className="input" placeholder="Pick or type" /></Field>
             <div className="flex gap-3">
-              <Field label="Purity" className="flex-1"><input list="po-purity" value={draft.purity} onChange={e => setD('purity', e.target.value)} className="input" placeholder="22K" /></Field>
-              <Field label="Weight bucket (g)" className="flex-1"><input type="number" inputMode="numeric" min={1} step={1} value={draft.weight_bucket} onChange={e => setD('weight_bucket', e.target.value)} className="input" placeholder="e.g. 5" /></Field>
-              <Field label="Qty" className="w-20"><input type="number" inputMode="numeric" min={1} value={draft.qty_needed} onChange={e => setD('qty_needed', e.target.value)} className="input" /></Field>
+              <Field label="Purity" className="flex-1"><input list="po-purity" value={draft.purity} onChange={e => setDraft(d => ({ ...d, purity: e.target.value }))} className="input" placeholder="22K" /></Field>
+              <Field label="Weight (g)" className="flex-1"><input type="number" min={1} value={draft.weight_bucket} onChange={e => setDraft(d => ({ ...d, weight_bucket: e.target.value }))} className="input" placeholder="e.g. 5" /></Field>
+              <Field label="Need" className="w-20"><input type="number" min={0} value={draft.qty_needed} onChange={e => setDraft(d => ({ ...d, qty_needed: e.target.value }))} className="input" /></Field>
             </div>
-            <Field label="Notes"><input value={draft.notes} onChange={e => setD('notes', e.target.value)} className="input" placeholder="Optional" /></Field>
-
-            <datalist id="po-item_name">{options.item_name.map(o => <option key={o} value={o} />)}</datalist>
-            <datalist id="po-design">{options.design.map(o => <option key={o} value={o} />)}</datalist>
-            <datalist id="po-description">{options.description.map(o => <option key={o} value={o} />)}</datalist>
-            <datalist id="po-purity">{options.purity.map(o => <option key={o} value={o} />)}</datalist>
-
-            <button onClick={addRow} disabled={busy} className="btn-primary w-full disabled:opacity-60">{busy ? 'Adding…' : 'Add to list'}</button>
+            <button onClick={addLine} className="btn-primary w-full">Add line</button>
           </div>
         )}
 
-        {/* ───────── BUYING TAB ───────── */}
-        {tab === 'buy' && (
+        <datalist id="po-item_name">{options.item_name.map(o => <option key={o} value={o} />)}</datalist>
+        <datalist id="po-design">{options.design.map(o => <option key={o} value={o} />)}</datalist>
+        <datalist id="po-description">{options.description.map(o => <option key={o} value={o} />)}</datalist>
+        <datalist id="po-purity">{options.purity.map(o => <option key={o} value={o} />)}</datalist>
+
+        {/* Item filter */}
+        {items.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+            <button onClick={() => setItem('')} className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border ${itemFilter === '' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'}`}>All items</button>
+            {items.map(it => (
+              <button key={it} onClick={() => setItem(it)} className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border ${itemFilter === it ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'}`}>{it}</button>
+            ))}
+          </div>
+        )}
+
+        {/* Buy-mode party + progress */}
+        {mode === 'buy' && (
           <>
-            {/* Party session selector */}
             <div className="card p-3 space-y-1.5">
               <label className="text-xs font-medium text-gray-600">Buying from (party)</label>
-              <input list="po-party" value={party} onChange={e => setParty(e.target.value)} className="input"
-                placeholder="Select or type the party you're visiting" />
+              <input list="po-party" value={party} onChange={e => setParty(e.target.value)} className="input" placeholder="Select or type the party you're visiting" />
               <datalist id="po-party">{options.party.map(o => <option key={o} value={o} />)}</datalist>
               <p className="text-[11px] text-gray-400">
-                {party.trim() ? <>Recording purchases from <span className="font-semibold text-gray-600">{party}</span>. The +/− below counts pieces bought here.</> : 'Pick a party first to start marking what you buy.'}
+                {party.trim() ? <>Recording from <span className="font-semibold text-gray-600">{party}</span>. +/− counts pieces bought here.</> : 'Pick a party to start marking what you buy.'}
               </p>
             </div>
-
-            {/* Progress */}
-            {!loading && rows.length > 0 && (
+            {totals.needed > 0 && (
               <div className="card p-3 space-y-2">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-600">Purchased (all parties)</span>
+                  <span className="text-gray-600">Bought{itemFilter ? ` · ${itemFilter}` : ''}</span>
                   <span className="font-bold text-gray-900">{totals.bought} <span className="text-gray-400 font-medium">/ {totals.needed}</span></span>
                 </div>
                 <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
@@ -215,70 +294,21 @@ export default function PurchasePage() {
                 </div>
               </div>
             )}
-
-            <div className="flex gap-2">
-              {([['open', 'To buy'], ['done', 'Done'], ['all', 'All']] as const).map(([f, label]) => (
-                <button key={f} onClick={() => setFilter(f)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-medium border ${
-                    filter === f ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
-                  }`}>{label}</button>
-              ))}
+            <div className="flex items-center gap-3 text-[11px] text-gray-500 px-1">
+              <span className="flex items-center gap-1"><i className="w-3 h-3 rounded bg-amber-200 inline-block" />Under</span>
+              <span className="flex items-center gap-1"><i className="w-3 h-3 rounded bg-green-300 inline-block" />Met</span>
+              <span className="flex items-center gap-1"><i className="w-3 h-3 rounded bg-red-300 inline-block" />Excess</span>
             </div>
-
-            {loading ? (
-              <div className="flex justify-center pt-10"><div className="w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full animate-spin" /></div>
-            ) : visible.length === 0 ? (
-              <div className="card p-8 text-center text-gray-400 text-sm">
-                {filter === 'open' ? 'Nothing left to buy.' : filter === 'done' ? 'Nothing completed yet.' : 'No requirements yet. Tap “+ Add”.'}
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                {visible.map(r => {
-                  const total = purchasedTotal[r.id] ?? 0
-                  const here = partyQty[r.id] ?? 0
-                  const fromOthers = total - here
-                  const done = total >= r.qty_needed && r.qty_needed > 0
-                  const remaining = Math.max(0, r.qty_needed - total)
-                  return (
-                    <div key={r.id} className={`card p-3 ${done ? 'bg-green-50 border-green-200' : ''}`}>
-                      <div className="flex items-start gap-2">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-gray-900 text-sm truncate">{titleOf(r)}</p>
-                          <p className="text-[11px] text-amber-700 truncate">{subOf(r)}</p>
-                        </div>
-                        <button onClick={() => remove(r)} className="text-gray-300 hover:text-red-500 px-1 -mt-0.5">×</button>
-                      </div>
-
-                      <div className="flex items-center justify-between mt-2.5">
-                        <span className={`text-xs font-medium ${done ? 'text-green-700' : 'text-gray-500'}`}>
-                          {done ? '✓ Complete' : `${remaining} left · ${total}/${r.qty_needed}`}
-                          {fromOthers > 0 && <span className="text-gray-400"> · {fromOthers} elsewhere</span>}
-                        </span>
-                        <div className="flex items-center gap-1.5">
-                          <button onClick={() => adjust(r, -1)} disabled={!party.trim() || here <= 0}
-                            className="w-8 h-8 rounded-lg border border-gray-300 text-gray-700 font-bold text-lg leading-none disabled:opacity-40">−</button>
-                          <span className="w-8 text-center font-bold text-gray-900">{here}</span>
-                          <button onClick={() => adjust(r, +1)} disabled={!party.trim()}
-                            className="w-8 h-8 rounded-lg bg-green-600 text-white font-bold text-lg leading-none disabled:opacity-40">+</button>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
           </>
         )}
 
-        {/* ───────── BY PARTY TAB ───────── */}
-        {tab === 'parties' && (
-          loading ? (
-            <div className="flex justify-center pt-10"><div className="w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full animate-spin" /></div>
-          ) : parties.length === 0 ? (
+        {/* ───────── PARTIES ───────── */}
+        {mode === 'parties' ? (
+          loading ? <Spinner /> : parties.length === 0 ? (
             <div className="card p-8 text-center text-gray-400 text-sm">No purchases recorded yet.</div>
           ) : (
             <div className="space-y-1.5">
-              <p className="text-xs text-gray-400">Approximate weight = pieces bought × each item’s weight bucket. A rough helper — the catalogue is the real in-stock count.</p>
+              <p className="text-xs text-gray-400">Approx weight = pieces × each line’s weight bucket. A rough helper — the catalogue is the real in-stock count.</p>
               {parties.map(p => (
                 <div key={p.name} className="card p-3 flex items-center justify-between">
                   <div className="min-w-0">
@@ -290,8 +320,76 @@ export default function PurchasePage() {
               ))}
             </div>
           )
+        ) : loading ? <Spinner /> : filteredGrid.length === 0 ? (
+          <div className="card p-8 text-center text-gray-400 text-sm">
+            No products yet. Add pieces in the Catalogue, or “+ Add line” for items you plan to stock.
+          </div>
+        ) : (
+          /* ───────── PLAN / BUY GRID ───────── */
+          <div className="space-y-2">
+            {filteredGrid.map(l => {
+              const buyCells = l.cells.filter(c => c.need > 0 || (c.reqId ? (boughtTotal[c.reqId] ?? 0) : 0) > 0)
+              if (mode === 'buy' && buyCells.length === 0) return null
+              const cells = mode === 'buy' ? buyCells : l.cells
+              return (
+                <div key={l.key} className="card p-3">
+                  <p className="font-semibold text-gray-900 text-sm truncate">{titleOf(l)}</p>
+                  <p className="text-[11px] text-amber-700 mb-2">{l.purity || 'Any purity'}</p>
+
+                  <div className="space-y-1.5">
+                    {cells.map(c => {
+                      const total = c.reqId ? (boughtTotal[c.reqId] ?? 0) : 0
+                      const here = c.reqId ? (boughtHere[c.reqId] ?? 0) : 0
+                      const st = cellStatus(c.need, total)
+                      if (mode === 'plan') {
+                        return (
+                          <div key={c.bucket} className="flex items-center gap-2">
+                            <span className="w-10 text-sm font-semibold text-gray-700">{bLabel(c.bucket)}</span>
+                            <span className="flex-1 text-[11px] text-gray-400">in stock {c.stock}</span>
+                            <span className="text-[11px] text-gray-500">Need</span>
+                            <input type="number" min={0} defaultValue={c.need || ''} key={`${c.reqId ?? 'new'}-${c.need}`}
+                              onBlur={e => commitNeed(l, c, e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                              className="input w-16 !py-1.5 text-sm text-center" placeholder="0" />
+                          </div>
+                        )
+                      }
+                      return (
+                        <div key={c.bucket} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${STATUS_BG[st]}`}>
+                          <span className="w-10 text-sm font-semibold text-gray-800">{bLabel(c.bucket)}</span>
+                          <span className="flex-1 text-[11px] text-gray-500">stock {c.stock} · need {c.need} · got {total}</span>
+                          <button onClick={() => adjust(c, -1)} disabled={!party.trim() || here <= 0}
+                            className="w-7 h-7 rounded-lg border border-gray-300 bg-white text-gray-700 font-bold leading-none disabled:opacity-40">−</button>
+                          <span className="w-6 text-center font-bold text-gray-900 text-sm">{here}</span>
+                          <button onClick={() => adjust(c, +1)} disabled={!party.trim()}
+                            className="w-7 h-7 rounded-lg bg-green-600 text-white font-bold leading-none disabled:opacity-40">+</button>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {mode === 'plan' && (
+                    <AddBucket onAdd={g => addBucket(l, g)} />
+                  )}
+                </div>
+              )
+            })}
+          </div>
         )}
       </main>
+    </div>
+  )
+}
+
+function AddBucket({ onAdd }: { onAdd: (g: string) => void }) {
+  const [v, setV] = useState('')
+  return (
+    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+      <input type="number" min={1} value={v} onChange={e => setV(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && v) { onAdd(v); setV('') } }}
+        className="input w-20 !py-1.5 text-sm" placeholder="+ wt (g)" />
+      <button onClick={() => { if (v) { onAdd(v); setV('') } }} disabled={!v}
+        className="text-xs font-medium text-green-600 disabled:opacity-40">Add weight</button>
     </div>
   )
 }
@@ -303,4 +401,8 @@ function Field({ label, children, className }: { label: string; children: React.
       <div className="mt-1">{children}</div>
     </div>
   )
+}
+
+function Spinner() {
+  return <div className="flex justify-center pt-10"><div className="w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full animate-spin" /></div>
 }
