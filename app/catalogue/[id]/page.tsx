@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { compressImage } from '@/lib/image'
+import { compressWithThumb } from '@/lib/image'
 import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
 import ShareSheet from '@/components/catalogue/ShareSheet'
@@ -94,13 +94,19 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
     const imgs = Array.from(list).filter(f => f.type.startsWith('image/') && f.size <= 30 * 1024 * 1024)
     let order = images.length
     for (const raw of imgs) {
-      const f = await compressImage(raw)
-      const { data: up, error: upErr } = await supabase.storage.from('wa-media').upload(`products/${id}/${Date.now()}-${order}.jpg`, f, { upsert: false, contentType: 'image/jpeg' })
+      const { full, thumb } = await compressWithThumb(raw)
+      const base = `products/${id}/${Date.now()}-${order}`
+      const { data: up, error: upErr } = await supabase.storage.from('wa-media').upload(`${base}.jpg`, full, { upsert: false, contentType: 'image/jpeg' })
       if (upErr || !up) { console.error('[catalogue] upload failed:', upErr); setError(`Photo upload failed: ${upErr?.message ?? 'unknown error'}`); continue }
       const { data: { publicUrl } } = supabase.storage.from('wa-media').getPublicUrl(up.path)
+      let thumbUrl: string | null = null
+      if (thumb) {
+        const { data: tup } = await supabase.storage.from('wa-media').upload(`${base}-thumb.jpg`, thumb, { upsert: false, contentType: 'image/jpeg' })
+        if (tup) thumbUrl = supabase.storage.from('wa-media').getPublicUrl(tup.path).data.publicUrl
+      }
       // first ever photo becomes the primary automatically
       const makePrimary = images.length === 0 && order === 0
-      const { data: row } = await supabase.from('wa_product_images').insert({ product_id: id, image_url: publicUrl, sort_order: order, is_primary: makePrimary }).select('*').single()
+      const { data: row } = await supabase.from('wa_product_images').insert({ product_id: id, image_url: publicUrl, thumb_url: thumbUrl, sort_order: order, is_primary: makePrimary }).select('*').single()
       if (row) setImages(prev => [...prev, row as WaProductImage])
       order++
     }
@@ -116,8 +122,9 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
 
   async function deleteImage(img: WaProductImage) {
     await supabase.from('wa_product_images').delete().eq('id', img.id)
-    const path = img.image_url.split('/wa-media/')[1]
-    if (path) await supabase.storage.from('wa-media').remove([path])
+    const paths = [img.image_url, img.thumb_url]
+      .map(u => u?.split('/wa-media/')[1]).filter(Boolean) as string[]
+    if (paths.length) await supabase.storage.from('wa-media').remove(paths)
     const rest = images.filter(i => i.id !== img.id)
     // if we removed the primary, promote the next photo so a thumbnail still exists
     if (img.is_primary && rest.length > 0) {

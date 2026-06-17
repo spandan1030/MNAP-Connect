@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { compressImage } from '@/lib/image'
+import { compressWithThumb } from '@/lib/image'
 import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
 
@@ -71,15 +71,20 @@ export default function NewProductPage() {
       { field: 'party',       value: form.party },
     ])
 
-    // Upload photos under this product (compressed client-side)
+    // Upload photos under this product (full + small thumbnail, compressed client-side)
     let uploadFailed = false
     for (let i = 0; i < files.length; i++) {
-      const f = await compressImage(files[i])
-      const path = `products/${product.id}/${Date.now()}-${i}.jpg`
-      const { data: up, error: upErr } = await supabase.storage.from('wa-media').upload(path, f, { upsert: false, contentType: 'image/jpeg' })
+      const { full, thumb } = await compressWithThumb(files[i])
+      const base = `products/${product.id}/${Date.now()}-${i}`
+      const { data: up, error: upErr } = await supabase.storage.from('wa-media').upload(`${base}.jpg`, full, { upsert: false, contentType: 'image/jpeg' })
       if (upErr || !up) { uploadFailed = true; console.error('[catalogue] upload failed:', upErr); continue }
       const { data: { publicUrl } } = supabase.storage.from('wa-media').getPublicUrl(up.path)
-      await supabase.from('wa_product_images').insert({ product_id: product.id, image_url: publicUrl, sort_order: i })
+      let thumbUrl: string | null = null
+      if (thumb) {
+        const { data: tup } = await supabase.storage.from('wa-media').upload(`${base}-thumb.jpg`, thumb, { upsert: false, contentType: 'image/jpeg' })
+        if (tup) thumbUrl = supabase.storage.from('wa-media').getPublicUrl(tup.path).data.publicUrl
+      }
+      await supabase.from('wa_product_images').insert({ product_id: product.id, image_url: publicUrl, thumb_url: thumbUrl, sort_order: i })
     }
 
     if (uploadFailed) {

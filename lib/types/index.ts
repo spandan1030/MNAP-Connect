@@ -174,6 +174,7 @@ export interface WaProductImage {
   id: string
   product_id: string
   image_url: string
+  thumb_url: string | null
   sort_order: number
   is_primary: boolean
   created_at: string
