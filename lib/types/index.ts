@@ -178,6 +178,31 @@ export interface WaProductImage {
   created_at: string
 }
 
+export interface WaPurchaseRequirement {
+  id: string
+  item_name: string | null
+  design: string | null
+  description: string | null
+  purity: string | null
+  weight_bucket: number | null
+  qty_needed: number
+  qty_purchased: number
+  notes: string | null
+  is_done: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface WaPurchaseLine {
+  id: string
+  requirement_id: string
+  party: string
+  qty: number
+  created_at: string
+  updated_at: string
+}
+
 export interface WaThankYouProduct {
   id: string
   product_label: string
