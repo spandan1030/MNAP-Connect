@@ -1,12 +1,14 @@
 # MNAP Connect — WhatsApp Customer Engagement App
 ## Complete Project Reference Document
 
-> ⚠️ **PARTIALLY OUTDATED (as of 16 June 2026).** Sections describing `wa.me` deep links and
+> ⚠️ **PARTIALLY OUTDATED (as of 17 June 2026).** Sections describing `wa.me` deep links and
 > "No API" (Tech Stack, WhatsApp Link Format) are superseded — the app now uses the **real
 > WhatsApp Business Cloud API** with a two-way inbox, rules-based inbound auto-engagement, and
-> topic-synced signal capture. For the current engagement layer, infrastructure, and roadmap
-> (including the Flow Builder and Topic↔Node linking plan), see **`ENGAGEMENT_SYSTEM.md`**.
-> The Type A / Type B data model and segmentation sections below remain accurate.
+> topic-synced signal capture. It also now has full **Catalogue, Inventory, and Purchase-plan**
+> operations modules. For the current engagement layer, those operations modules,
+> infrastructure, and roadmap (Flow Builder, Topic↔Node linking), see **`ENGAGEMENT_SYSTEM.md`**
+> (operations modules are in its section 6). The Type A / Type B data model and segmentation
+> sections below remain accurate.
 
 ---
 
@@ -506,8 +508,9 @@ Default. Insufficient profile data. Flagged for completion within 7 days.
 | `/prospects/[id]/edit` | Yes | Salesman — update profiling answers; segment auto-reassigns on save |
 | `/admin/segments` | Yes | Admin — segment overview, completeness audit, customer drill-down, rules reference |
 
-### Navigation (Bottom Tab Bar)
-Send · Customers · Prospects · Topics · Templates · Segments
+### Navigation (Bottom Tab Bar) — current
+Messages · Send · Customers · Catalogue · Templates · **More**
+(More popup: Purchase · Prospects · Topics · Segments). See `ENGAGEMENT_SYSTEM.md` §6.5.
 
 ---
 
@@ -678,9 +681,9 @@ Two communication types to build:
 | Strategized campaign builder | Admin selects segment, writes or picks template, schedules |
 | Salesman daily dashboard | "Today's Recommended Actions" — surfaces who to contact, why, what to say |
 | Rate drop alert engine | Monitor `daily_rates`; alert Rate Sensitive + Exchange Candidate when drop ≥ ₹300/gram |
-| Photo sharing | Requires WhatsApp Business API — wa.me cannot attach files |
-| Broadcast | Requires API — plan budget ~₹2,500–5,000/month |
-| Product catalog integration | Jewellery items tagged by design/weight/type/metal |
+| Photo sharing | ✅ **Done** — real WhatsApp API; inbox image send + product Share (`ENGAGEMENT_SYSTEM.md` §6.1) |
+| Broadcast | ✅ **Done** — topic-segment broadcast + thank-you-for-purchase (`ENGAGEMENT_SYSTEM.md` §1, §4.1) |
+| Product catalog integration | ✅ **Done** — full Catalogue / Inventory / Purchase plan (`ENGAGEMENT_SYSTEM.md` §6) |
 | QR code generator | Auto-generate QR for `/enroll` URL — print on receipts |
 | Merge Type A + Type B | Unified customer view — future, once both modules are stable |
 
@@ -701,7 +704,7 @@ Two communication types to build:
 
 ---
 
-*Document created: 12 May 2026 — last updated: 13 May 2026 (edit page + segment reassignment flow added)*
+*Document created: 12 May 2026 — last updated: 17 June 2026 (engagement API, Catalogue/Inventory/Purchase modules — see `ENGAGEMENT_SYSTEM.md`)*
 *Project folder: `C:\Users\spand\Desktop\Management Software\mnap-connect`*
 *Supabase project: shared with MNAP — `tqnirshwiqpwbqdcrgbr`*
 *Migrations: `supabase/migrations/wa_001_initial_schema.sql`, `wa_002_seed_topics.sql`, `wa_003_intervention_schema.sql`*

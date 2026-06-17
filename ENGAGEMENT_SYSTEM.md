@@ -1,7 +1,8 @@
 # MNAP Connect — WhatsApp Engagement System
 
-*Current-state reference + roadmap for the live two-way WhatsApp engagement layer.*
-*Last updated: 16 June 2026.*
+*Current-state reference + roadmap for the live two-way WhatsApp engagement layer,
+plus the Catalogue / Inventory / Purchase operations modules (section 6).*
+*Last updated: 17 June 2026.*
 
 > **Supersedes the stale parts of `MNAP_CONNECT_REFERENCE.md`.** That document still
 > describes `wa.me` deep links with "no API". That is no longer true — the app runs on the
@@ -187,3 +188,102 @@ occasion), and segment campaigns. See `INTERVENTION_STRATEGY.md`.
 | `app/admin/engagement/page.tsx` | Editable bot copy |
 | `app/send/page.tsx`, `broadcast/route.ts` | Type A send + topic broadcast |
 | `supabase/migrations/wa_004 … wa_013` | Messaging, media, templates, bot copy, state, leads, topic sync |
+
+---
+
+## 6. Catalogue, Inventory & Purchase (operations modules)
+
+Internal stock + buying tools for salesmen. All `wa_`-prefixed, RLS on, mobile-first.
+This is separate from the customer-engagement layer above; it shares the same Supabase
+project, `wa-media` bucket, and navigation.
+
+### 6.1 Catalogue (`/catalogue`, `/catalogue/new`, `/catalogue/[id]`)
+- **One product = one physical piece** (`wa_products`): `item_name`, `barcode`, `weight`,
+  `purity`, `design`, `description`, `party`, `notes`, `is_active`, **`is_sold`**,
+  **`needs_review`** (QC), timestamps.
+- **Photos** (`wa_product_images`): many per product; `sort_order`, **`is_primary`**,
+  **`thumb_url`**. Stored under `products/{id}/` in `wa-media`.
+- Capture: camera + gallery, **two-phase** (details first or photos first). Client-side
+  compression to ~1600px JPEG **plus an auto-generated ~320px thumbnail**
+  (`lib/image.ts: compressWithThumb`); 30 MB raw cap.
+- **Primary image** = grid thumbnail **and** the default Share image. First photo becomes
+  primary automatically; deleting the primary promotes the next.
+- **Managed values** (`wa_catalogue_options`): allowed values per field
+  (item_name/design/description/purity/party) power typeable dropdowns; newly-typed values
+  auto-register. **Values manager** (`/catalogue/values`) lists unique values, drills to their
+  products, and **renames/merges** — a rename re-tags *every* product carrying that value
+  ("live" → "leaf" reclassifies all). Common purity values seeded (22K/18K/24K/…).
+- **Quick preview** (`PreviewModal`): an eye button on each card opens photos + key details
+  without entering edit mode.
+- **Share to customer** (`ShareSheet` → `app/api/whatsapp/share-product/route.ts`): pick a
+  contact (top-recent / search by name·phone / interest filter) → primary photo + caption →
+  send. DnD/opt-out guard; only delivers inside the 24-hour window.
+- **Add to purchase plan** (`AddToPlanSheet`): from a product, add it to the plan with one or
+  more weight buckets + qty (tops up if the plan already has that bucket).
+
+### 6.2 Scaling the catalogue (built for 5,000+ products)
+- **Server-side pagination** — 48/page via `.range()` + **infinite scroll**
+  (IntersectionObserver). Never loads all rows into the browser.
+- **DB-side filtering & search** — status, item/design/description/purity/party, weight
+  range, and the search box all run as Supabase queries; exact `count` for the item total.
+- **Debounced** search + weight slider (300 ms) so one query fires after input settles.
+- **Thumbnails only** for the visible page (primary photo, small `thumb_url`),
+  `loading="lazy"` + `decoding="async"`. Older photos with no `thumb_url` fall back to the
+  full image.
+- **Indexes** (`wa_022`): btree on filter/sort columns, a partial index for primary photos,
+  and **pg_trgm GIN** indexes so `ILIKE %text%` search stays fast.
+- Saved filter persists in `localStorage`; weight slider is non-linear (finer over 0–50 g).
+
+### 6.3 Inventory report (`/catalogue/inventory`)
+Live, read-only "what's on the shelf." **In-stock pieces only** (active, not sold), grouped
+**Item → Design → Description + Purity** (nested drill-down) with **piece counts + total
+weight**, down to individual pieces. Derived entirely from `wa_products` — no separate stock
+numbers to reconcile; mark a piece Sold anywhere and it drops out automatically.
+
+### 6.4 Purchase plan (`/purchase`) — strategy
+**A reusable plan layered on the catalogue, not a hand-typed list.**
+- Rows **auto-seed** from existing catalogue combos (item·design·description·purity) — no
+  manual entry. Columns = **weight buckets** (whole grams, pieces rounded to nearest g). Each
+  cell shows **live Stock**, a **Need** you set (= how many to buy), and **Bought**.
+- **Three modes** + a searchable **item-name funnel filter**:
+  - **Plan** — set the reusable Need per bucket; `+ wt` adds a bucket, `+ Add line` adds
+    not-yet-stocked items (stock 0).
+  - **Buy** — pick the **party** you're visiting, then `+/-` records pieces bought **from that
+    party**; cells are **colour-coded** by Bought vs Need (grey none / amber under / green met
+    / red excess) — nothing hides when complete.
+  - **By party** — pieces + **approx weight** bought per party (= Σ pieces × bucket). A rough
+    buying helper; the catalogue stays the real in-stock source of truth.
+- **New round** clears all Bought counts but keeps the plan (Need values) — reuse every cycle.
+- Tables: `wa_purchase_requirements` = the plan cells (one per item·design·description·purity·
+  bucket, with `qty_needed`); `wa_purchase_lines` = pieces bought per `(requirement, party)`.
+
+### 6.5 Navigation
+Bottom bar: **Messages · Send · Customers · Catalogue · Templates · More**. The **More**
+popup holds **Purchase · Prospects · Topics · Segments**. Top bar: thank-you broadcast +
+engagement-settings icons.
+
+### 6.6 Operations migrations & key files
+| Migration | Adds |
+|---|---|
+| `wa_014` | thank-you products + Purchased topic |
+| `wa_015` | `wa_customers.dnd` (STOP opt-out) |
+| `wa_016` | `wa_products`, `wa_product_images` |
+| `wa_017` | `is_sold`, `needs_review` |
+| `wa_018` | `description` (notes→description) + `wa_catalogue_options` |
+| `wa_019` | `wa_purchase_requirements` |
+| `wa_020` | `weight_bucket` + `wa_purchase_lines` |
+| `wa_021` | `is_primary` on images |
+| `wa_022` | catalogue indexes (+ enables `pg_trgm`) |
+| `wa_023` | `thumb_url` on images |
+
+| File | Purpose |
+|---|---|
+| `app/catalogue/page.tsx` | Paginated, server-filtered grid + preview/share entry points |
+| `app/catalogue/new`, `app/catalogue/[id]` | Add / edit product, photos, primary, status |
+| `app/catalogue/values/page.tsx` | Managed-values viewer + rename/merge |
+| `app/catalogue/inventory/page.tsx` | In-stock nested drill-down report |
+| `app/purchase/page.tsx` | Plan / Buy / By-party grid |
+| `lib/catalogue.ts` | Options fetch/add + `renameCatalogueValue` |
+| `lib/image.ts` | `compressImage`, `compressWithThumb` (full + thumbnail) |
+| `components/catalogue/ShareSheet.tsx`, `AddToPlanSheet.tsx`, `PreviewModal.tsx` | Catalogue sheets/modals |
+| `app/api/whatsapp/share-product/route.ts` | Send a product photo + caption to a customer |
