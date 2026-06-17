@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { compressImage } from '@/lib/image'
 import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
+import ShareSheet from '@/components/catalogue/ShareSheet'
 import type { WaProduct, WaProductImage } from '@/lib/types'
 
 export default function ProductPage({ params }: { params: Promise<{ id: string }> }) {
@@ -17,6 +18,8 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   const [options, setOptions] = useState<Options>({ item_name: [], design: [], description: [], purity: [], party: [] })
   const [isSold, setIsSold] = useState(false)
   const [needsReview, setNeedsReview] = useState(false)
+  const [product, setProduct] = useState<WaProduct | null>(null)
+  const [shareOpen, setShareOpen] = useState(false)
   const [images, setImages] = useState<WaProductImage[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
@@ -32,6 +35,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         supabase.from('wa_product_images').select('*').eq('product_id', id).order('sort_order'),
       ])
       const p = pRes.data as WaProduct | null
+      setProduct(p)
       if (p) {
         setForm({
           item_name: p.item_name ?? '', barcode: p.barcode ?? '', weight: p.weight != null ? String(p.weight) : '',
@@ -119,7 +123,14 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       <main className="flex-1 max-w-lg mx-auto w-full px-4 py-4 space-y-4">
         <div className="flex items-center gap-3">
           <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700">←</button>
-          <h1 className="text-lg font-bold text-gray-900 truncate">{form.item_name || 'Product'}</h1>
+          <h1 className="text-lg font-bold text-gray-900 truncate flex-1">{form.item_name || 'Product'}</h1>
+          <button onClick={() => setShareOpen(true)}
+            className="flex-shrink-0 flex items-center gap-1 text-xs font-semibold bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+            </svg>
+            Share
+          </button>
         </div>
 
         {error && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
@@ -211,6 +222,14 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
           <button onClick={() => setConfirmDelete(true)} className="w-full py-2.5 rounded-xl border-2 border-red-200 text-red-600 font-semibold text-sm">Delete product</button>
         )}
       </main>
+
+      {shareOpen && product && (
+        <ShareSheet
+          product={{ ...product, item_name: form.item_name, design: form.design, purity: form.purity, weight: form.weight ? Number(form.weight) : null }}
+          images={images}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
     </div>
   )
 }
