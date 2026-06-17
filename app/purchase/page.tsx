@@ -28,6 +28,8 @@ export default function PurchasePage() {
 
   const [mode, setMode]       = useState<Mode>('plan')
   const [itemFilter, setItem] = useState('')   // '' = all items
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [itemSearch, setItemSearch] = useState('')
   const [party, setParty]     = useState('')   // active buying session
   const [adding, setAdding]   = useState(false)
   const [draft, setDraft]     = useState({ item_name: '', design: '', description: '', purity: '22K', weight_bucket: '', qty_needed: '1' })
@@ -264,11 +266,46 @@ export default function PurchasePage() {
 
         {/* Item filter */}
         {items.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-            <button onClick={() => setItem('')} className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border ${itemFilter === '' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'}`}>All items</button>
-            {items.map(it => (
-              <button key={it} onClick={() => setItem(it)} className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border ${itemFilter === it ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'}`}>{it}</button>
-            ))}
+          <div className="relative">
+            <button onClick={() => { setFilterOpen(o => !o); setItemSearch('') }}
+              className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-medium ${
+                itemFilter ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
+              }`}>
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L14 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 018 21v-7.586L3.293 6.707A1 1 0 013 6V4z" />
+              </svg>
+              <span className="flex-1 text-left truncate">{itemFilter || 'All items'}</span>
+              {itemFilter && (
+                <span onClick={e => { e.stopPropagation(); setItem('') }} className="text-white/80 hover:text-white px-1">×</span>
+              )}
+              <span className={`transition-transform ${filterOpen ? 'rotate-180' : ''}`}>▾</span>
+            </button>
+
+            {filterOpen && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setFilterOpen(false)} />
+                <div className="absolute z-40 mt-1 inset-x-0 bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden">
+                  {items.length > 6 && (
+                    <div className="p-2 border-b border-gray-100">
+                      <input autoFocus type="search" value={itemSearch} onChange={e => setItemSearch(e.target.value)}
+                        placeholder="Search items…" className="input !py-1.5 text-sm" />
+                    </div>
+                  )}
+                  <div className="max-h-64 overflow-y-auto">
+                    <button onClick={() => { setItem(''); setFilterOpen(false) }}
+                      className={`w-full text-left px-4 py-2.5 text-sm border-b border-gray-50 ${itemFilter === '' ? 'text-green-600 font-semibold bg-green-50' : 'text-gray-700 active:bg-gray-50'}`}>
+                      All items
+                    </button>
+                    {items.filter(it => it.toLowerCase().includes(itemSearch.trim().toLowerCase())).map(it => (
+                      <button key={it} onClick={() => { setItem(it); setFilterOpen(false) }}
+                        className={`w-full text-left px-4 py-2.5 text-sm border-b border-gray-50 last:border-0 ${itemFilter === it ? 'text-green-600 font-semibold bg-green-50' : 'text-gray-700 active:bg-gray-50'}`}>
+                        {it}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 

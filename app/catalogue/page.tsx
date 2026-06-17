@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { fetchCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
+import PreviewModal from '@/components/catalogue/PreviewModal'
 import type { WaProduct } from '@/lib/types'
 
 type Status = 'all' | 'instock' | 'sold' | 'review'
@@ -35,12 +36,13 @@ export default function CataloguePage() {
   const [filters, setFilters]   = useState<Filters>(DEFAULT_FILTERS)
   const [panelOpen, setPanelOpen] = useState(false)
   const [savedNote, setSavedNote] = useState(false)
+  const [preview, setPreview]   = useState<WaProduct | null>(null)
 
   useEffect(() => {
     async function load() {
       const [prodRes, imgRes] = await Promise.all([
         supabase.from('wa_products').select('*').order('created_at', { ascending: false }),
-        supabase.from('wa_product_images').select('product_id, image_url').order('sort_order'),
+        supabase.from('wa_product_images').select('product_id, image_url, is_primary').order('is_primary', { ascending: false }).order('sort_order'),
       ])
       setProducts((prodRes.data ?? []) as WaProduct[])
       const map: Record<string, string> = {}
@@ -200,6 +202,14 @@ export default function CataloguePage() {
                   {p.is_sold && (
                     <span className="absolute top-1.5 left-1.5 text-[10px] font-bold text-white bg-red-600 px-1.5 py-0.5 rounded">SOLD</span>
                   )}
+                  {/* Quick preview — no edit mode */}
+                  <button onClick={e => { e.preventDefault(); e.stopPropagation(); setPreview(p) }} title="Preview"
+                    className="absolute bottom-1.5 left-1.5 w-6 h-6 rounded-full bg-white/80 text-gray-600 flex items-center justify-center active:bg-white">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  </button>
                   <button onClick={e => toggleReview(e, p)} title="Mark for review"
                     className={`absolute top-1.5 right-1.5 w-6 h-6 rounded-full flex items-center justify-center ${
                       p.needs_review ? 'bg-amber-500 text-white' : 'bg-white/80 text-gray-400'
@@ -230,6 +240,8 @@ export default function CataloguePage() {
           </div>
         )}
       </main>
+
+      {preview && <PreviewModal product={preview} onClose={() => setPreview(null)} />}
     </div>
   )
 }

@@ -7,6 +7,7 @@ import { compressImage } from '@/lib/image'
 import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
 import ShareSheet from '@/components/catalogue/ShareSheet'
+import AddToPlanSheet from '@/components/catalogue/AddToPlanSheet'
 import type { WaProduct, WaProductImage } from '@/lib/types'
 
 export default function ProductPage({ params }: { params: Promise<{ id: string }> }) {
@@ -20,6 +21,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   const [needsReview, setNeedsReview] = useState(false)
   const [product, setProduct] = useState<WaProduct | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
+  const [planOpen, setPlanOpen] = useState(false)
   const [images, setImages] = useState<WaProductImage[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
@@ -32,7 +34,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
     async function load() {
       const [pRes, iRes] = await Promise.all([
         supabase.from('wa_products').select('*').eq('id', id).single(),
-        supabase.from('wa_product_images').select('*').eq('product_id', id).order('sort_order'),
+        supabase.from('wa_product_images').select('*').eq('product_id', id).order('is_primary', { ascending: false }).order('sort_order'),
       ])
       const p = pRes.data as WaProduct | null
       setProduct(p)
@@ -96,18 +98,33 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       const { data: up, error: upErr } = await supabase.storage.from('wa-media').upload(`products/${id}/${Date.now()}-${order}.jpg`, f, { upsert: false, contentType: 'image/jpeg' })
       if (upErr || !up) { console.error('[catalogue] upload failed:', upErr); setError(`Photo upload failed: ${upErr?.message ?? 'unknown error'}`); continue }
       const { data: { publicUrl } } = supabase.storage.from('wa-media').getPublicUrl(up.path)
-      const { data: row } = await supabase.from('wa_product_images').insert({ product_id: id, image_url: publicUrl, sort_order: order }).select('*').single()
+      // first ever photo becomes the primary automatically
+      const makePrimary = images.length === 0 && order === 0
+      const { data: row } = await supabase.from('wa_product_images').insert({ product_id: id, image_url: publicUrl, sort_order: order, is_primary: makePrimary }).select('*').single()
       if (row) setImages(prev => [...prev, row as WaProductImage])
       order++
     }
     setUploading(false)
   }
 
+  async function setPrimary(img: WaProductImage) {
+    await supabase.from('wa_product_images').update({ is_primary: false }).eq('product_id', id)
+    await supabase.from('wa_product_images').update({ is_primary: true }).eq('id', img.id)
+    setImages(prev => prev.map(i => ({ ...i, is_primary: i.id === img.id }))
+      .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || a.sort_order - b.sort_order))
+  }
+
   async function deleteImage(img: WaProductImage) {
     await supabase.from('wa_product_images').delete().eq('id', img.id)
     const path = img.image_url.split('/wa-media/')[1]
     if (path) await supabase.storage.from('wa-media').remove([path])
-    setImages(prev => prev.filter(i => i.id !== img.id))
+    const rest = images.filter(i => i.id !== img.id)
+    // if we removed the primary, promote the next photo so a thumbnail still exists
+    if (img.is_primary && rest.length > 0) {
+      await supabase.from('wa_product_images').update({ is_primary: true }).eq('id', rest[0].id)
+      rest[0] = { ...rest[0], is_primary: true }
+    }
+    setImages(rest)
   }
 
   async function deleteProduct() {
@@ -124,6 +141,13 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         <div className="flex items-center gap-3">
           <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700">←</button>
           <h1 className="text-lg font-bold text-gray-900 truncate flex-1">{form.item_name || 'Product'}</h1>
+          <button onClick={() => setPlanOpen(true)}
+            className="flex-shrink-0 flex items-center gap-1 text-xs font-semibold text-gray-700 border border-gray-300 px-3 py-1.5 rounded-lg active:bg-gray-50">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            </svg>
+            Plan
+          </button>
           <button onClick={() => setShareOpen(true)}
             className="flex-shrink-0 flex items-center gap-1 text-xs font-semibold bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg">
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -155,17 +179,28 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         <div className="card p-4 space-y-3">
           <p className="text-sm font-semibold text-gray-800">Photos</p>
           {images.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {images.map(img => (
-                <div key={img.id} className="relative">
-                  <a href={img.image_url} target="_blank" rel="noopener noreferrer">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={img.image_url} alt="" className="w-20 h-20 object-cover rounded-lg border border-gray-200" />
-                  </a>
-                  <button onClick={() => deleteImage(img)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
-                </div>
-              ))}
-            </div>
+            <>
+              <div className="flex flex-wrap gap-3">
+                {images.map(img => (
+                  <div key={img.id} className="relative">
+                    <a href={img.image_url} target="_blank" rel="noopener noreferrer">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={img.image_url} alt="" className={`w-20 h-20 object-cover rounded-lg border-2 ${img.is_primary ? 'border-green-500' : 'border-gray-200'}`} />
+                    </a>
+                    <button onClick={() => deleteImage(img)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
+                    {img.is_primary ? (
+                      <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 text-[9px] font-bold text-white bg-green-600 px-1.5 py-0.5 rounded-full whitespace-nowrap">★ Primary</span>
+                    ) : (
+                      <button onClick={() => setPrimary(img)}
+                        className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 text-[9px] font-medium text-gray-600 bg-white border border-gray-300 px-1.5 py-0.5 rounded-full whitespace-nowrap active:bg-gray-50">
+                        Set primary
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-gray-400">The ★ primary photo is the thumbnail and the default image when sharing.</p>
+            </>
           )}
           <div className="flex gap-2">
             <label className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 cursor-pointer active:bg-gray-50 ${uploading ? 'opacity-50' : ''}`}>
@@ -228,6 +263,13 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
           product={{ ...product, item_name: form.item_name, design: form.design, purity: form.purity, weight: form.weight ? Number(form.weight) : null }}
           images={images}
           onClose={() => setShareOpen(false)}
+        />
+      )}
+
+      {planOpen && product && (
+        <AddToPlanSheet
+          product={{ ...product, item_name: form.item_name, design: form.design, description: form.description, purity: form.purity, weight: form.weight ? Number(form.weight) : null }}
+          onClose={() => setPlanOpen(false)}
         />
       )}
     </div>
