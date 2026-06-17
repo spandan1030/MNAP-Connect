@@ -4,17 +4,17 @@ import { use, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { compressImage } from '@/lib/image'
+import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
 import type { WaProduct, WaProductImage } from '@/lib/types'
-
-const PURITY_OPTIONS = ['24KT', '22KT', '18KT', '14KT', '916', '750', '999', '925']
 
 export default function ProductPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const supabase = createClient()
   const router = useRouter()
 
-  const [form, setForm]   = useState({ item_name: '', barcode: '', weight: '', purity: '', design: '', party: '', notes: '', is_active: true })
+  const [form, setForm]   = useState({ item_name: '', barcode: '', weight: '', purity: '', design: '', description: '', party: '', notes: '', is_active: true })
+  const [options, setOptions] = useState<Options>({ item_name: [], design: [], description: [], purity: [], party: [] })
   const [isSold, setIsSold] = useState(false)
   const [needsReview, setNeedsReview] = useState(false)
   const [images, setImages] = useState<WaProductImage[]>([])
@@ -35,7 +35,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       if (p) {
         setForm({
           item_name: p.item_name ?? '', barcode: p.barcode ?? '', weight: p.weight != null ? String(p.weight) : '',
-          purity: p.purity ?? '', design: p.design ?? '', party: p.party ?? '', notes: p.notes ?? '', is_active: p.is_active,
+          purity: p.purity ?? '', design: p.design ?? '', description: p.description ?? '', party: p.party ?? '', notes: p.notes ?? '', is_active: p.is_active,
         })
         setIsSold(p.is_sold)
         setNeedsReview(p.needs_review)
@@ -44,6 +44,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       setLoading(false)
     }
     load()
+    fetchCatalogueOptions().then(setOptions)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
@@ -52,18 +53,23 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   async function save() {
     setSaving(true); setError(null)
     const { error: e } = await supabase.from('wa_products').update({
-      item_name: form.item_name.trim() || null,
-      barcode:   form.barcode.trim() || null,
-      weight:    form.weight ? Number(form.weight) : null,
-      purity:    form.purity.trim() || null,
-      design:    form.design.trim() || null,
-      party:     form.party.trim() || null,
-      notes:     form.notes.trim() || null,
-      is_active: form.is_active,
+      item_name:   form.item_name.trim() || null,
+      barcode:     form.barcode.trim() || null,
+      weight:      form.weight ? Number(form.weight) : null,
+      purity:      form.purity.trim() || null,
+      design:      form.design.trim() || null,
+      description: form.description.trim() || null,
+      party:       form.party.trim() || null,
+      notes:       form.notes.trim() || null,
+      is_active:   form.is_active,
       updated_at: new Date().toISOString(),
     }).eq('id', id)
     setSaving(false)
     if (e) { setError(e.code === '23505' ? 'A product with this barcode already exists.' : e.message); return }
+    await addCatalogueOptions([
+      { field: 'item_name', value: form.item_name }, { field: 'design', value: form.design },
+      { field: 'description', value: form.description }, { field: 'purity', value: form.purity }, { field: 'party', value: form.party },
+    ])
     setSaved(true); setTimeout(() => setSaved(false), 2000)
   }
 
@@ -166,18 +172,23 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
 
         {/* Details */}
         <div className="card p-4 space-y-3">
-          <Field label="Item name"><input value={form.item_name} onChange={e => set('item_name', e.target.value)} className="input" /></Field>
+          <Field label="Item name"><input list="opt-item_name" value={form.item_name} onChange={e => set('item_name', e.target.value)} className="input" /></Field>
           <Field label="Barcode"><input value={form.barcode} onChange={e => set('barcode', e.target.value)} className="input" /></Field>
           <div className="flex gap-3">
             <Field label="Weight (g)" className="flex-1"><input type="number" inputMode="decimal" step="0.001" value={form.weight} onChange={e => set('weight', e.target.value)} className="input" /></Field>
-            <Field label="Purity" className="flex-1">
-              <input list="purity-list" value={form.purity} onChange={e => set('purity', e.target.value)} className="input" />
-              <datalist id="purity-list">{PURITY_OPTIONS.map(o => <option key={o} value={o} />)}</datalist>
-            </Field>
+            <Field label="Purity" className="flex-1"><input list="opt-purity" value={form.purity} onChange={e => set('purity', e.target.value)} className="input" /></Field>
           </div>
-          <Field label="Design"><input value={form.design} onChange={e => set('design', e.target.value)} className="input" /></Field>
-          <Field label="Party (supplier)"><input value={form.party} onChange={e => set('party', e.target.value)} className="input" /></Field>
+          <Field label="Design"><input list="opt-design" value={form.design} onChange={e => set('design', e.target.value)} className="input" /></Field>
+          <Field label="Description"><input list="opt-description" value={form.description} onChange={e => set('description', e.target.value)} className="input" /></Field>
+          <Field label="Party (supplier)"><input list="opt-party" value={form.party} onChange={e => set('party', e.target.value)} className="input" /></Field>
           <Field label="Notes"><textarea value={form.notes} onChange={e => set('notes', e.target.value)} rows={2} className="input resize-none" /></Field>
+
+          <datalist id="opt-item_name">{options.item_name.map(o => <option key={o} value={o} />)}</datalist>
+          <datalist id="opt-design">{options.design.map(o => <option key={o} value={o} />)}</datalist>
+          <datalist id="opt-description">{options.description.map(o => <option key={o} value={o} />)}</datalist>
+          <datalist id="opt-purity">{options.purity.map(o => <option key={o} value={o} />)}</datalist>
+          <datalist id="opt-party">{options.party.map(o => <option key={o} value={o} />)}</datalist>
+
           <label className="flex items-center gap-2 text-sm text-gray-700 pt-1">
             <input type="checkbox" checked={form.is_active} onChange={e => set('is_active', e.target.checked)} />
             Active (uncheck to hide from the catalogue)

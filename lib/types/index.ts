@@ -159,6 +159,7 @@ export interface WaProduct {
   weight: number | null
   purity: string | null
   design: string | null
+  description: string | null
   party: string | null
   notes: string | null
   is_active: boolean
