@@ -353,7 +353,7 @@ async function logOutbound(threadId: string, wamid: string, body: string) {
   await Promise.all([
     supabaseAdmin.from('wa_messages').insert({
       thread_id: threadId, direction: 'outbound', wa_message_id: wamid,
-      body, status: 'sent',
+      body, status: 'sent', sent_at: new Date().toISOString(),
     }),
     supabaseAdmin
       .from('wa_threads')
@@ -809,6 +809,7 @@ async function handleAutoReply(phone: string, threadId: string, customerName: st
       body:          messageBody,
       template_name: template.name,
       status:        'sent',
+      sent_at:       new Date().toISOString(),
     }),
     supabaseAdmin
       .from('wa_threads')
@@ -817,19 +818,68 @@ async function handleAutoReply(phone: string, threadId: string, customerName: st
   ])
 }
 
-async function handleStatusUpdate(status: WaStatusUpdate) {
-  const updates: Record<string, string> = { status: status.status }
+// Status rank — used so a late 'delivered' callback can't overwrite a 'read'.
+const STATUS_RANK: Record<string, number> = {
+  queued: 0, sent: 1, delivered: 2, read: 3, failed: 3, received: 3,
+}
 
+async function handleStatusUpdate(status: WaStatusUpdate) {
   const ts = new Date(parseInt(status.timestamp) * 1000).toISOString()
+
+  // Pull the Meta error (failed statuses only). The numeric code is the reliable
+  // signal; title/details give the salesman more context.
+  const err = status.errors?.[0]
+  const errorCode    = err?.code ?? null
+  const errorTitle   = err?.title ?? null
+  const errorDetails = err?.error_data?.details ?? err?.message ?? null
+
+  // Find the message this status belongs to (and its current status, to avoid
+  // downgrading read → delivered when callbacks arrive out of order).
+  const { data: msg } = await supabaseAdmin
+    .from('wa_messages')
+    .select('id, status')
+    .eq('wa_message_id', status.id)
+    .maybeSingle()
+
+  // 1. Always append to the full event log.
+  await supabaseAdmin.from('wa_message_events').insert({
+    message_id:    msg?.id ?? null,
+    wa_message_id: status.id,
+    status:        status.status,
+    error_code:    errorCode,
+    error_title:   errorTitle,
+    error_details: errorDetails,
+    event_at:      ts,
+    raw:           status,
+  })
+
+  if (!msg) {
+    console.warn('[webhook] Status for unknown message', status.id)
+    return
+  }
+
+  // 2. Update the message row's latest state.
+  const updates: Record<string, unknown> = {}
+  const newRank = STATUS_RANK[status.status] ?? 0
+  const curRank = STATUS_RANK[msg.status] ?? 0
+  if (newRank >= curRank) updates.status = status.status
+
+  if (status.status === 'sent')      updates.sent_at      = ts
   if (status.status === 'delivered') updates.delivered_at = ts
   if (status.status === 'read')      updates.read_at      = ts
-  if (status.status === 'failed')
-    updates.failed_reason = status.errors?.[0]?.message ?? 'Unknown error'
+  if (status.status === 'failed') {
+    updates.failed_reason = err?.message ?? 'Unknown error'
+    updates.error_code    = errorCode
+    updates.error_title   = errorTitle
+    updates.error_details = errorDetails
+  }
+
+  if (Object.keys(updates).length === 0) return
 
   const { error } = await supabaseAdmin
     .from('wa_messages')
     .update(updates)
-    .eq('wa_message_id', status.id)
+    .eq('id', msg.id)
 
   if (error) console.error('[webhook] Failed to update status:', error)
 }
@@ -886,5 +936,11 @@ interface WaStatusUpdate {
   status: 'sent' | 'delivered' | 'read' | 'failed'
   timestamp: string
   recipient_id: string
-  errors?: Array<{ message: string; code: number }>
+  errors?: Array<{
+    code: number
+    title?: string
+    message: string
+    error_data?: { details?: string }
+    href?: string
+  }>
 }

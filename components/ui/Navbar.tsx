@@ -54,6 +54,11 @@ const ICONS = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
     </svg>
   ),
+  reports: (
+    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 17v-6m4 6V7m4 10v-3M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+    </svg>
+  ),
 }
 
 const PRIMARY = [
@@ -66,6 +71,7 @@ const PRIMARY = [
 
 const MORE = [
   { href: '/purchase',       label: 'Purchase',  icon: ICONS.purchase },
+  { href: '/reports',        label: 'Reports',   icon: ICONS.reports },
   { href: '/prospects',      label: 'Prospects', icon: ICONS.prospects },
   { href: '/admin/topics',   label: 'Topics',    icon: ICONS.topics },
   { href: '/admin/segments', label: 'Segments',  icon: ICONS.segments },

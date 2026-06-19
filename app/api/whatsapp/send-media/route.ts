@@ -24,9 +24,9 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Only image files are supported' }, { status: 400 })
   }
 
-  // Max 5 MB
-  if (file.size > 5 * 1024 * 1024) {
-    return Response.json({ error: 'Image must be under 5 MB' }, { status: 400 })
+  // Max 10 MB (images are compressed client-side before upload, so this is a guard)
+  if (file.size > 10 * 1024 * 1024) {
+    return Response.json({ error: 'Image must be under 10 MB' }, { status: 400 })
   }
 
   // Respect Do-Not-Disturb (customer sent STOP)
@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
     await Promise.all([
       supabase
         .from('wa_messages')
-        .update({ wa_message_id: wamid, status: 'sent' })
+        .update({ wa_message_id: wamid, status: 'sent', sent_at: now })
         .eq('id', message.id),
       supabase
         .from('wa_threads')

@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
         await supabaseAdmin.from('wa_messages').insert({
           thread_id: thread.id, direction: 'outbound', wa_message_id: wamid,
           body: config.body_preview || null, template_name: `Thank you — ${config.product_label}`,
-          status: 'sent', sent_by: user.id,
+          status: 'sent', sent_at: now, sent_by: user.id,
         })
       }
 

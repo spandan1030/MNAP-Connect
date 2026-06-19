@@ -59,6 +59,29 @@ export async function POST(req: NextRequest) {
 
   const now = new Date().toISOString()
 
+  // Look up the topic name for the broadcast record (snapshot, survives deletion).
+  const { data: topic } = await supabaseAdmin
+    .from('wa_interest_topics')
+    .select('name')
+    .eq('id', topicId)
+    .maybeSingle()
+
+  // One row per broadcast run — every message below is stamped with this id so
+  // the Reports page can show "this exact send → who got it → status".
+  const { data: broadcast } = await supabaseAdmin
+    .from('wa_broadcasts')
+    .insert({
+      template_id:   template.id,
+      template_name: template.name,
+      topic_id:      topicId,
+      topic_name:    topic?.name ?? null,
+      total,
+      sent_by:       user.id,
+    })
+    .select('id')
+    .single()
+  const broadcastId = broadcast?.id ?? null
+
   // Build a single Meta API parameter object for a variable.
   // 'name' → named variable {{customer_name}}, needs parameter_name: 'customer_name'
   // rate variables → positional {{1}}, {{2}}…, must NOT have parameter_name
@@ -125,7 +148,9 @@ export async function POST(req: NextRequest) {
           body: messageBody,
           template_name: template.name,
           status: 'sent',
+          sent_at: now,
           sent_by: user.id,
+          broadcast_id: broadcastId,
         })
       }
 
@@ -145,5 +170,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return Response.json({ sent, failed, total, results })
+  // Record final send-time tallies on the broadcast run.
+  if (broadcastId) {
+    await supabaseAdmin
+      .from('wa_broadcasts')
+      .update({ sent, failed })
+      .eq('id', broadcastId)
+  }
+
+  return Response.json({ sent, failed, total, results, broadcastId })
 }

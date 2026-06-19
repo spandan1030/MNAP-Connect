@@ -244,8 +244,26 @@ export interface WaMessage {
   media_url: string | null
   status: WaMessageStatus
   sent_by: string | null
+  sent_at: string | null
   delivered_at: string | null
   read_at: string | null
   failed_reason: string | null
+  error_code: number | null
+  error_title: string | null
+  error_details: string | null
+  broadcast_id: string | null
+  created_at: string
+}
+
+export interface WaBroadcast {
+  id: string
+  template_id: string | null
+  template_name: string | null
+  topic_id: string | null
+  topic_name: string | null
+  total: number
+  sent: number
+  failed: number
+  sent_by: string | null
   created_at: string
 }

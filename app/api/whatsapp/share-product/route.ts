@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     const preview = imageUrl ? '📷 Photo' + (text ? `: ${text.slice(0, 40)}` : '') : (text ?? '')
     await Promise.all([
-      supabase.from('wa_messages').update({ wa_message_id: wamid, status: 'sent' }).eq('id', message.id),
+      supabase.from('wa_messages').update({ wa_message_id: wamid, status: 'sent', sent_at: now }).eq('id', message.id),
       supabase.from('wa_threads').update({ last_message_at: now, last_message_preview: preview }).eq('id', threadId),
     ])
     return Response.json({ ok: true })

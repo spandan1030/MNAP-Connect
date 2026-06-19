@@ -4,6 +4,8 @@ import { use, useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { applyPlaceholders } from '@/lib/utils'
+import { describeError, shortError } from '@/lib/whatsapp/errors'
+import { compressImage } from '@/lib/image'
 import type { WaMessage, WaThread, MessageTemplate, InterestTopic } from '@/lib/types'
 
 interface TodayRates {
@@ -14,7 +16,8 @@ interface TodayRates {
 
 const WINDOW_MS = 24 * 60 * 60 * 1000 // WhatsApp free-text reply window
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024 // 10 MB (compressed client-side before sending)
+const MAX_IMAGES_AT_ONCE = 10
 
 // ---------------------------------------------------------------------------
 // Status tick icons
@@ -94,9 +97,16 @@ function MessageBubble({ msg }: { msg: WaMessage }) {
           {isOut && <StatusTick status={msg.status} />}
         </div>
 
-        {/* Failed reason */}
-        {isOut && msg.status === 'failed' && msg.failed_reason && (
-          <p className={`text-[10px] text-red-300 mt-0.5 ${isImage && msg.media_url ? 'px-2.5 pb-1' : ''}`}>{msg.failed_reason}</p>
+        {/* Failed reason — code + plain English */}
+        {isOut && msg.status === 'failed' && (msg.error_code || msg.failed_reason) && (
+          <div className={`mt-0.5 ${isImage && msg.media_url ? 'px-2.5 pb-1' : ''}`}>
+            <p className="text-[10px] text-red-300 font-semibold">
+              Not delivered{msg.error_code ? ` · ${shortError(msg.error_code)}` : ''}
+            </p>
+            <p className="text-[10px] text-red-200 leading-snug">
+              {msg.error_code ? describeError(msg.error_code).hint : msg.failed_reason}
+            </p>
+          </div>
         )}
       </div>
     </div>
@@ -125,8 +135,8 @@ export default function ConversationPage({
   const [sending,       setSending]       = useState(false)
   const [error,         setError]         = useState<string | null>(null)
   const [loading,       setLoading]       = useState(true)
-  const [pendingImage,  setPendingImage]  = useState<File | null>(null)
-  const [imagePreview,  setImagePreview]  = useState<string | null>(null)
+  const [pendingImages, setPendingImages] = useState<File[]>([])
+  const [imagePreviews, setImagePreviews] = useState<string[]>([])
 
   // Templates + interests (in-chat tools)
   const [sheet,            setSheet]            = useState<'none' | 'templates' | 'template-preview' | 'interests'>('none')
@@ -234,72 +244,94 @@ export default function ConversationPage({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread?.id])
 
-  // Image selection
+  // Image selection — accepts multiple files at once
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    e.target.value = '' // allow re-selecting same file
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = '' // allow re-selecting the same file
+    if (files.length === 0) return
 
-    if (!file.type.startsWith('image/')) {
-      setError('Only image files are supported')
+    const room = MAX_IMAGES_AT_ONCE - pendingImages.length
+    if (room <= 0) {
+      setError(`You can attach up to ${MAX_IMAGES_AT_ONCE} photos at once`)
       return
     }
-    if (file.size > MAX_IMAGE_BYTES) {
-      setError('Image must be under 5 MB')
-      return
+
+    const accepted: File[] = []
+    for (const file of files.slice(0, room)) {
+      if (!file.type.startsWith('image/')) {
+        setError('Only image files are supported')
+        continue
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        setError('Each image must be under 10 MB')
+        continue
+      }
+      accepted.push(file)
     }
-    if (imagePreview) URL.revokeObjectURL(imagePreview)
-    setPendingImage(file)
-    setImagePreview(URL.createObjectURL(file))
-    setError(null)
+    if (accepted.length === 0) return
+
+    setPendingImages(prev => [...prev, ...accepted])
+    setImagePreviews(prev => [...prev, ...accepted.map(f => URL.createObjectURL(f))])
+    if (accepted.length === files.length) setError(null)
     inputRef.current?.focus()
   }
 
-  function clearPendingImage() {
-    if (imagePreview) URL.revokeObjectURL(imagePreview)
-    setPendingImage(null)
-    setImagePreview(null)
+  function removePendingImage(index: number) {
+    setImagePreviews(prev => {
+      const url = prev[index]
+      if (url) URL.revokeObjectURL(url)
+      return prev.filter((_, i) => i !== index)
+    })
+    setPendingImages(prev => prev.filter((_, i) => i !== index))
   }
 
-  async function handleSendImage() {
-    if (!pendingImage || sending) return
+  function clearPendingImages() {
+    setImagePreviews(prev => { prev.forEach(URL.revokeObjectURL); return [] })
+    setPendingImages([])
+  }
+
+  async function handleSendImages() {
+    if (pendingImages.length === 0 || sending) return
     setSending(true)
     setError(null)
 
     const caption = text.trim()
-    const imageFile = pendingImage
+    const images = pendingImages
     setText('')
-    clearPendingImage()
+    clearPendingImages()
 
-    const formData = new FormData()
-    formData.append('phone', phone)
-    formData.append('file',  imageFile)
-    if (caption) formData.append('caption', caption)
+    let firstError: string | null = null
+    // Send sequentially. Caption rides on the first photo only (WhatsApp shows
+    // one caption per image). Each photo is compressed to fit Meta's ~5 MB limit.
+    for (let i = 0; i < images.length; i++) {
+      const compressed = await compressImage(images[i])
+      const formData = new FormData()
+      formData.append('phone', phone)
+      formData.append('file',  compressed)
+      if (i === 0 && caption) formData.append('caption', caption)
 
-    try {
-      const res  = await fetch('/api/whatsapp/send-media', { method: 'POST', body: formData })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error ?? 'Failed to send image')
-      } else {
-        if (!thread) {
-          const { data: th } = await supabase.from('wa_threads').select('*').eq('phone', phone).single()
-          setThread(th ?? null)
-        }
-        setTimeout(() => scrollToBottom(true), 100)
+      try {
+        const res  = await fetch('/api/whatsapp/send-media', { method: 'POST', body: formData })
+        const data = await res.json()
+        if (!res.ok) firstError = firstError ?? (data.error ?? 'Failed to send image')
+      } catch {
+        firstError = firstError ?? 'Network error — please try again'
       }
-    } catch {
-      setError('Network error — please try again')
-    } finally {
-      setSending(false)
-      inputRef.current?.focus()
     }
+
+    if (firstError) setError(firstError)
+    if (!thread) {
+      const { data: th } = await supabase.from('wa_threads').select('*').eq('phone', phone).single()
+      setThread(th ?? null)
+    }
+    setTimeout(() => scrollToBottom(true), 100)
+    setSending(false)
+    inputRef.current?.focus()
   }
 
   // Send message
   async function handleSend() {
-    if (pendingImage) { await handleSendImage(); return }
+    if (pendingImages.length) { await handleSendImages(); return }
 
     const body = text.trim()
     if (!body || sending) return
@@ -594,31 +626,38 @@ export default function ConversationPage({
         ref={fileInputRef}
         type="file"
         accept="image/*"
+        multiple
         className="hidden"
         onChange={handleFileSelect}
       />
 
-      {/* Image preview above send box */}
-      {imagePreview && pendingImage && (
-        <div className="flex-shrink-0 bg-white border-t border-gray-100 px-3 py-2 flex items-center gap-3">
-          <img
-            src={imagePreview}
-            alt="preview"
-            className="w-14 h-14 object-cover rounded-lg border border-gray-200 flex-shrink-0"
-          />
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-gray-700 truncate">{pendingImage.name}</p>
-            <p className="text-xs text-gray-400">{(pendingImage.size / 1024).toFixed(0)} KB</p>
+      {/* Image previews above send box */}
+      {pendingImages.length > 0 && (
+        <div className="flex-shrink-0 bg-white border-t border-gray-100 px-3 py-2">
+          <div className="flex items-center gap-2 overflow-x-auto">
+            {imagePreviews.map((src, i) => (
+              <div key={src} className="relative flex-shrink-0">
+                <img
+                  src={src}
+                  alt={`preview ${i + 1}`}
+                  className="w-16 h-16 object-cover rounded-lg border border-gray-200"
+                />
+                <button
+                  onClick={() => removePendingImage(i)}
+                  className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-gray-700 text-white flex items-center justify-center shadow"
+                  aria-label="Remove image"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ))}
           </div>
-          <button
-            onClick={clearPendingImage}
-            className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 hover:bg-gray-300 transition-colors"
-            aria-label="Remove image"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <p className="text-[11px] text-gray-400 mt-1">
+            {pendingImages.length} photo{pendingImages.length > 1 ? 's' : ''} ready
+            {pendingImages.length > 1 ? ' · caption goes on the first' : ''}
+          </p>
         </div>
       )}
 
@@ -658,7 +697,7 @@ export default function ConversationPage({
           ref={inputRef}
           rows={1}
           className="flex-1 border border-gray-300 rounded-2xl px-3.5 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white"
-          placeholder={pendingImage ? 'Add a caption (optional)…' : 'Type a message…'}
+          placeholder={pendingImages.length ? 'Add a caption (optional)…' : 'Type a message…'}
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -667,7 +706,7 @@ export default function ConversationPage({
         />
         <button
           onClick={handleSend}
-          disabled={(!text.trim() && !pendingImage) || sending}
+          disabled={(!text.trim() && pendingImages.length === 0) || sending}
           className="w-10 h-10 rounded-full bg-green-600 flex items-center justify-center text-white flex-shrink-0 disabled:bg-gray-300 active:bg-green-700 transition-colors"
           aria-label="Send"
         >

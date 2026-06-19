@@ -140,7 +140,7 @@ export async function POST(req: NextRequest) {
 
     await Promise.all([
       supabase.from('wa_messages')
-        .update({ wa_message_id: wamid, status: 'sent' })
+        .update({ wa_message_id: wamid, status: 'sent', sent_at: now })
         .eq('id', message.id),
       supabase.from('wa_threads')
         .update({ last_message_at: now, last_message_preview: messageBody.slice(0, 60), needs_agent: false })
