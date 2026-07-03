@@ -28,6 +28,7 @@ interface CatalogueDoc {
   title: string
   description: string
   category: string
+  barcode: string | null
   design: string | null
   weightG: number | null
   purity: string | null
@@ -47,6 +48,7 @@ function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: 
     title: (p.app_title?.trim() || p.item_name || 'Jewellery').toString(),
     description: (p.app_description?.trim() || p.description || '').toString(),
     category: (p.item_name || '').toString(),
+    barcode: p.barcode ?? null,
     design: p.design ?? null,
     weightG: p.weight ?? null,
     purity: p.purity ?? null,
