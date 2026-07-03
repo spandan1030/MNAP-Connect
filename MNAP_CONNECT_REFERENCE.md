@@ -71,9 +71,9 @@
 A product can be **published to the customer app** (a separate Firebase project,
 `mnap-customer`) from its product page. Toggle **"Show in customer app"** + set a
 **making charge %**; connect then writes a **sanitized** doc (title, description,
-category, weight, purity→karat, makingPercent, **primary photo only**, active) into
-the customer app's `catalogue/{id}` Firestore collection via the Firebase Admin SDK.
-Never sends party/barcode/cost/notes. Price is **not** sent — the customer app computes
+category, barcode, weight, purity→karat, makingPercent, **primary photo only**, active)
+into the customer app's `catalogue/{id}` Firestore collection via the Firebase Admin SDK.
+Never sends party/cost/notes (barcode IS sent — note `catalogue` is public-read). Price is **not** sent — the customer app computes
 it live from its own daily rate. Unmapped purity → still published, `priceHidden:true`
 (app shows "Enquire"). Sold/inactive/unpublished → doc updated/removed automatically.
 
