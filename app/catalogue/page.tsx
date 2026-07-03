@@ -46,6 +46,26 @@ export default function CataloguePage() {
   const [panelOpen, setPanelOpen] = useState(false)
   const [savedNote, setSavedNote] = useState(false)
   const [preview, setPreview]   = useState<WaProduct | null>(null)
+  const [resyncing, setResyncing] = useState(false)
+  const [resyncNote, setResyncNote] = useState<string | null>(null)
+
+  async function resyncApp() {
+    setResyncing(true); setResyncNote(null)
+    try {
+      const res = await fetch('/api/catalogue/publish', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resyncAll: true }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Re-sync failed')
+      setResyncNote(`Re-synced ${data.count} published item${data.count === 1 ? '' : 's'} ✓`)
+    } catch (e) {
+      setResyncNote(e instanceof Error ? e.message : 'Re-sync failed')
+    } finally {
+      setResyncing(false)
+      setTimeout(() => setResyncNote(null), 4000)
+    }
+  }
 
   // Debounced query inputs so typing / dragging the slider doesn't hammer the DB
   const [applied, setApplied] = useState({ status, filters, search })
@@ -168,6 +188,15 @@ export default function CataloguePage() {
             <Link href="/catalogue/values" className="text-xs font-medium text-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg active:bg-gray-50">Values</Link>
             <Link href="/catalogue/new" className="text-xs font-semibold bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg">+ Add</Link>
           </div>
+        </div>
+
+        {/* Re-sync the customer app (safety net; per-product publish is automatic) */}
+        <div className="flex items-center justify-between">
+          <button onClick={resyncApp} disabled={resyncing}
+            className="text-xs font-medium text-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg active:bg-gray-50 disabled:opacity-50">
+            {resyncing ? 'Re-syncing…' : '↻ Re-sync customer app'}
+          </button>
+          {resyncNote && <span className={`text-[11px] ${resyncNote.includes('✓') ? 'text-green-700' : 'text-amber-600'}`}>{resyncNote}</span>}
         </div>
 
         <div className="flex gap-2">

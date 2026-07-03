@@ -65,6 +65,28 @@
 | WhatsApp | `wa.me` deep links | No API — opens WhatsApp Business app |
 | Hosting | Vercel (separate project) | Auto-deploys from its own GitHub repo |
 | Segmentation | Client-side pure function (`lib/segmentation.ts`) | No server required — rules evaluated in browser on profile save |
+| Customer-app link | Firebase Admin SDK (`firebase-admin`) | Mirrors published catalogue products into the **mnap-customer** app's Firestore |
+
+### Customer-app catalogue publishing (link to mnap-customer)
+A product can be **published to the customer app** (a separate Firebase project,
+`mnap-customer`) from its product page. Toggle **"Show in customer app"** + set a
+**making charge %**; connect then writes a **sanitized** doc (title, description,
+category, weight, purity→karat, makingPercent, **primary photo only**, active) into
+the customer app's `catalogue/{id}` Firestore collection via the Firebase Admin SDK.
+Never sends party/barcode/cost/notes. Price is **not** sent — the customer app computes
+it live from its own daily rate. Unmapped purity → still published, `priceHidden:true`
+(app shows "Enquire"). Sold/inactive/unpublished → doc updated/removed automatically.
+
+- Files: `lib/firebase/admin.ts` (Admin init), `lib/catalogue-sync.ts` (`resolveKarat`,
+  `syncProductToApp`, `resyncAllPublished`), `app/api/catalogue/publish/route.ts`
+  (staff-authed POST `{id}` or `{resyncAll:true}`). Publish/re-sync fire automatically
+  on save, sold-toggle, and primary-photo change; catalogue list has a manual
+  **"↻ Re-sync customer app"** button.
+- **Migration:** `supabase/migrations/wa_025_app_publish.sql` adds `show_in_app`,
+  `making_percent`, `app_title`, `app_description`, `app_synced_at` to `wa_products`.
+- **Env (Vercel + `.env.local`):** `FIREBASE_SERVICE_ACCOUNT_KEY` = full JSON of a
+  `mnap-customer` service-account key (Firebase console → Project settings → Service
+  accounts → Generate new private key). Server-only; never exposed to the browser.
 
 ---
 

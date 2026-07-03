@@ -19,6 +19,10 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   const [options, setOptions] = useState<Options>({ item_name: [], design: [], description: [], purity: [], party: [] })
   const [isSold, setIsSold] = useState(false)
   const [needsReview, setNeedsReview] = useState(false)
+  const [showInApp, setShowInApp] = useState(false)
+  const [makingPercent, setMakingPercent] = useState('9') // % of metal; prefilled
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
   const [product, setProduct] = useState<WaProduct | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
   const [planOpen, setPlanOpen] = useState(false)
@@ -45,6 +49,8 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         })
         setIsSold(p.is_sold)
         setNeedsReview(p.needs_review)
+        setShowInApp(Boolean(p.show_in_app))
+        if (p.making_percent != null) setMakingPercent(String(p.making_percent))
       }
       setImages((iRes.data ?? []) as WaProductImage[])
       setLoading(false)
@@ -68,6 +74,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       party:       form.party.trim() || null,
       notes:       form.notes.trim() || null,
       is_active:   form.is_active,
+      making_percent: makingPercent.trim() ? Number(makingPercent) : null,
       updated_at: new Date().toISOString(),
     }).eq('id', id)
     setSaving(false)
@@ -77,12 +84,48 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       { field: 'description', value: form.description }, { field: 'purity', value: form.purity }, { field: 'party', value: form.party },
     ])
     setSaved(true); setTimeout(() => setSaved(false), 2000)
+    // Keep the customer app in sync with the just-saved details (price/making/etc.)
+    if (showInApp) syncToApp()
+  }
+
+  // Push this product's current state to the customer app. `override` lets the
+  // caller force a sync even before React state has updated (e.g. on toggle).
+  async function syncToApp(override?: { show_in_app?: boolean }) {
+    setSyncing(true); setSyncMsg(null)
+    try {
+      const res = await fetch('/api/catalogue/publish', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Sync failed')
+      const on = override?.show_in_app ?? showInApp
+      if (!on) setSyncMsg('Removed from customer app.')
+      else if (data.priceHidden) setSyncMsg('Published — but purity isn’t a known karat, so the app will show “Enquire” instead of a price.')
+      else setSyncMsg('Published to customer app ✓')
+    } catch (err) {
+      setSyncMsg(err instanceof Error ? err.message : 'Sync failed')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // Toggle "show in customer app" — persists immediately, then syncs.
+  async function toggleShowInApp() {
+    const v = !showInApp; setShowInApp(v)
+    await supabase.from('wa_products').update({
+      show_in_app: v,
+      making_percent: makingPercent.trim() ? Number(makingPercent) : null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', id)
+    await syncToApp({ show_in_app: v })
   }
 
   // Status flags update immediately (no Save needed) — quick during a sale / QC
   async function toggleSold() {
     const v = !isSold; setIsSold(v)
     await supabase.from('wa_products').update({ is_sold: v, updated_at: new Date().toISOString() }).eq('id', id)
+    if (showInApp) syncToApp() // sold ⇄ in-stock changes visibility in the app
   }
   async function toggleReview() {
     const v = !needsReview; setNeedsReview(v)
@@ -111,6 +154,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       order++
     }
     setUploading(false)
+    if (showInApp) syncToApp() // first photo may have become primary
   }
 
   async function setPrimary(img: WaProductImage) {
@@ -118,6 +162,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
     await supabase.from('wa_product_images').update({ is_primary: true }).eq('id', img.id)
     setImages(prev => prev.map(i => ({ ...i, is_primary: i.id === img.id }))
       .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || a.sort_order - b.sort_order))
+    if (showInApp) syncToApp() // the app publishes only the primary photo
   }
 
   async function deleteImage(img: WaProductImage) {
@@ -132,6 +177,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       rest[0] = { ...rest[0], is_primary: true }
     }
     setImages(rest)
+    if (showInApp && img.is_primary) syncToApp() // primary photo changed
   }
 
   async function deleteProduct() {
@@ -246,6 +292,32 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
             <input type="checkbox" checked={form.is_active} onChange={e => set('is_active', e.target.checked)} />
             Active (uncheck to hide from the catalogue)
           </label>
+        </div>
+
+        {/* Customer app — publish this product to the customer-facing catalogue */}
+        <div className="card p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-gray-800">Customer app</p>
+              <p className="text-[11px] text-gray-400">Show this product to customers. Only the ★ primary photo is used; price is computed live from the daily rate.</p>
+            </div>
+            <button onClick={toggleShowInApp} disabled={syncing}
+              className={`ml-3 flex h-6 w-11 shrink-0 items-center rounded-full px-0.5 transition-colors disabled:opacity-50 ${showInApp ? 'justify-end bg-green-500' : 'justify-start bg-gray-300'}`}>
+              <span className="h-5 w-5 rounded-full bg-white shadow" />
+            </button>
+          </div>
+          <Field label="Making charge (% of metal)">
+            <input type="number" inputMode="decimal" step="0.1" value={makingPercent}
+              onChange={e => setMakingPercent(e.target.value)} className="input" placeholder="9" />
+          </Field>
+          {images.every(i => !i.is_primary) && images.length > 0 && (
+            <p className="text-[11px] text-amber-600">No primary photo set — pick one above so the app has an image.</p>
+          )}
+          {showInApp && images.length === 0 && (
+            <p className="text-[11px] text-amber-600">This product has no photo — add one so it looks good in the app.</p>
+          )}
+          {syncMsg && <p className={`text-[11px] ${syncMsg.includes('✓') || syncMsg.includes('Removed') ? 'text-green-700' : 'text-amber-600'}`}>{syncMsg}</p>}
+          <p className="text-[11px] text-gray-400">Making %, name, weight, purity and photo re-sync automatically when you save or change stock status.</p>
         </div>
 
         <button onClick={save} disabled={saving} className="btn-primary w-full disabled:opacity-60">

@@ -165,6 +165,12 @@ export interface WaProduct {
   is_active: boolean
   is_sold: boolean
   needs_review: boolean
+  // Customer-app publishing (see wa_025_app_publish.sql)
+  show_in_app?: boolean
+  making_percent?: number | null
+  app_title?: string | null
+  app_description?: string | null
+  app_synced_at?: string | null
   created_by: string | null
   created_at: string
   updated_at: string
