@@ -164,7 +164,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       const { data: row } = await supabase.from('wa_product_images').insert({
         product_id: id, image_url: publicUrl, thumb_url: thumbUrl,
         display_url: displayUrl, display_thumb_url: displayThumbUrl, crop: null,
-        sort_order: order, is_primary: makePrimary,
+        sort_order: order, is_primary: makePrimary, in_app: makePrimary,
       }).select('*').single()
       if (row) setImages(prev => [...prev, row as WaProductImage])
       order++
@@ -213,6 +213,15 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
 
     setImages(prev => prev.map(i => i.id === img.id ? { ...i, display_url: displayUrl, display_thumb_url: displayThumbUrl, crop } : i))
     if (showInApp && img.is_primary) syncToApp() // the app is fed the crop
+  }
+
+  // Publish / unpublish a single photo to the customer-app gallery. The primary is
+  // always sent regardless, so this only adds/removes the extra angles.
+  async function toggleInApp(img: WaProductImage) {
+    const v = !img.in_app
+    setImages(prev => prev.map(i => i.id === img.id ? { ...i, in_app: v } : i))
+    await supabase.from('wa_product_images').update({ in_app: v }).eq('id', img.id)
+    if (showInApp) syncToApp()
   }
 
   async function setPrimary(img: WaProductImage) {
@@ -296,28 +305,36 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
             <>
               <div className="flex flex-wrap gap-3">
                 {images.map(img => (
-                  <div key={img.id} className="relative w-20">
-                    <a href={img.image_url} target="_blank" rel="noopener noreferrer">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={img.display_url ?? img.image_url} alt="" className={`w-20 aspect-[4/5] object-cover rounded-lg border-2 ${img.is_primary ? 'border-green-500' : 'border-gray-200'}`} />
-                    </a>
-                    <button onClick={() => deleteImage(img)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
-                    <button onClick={() => setCropImg(img)}
-                      className="absolute top-1 left-1 text-[9px] font-semibold text-gray-700 bg-white/90 border border-gray-300 px-1.5 py-0.5 rounded-full active:bg-white">
-                      Crop
-                    </button>
-                    {img.is_primary ? (
-                      <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 text-[9px] font-bold text-white bg-green-600 px-1.5 py-0.5 rounded-full whitespace-nowrap">★ Primary</span>
-                    ) : (
-                      <button onClick={() => setPrimary(img)}
-                        className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 text-[9px] font-medium text-gray-600 bg-white border border-gray-300 px-1.5 py-0.5 rounded-full whitespace-nowrap active:bg-gray-50">
-                        Set primary
+                  <div key={img.id} className="w-20">
+                    <div className="relative">
+                      <a href={img.image_url} target="_blank" rel="noopener noreferrer">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={img.display_url ?? img.image_url} alt="" className={`w-20 aspect-[4/5] object-cover rounded-lg border-2 ${img.is_primary ? 'border-green-500' : 'border-gray-200'}`} />
+                      </a>
+                      <button onClick={() => deleteImage(img)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
+                      <button onClick={() => setCropImg(img)}
+                        className="absolute top-1 left-1 text-[9px] font-semibold text-gray-700 bg-white/90 border border-gray-300 px-1.5 py-0.5 rounded-full active:bg-white">
+                        Crop
                       </button>
-                    )}
+                      {img.is_primary ? (
+                        <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 text-[9px] font-bold text-white bg-green-600 px-1.5 py-0.5 rounded-full whitespace-nowrap">★ Primary</span>
+                      ) : (
+                        <button onClick={() => setPrimary(img)}
+                          className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 text-[9px] font-medium text-gray-600 bg-white border border-gray-300 px-1.5 py-0.5 rounded-full whitespace-nowrap active:bg-gray-50">
+                          Set primary
+                        </button>
+                      )}
+                    </div>
+                    <button onClick={() => toggleInApp(img)} disabled={img.is_primary}
+                      className={`mt-2.5 w-full text-[9px] font-semibold px-1 py-1 rounded-lg border whitespace-nowrap disabled:opacity-100 ${
+                        img.in_app ? 'bg-green-50 text-green-700 border-green-200' : 'bg-white text-gray-500 border-gray-300 active:bg-gray-50'
+                      }`}>
+                      {img.in_app ? '✓ In app' : '+ Publish'}
+                    </button>
                   </div>
                 ))}
               </div>
-              <p className="text-[11px] text-gray-400">Shown at 4:5 (what customers see) — tap Crop to reposition the frame. The ★ primary photo is the thumbnail and default share image. Tap a photo to view the original.</p>
+              <p className="text-[11px] text-gray-400">Shown at 4:5 (what customers see) — tap Crop to reposition. ★ Primary is the cover (thumbnail + first photo, always in the app). Tap <b>+ Publish</b> to add more photos to the customer app gallery; tap a photo to view the original.</p>
             </>
           )}
           <div className={`flex gap-2 rounded-xl ${dragOver ? 'ring-2 ring-green-500 ring-offset-2' : ''}`}>
@@ -365,7 +382,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-semibold text-gray-800">Customer app</p>
-              <p className="text-[11px] text-gray-400">Show this product to customers. Only the ★ primary photo is used; price is computed live from the daily rate.</p>
+              <p className="text-[11px] text-gray-400">Show this product to customers. The gallery uses the ★ primary plus any photos marked <b>In app</b> ({images.filter(i => i.in_app || i.is_primary).length} photo{images.filter(i => i.in_app || i.is_primary).length === 1 ? '' : 's'}); price is computed live from the daily rate.</p>
             </div>
             <button onClick={toggleShowInApp} disabled={syncing}
               className={`ml-3 flex h-6 w-11 shrink-0 items-center rounded-full px-0.5 transition-colors disabled:opacity-50 ${showInApp ? 'justify-end bg-green-500' : 'justify-start bg-gray-300'}`}>

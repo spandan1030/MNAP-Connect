@@ -71,8 +71,10 @@
 A product can be **published to the customer app** (a separate Firebase project,
 `mnap-customer`) from its product page. Toggle **"Show in customer app"** + set a
 **making charge %**; connect then writes a **sanitized** doc (title, description,
-category, barcode, weight, purity→karat, makingPercent, **primary photo only (4:5 crop)**, active)
+category, barcode, weight, purity→karat, makingPercent, **published photo gallery (4:5 crops)**, active)
 into the customer app's `catalogue/{id}` Firestore collection via the Firebase Admin SDK.
+The doc carries `image`/`thumb` (the cover) **and** `images: string[]` (the full gallery,
+cover first) — the customer app's `PhotoViewer` swipes through `images`.
 Never sends party/cost/notes (barcode IS sent — note `catalogue` is public-read). Price is **not** sent — the customer app computes
 it live from its own daily rate. Unmapped purity → still published, `priceHidden:true`
 (app shows "Enquire"). Sold/inactive/unpublished → doc updated/removed automatically.
@@ -100,7 +102,17 @@ user pans/zooms (Instagram-style); re-cropping regenerates only the display file
 (original is never touched) and re-syncs if the photo is primary + published.
 - The **customer app is fed the crop**: `catalogue-sync.buildDoc` sends
   `display_url ?? image_url` (and `display_thumb_url ?? thumb_url ?? image_url`).
-  No `mnap-customer` change — it renders whatever URL it receives.
+
+### Multi-photo publishing (gallery)
+A product can publish **several photos** to the customer app, not just the primary.
+Each photo has an **`in_app`** flag (migration `wa_027`); the product page shows a
+per-photo **+ Publish / ✓ In app** toggle. The published gallery = photos where
+`in_app OR is_primary`, **primary first** then `sort_order` (so the primary is always
+included — a published product can never have an empty gallery). `catalogue-sync`
+builds `images: string[]` (each `display_url ?? image_url`) plus the cover
+`image`/`thumb`. The customer app (`mnap-customer`) reads `images` and opens
+`components/PhotoViewer.tsx` (full-screen swipeable gallery) when the product photo is
+tapped; old docs without `images` fall back to `[image]`.
 - Image helpers live in `lib/image.ts`: `centerCrop()`, `renderCrop()`, `CROP_RATIO` (4/5).
 - **Migration:** `supabase/migrations/wa_026_image_crop.sql` adds `display_url`,
   `display_thumb_url`, `crop` to `wa_product_images` (all nullable; legacy rows fall
@@ -665,6 +677,7 @@ https://wa.me/91{phone}?text={url_encoded_message}
 | `supabase/migrations/wa_002_seed_topics.sql` | Default interest topics seed |
 | `supabase/migrations/wa_003_intervention_schema.sql` | Type B tables + RLS |
 | `supabase/migrations/wa_026_image_crop.sql` | 4:5 crop cols on `wa_product_images` (`display_url`, `display_thumb_url`, `crop`) |
+| `supabase/migrations/wa_027_image_in_app.sql` | `in_app` flag on `wa_product_images` for multi-photo publishing (backfills `is_primary`→`in_app`) |
 | `INTERVENTION_STRATEGY.md` | Full business rules, segment definitions, profiling architecture |
 | `INTERVENTION_MODULE_DISCUSSION.md` | Session-by-session decision log |
 

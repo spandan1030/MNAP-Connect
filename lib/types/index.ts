@@ -187,6 +187,7 @@ export interface WaProductImage {
   display_url: string | null       // 4:5-cropped full image fed to the customer app
   display_thumb_url: string | null // 4:5-cropped grid thumbnail
   crop: CropRect | null            // where the 4:5 frame sits on the original
+  in_app: boolean                  // published to the customer-app photo gallery
   sort_order: number
   is_primary: boolean
   created_at: string

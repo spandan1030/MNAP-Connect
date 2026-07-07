@@ -37,13 +37,24 @@ interface CatalogueDoc {
   makingPercent: number | null
   image: string | null
   thumb: string | null
+  images: string[]        // full gallery (primary first) shown in the customer app viewer
   active: boolean
   source: 'connect'
   updatedAt: number
 }
 
-function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: string | null; making_percent?: number | null; show_in_app?: boolean }, primary: WaProductImage | null): CatalogueDoc {
+// The published gallery: photos marked in_app (primary always included), primary
+// first then sort_order, mapped to the 4:5 crop (falling back to the original).
+function publishedImages(imgs: WaProductImage[]): WaProductImage[] {
+  return imgs
+    .filter(i => i.in_app || i.is_primary)
+    .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || a.sort_order - b.sort_order)
+}
+
+function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: string | null; making_percent?: number | null; show_in_app?: boolean }, imgs: WaProductImage[]): CatalogueDoc {
   const karat = resolveKarat(p.purity)
+  const gallery = publishedImages(imgs)
+  const cover = gallery[0] ?? null
   return {
     title: (p.app_title?.trim() || p.item_name || 'Jewellery').toString(),
     description: (p.app_description?.trim() || p.description || '').toString(),
@@ -57,8 +68,9 @@ function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: 
     priceHidden: karat === null,
     makingPercent: p.making_percent ?? null,
     // Feed the 4:5 crop; fall back to the original for photos taken before cropping existed.
-    image: primary?.display_url ?? primary?.image_url ?? null,
-    thumb: primary?.display_thumb_url ?? primary?.thumb_url ?? primary?.image_url ?? null,
+    image: cover?.display_url ?? cover?.image_url ?? null,
+    thumb: cover?.display_thumb_url ?? cover?.thumb_url ?? cover?.image_url ?? null,
+    images: gallery.map(i => i.display_url ?? i.image_url).filter(Boolean) as string[],
     // Shown to customers only while published, active and not sold.
     active: Boolean(p.show_in_app) && p.is_active && !p.is_sold,
     source: 'connect',
@@ -78,9 +90,7 @@ export async function syncProductToApp(productId: string): Promise<{ action: 'up
     supabaseAdmin
       .from('wa_product_images')
       .select('*')
-      .eq('product_id', productId)
-      .eq('is_primary', true)
-      .limit(1),
+      .eq('product_id', productId),
   ])
   if (pErr || !product) throw new Error(pErr?.message || 'Product not found')
 
@@ -92,8 +102,7 @@ export async function syncProductToApp(productId: string): Promise<{ action: 'up
     return { action: 'removed' }
   }
 
-  const primary = ((imgs as WaProductImage[] | null) ?? [])[0] ?? null
-  const doc = buildDoc(p, primary)
+  const doc = buildDoc(p, (imgs as WaProductImage[] | null) ?? [])
   await ref.set(doc, { merge: true })
   // Stamp the sync time on the source row (best-effort).
   await supabaseAdmin
