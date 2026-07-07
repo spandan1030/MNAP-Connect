@@ -71,7 +71,7 @@
 A product can be **published to the customer app** (a separate Firebase project,
 `mnap-customer`) from its product page. Toggle **"Show in customer app"** + set a
 **making charge %**; connect then writes a **sanitized** doc (title, description,
-category, barcode, weight, purity→karat, makingPercent, **primary photo only**, active)
+category, barcode, weight, purity→karat, makingPercent, **primary photo only (4:5 crop)**, active)
 into the customer app's `catalogue/{id}` Firestore collection via the Firebase Admin SDK.
 Never sends party/cost/notes (barcode IS sent — note `catalogue` is public-read). Price is **not** sent — the customer app computes
 it live from its own daily rate. Unmapped purity → still published, `priceHidden:true`
@@ -84,6 +84,27 @@ it live from its own daily rate. Unmapped purity → still published, `priceHidd
   **"↻ Re-sync customer app"** button.
 - **Migration:** `supabase/migrations/wa_025_app_publish.sql` adds `show_in_app`,
   `making_percent`, `app_title`, `app_description`, `app_synced_at` to `wa_products`.
+
+### Product images — upload + fixed 4:5 crop
+Photos are added on `/catalogue/new` and `/catalogue/[id]` via 📷 camera, 🖼 gallery,
+**drag-and-drop**, or **paste (Ctrl/⌘+V)** — the last two are laptop conveniences
+(document-level paste listener + a drop target on the Photos card).
+
+Every product photo is presented at **4:5 (portrait)**. The **original upload is kept
+untouched** (`wa_product_images.image_url` / `thumb_url`); a derived **4:5 crop** is
+stored alongside it (`display_url` / `display_thumb_url`) plus the normalized crop rect
+(`crop` JSONB, `{x,y,w,h}` in 0..1). On upload a **centred** 4:5 crop is generated
+automatically, so every photo has a valid display image even if never manually cropped.
+The **Crop** button opens `components/catalogue/ImageCropper.tsx` — a fixed 4:5 frame the
+user pans/zooms (Instagram-style); re-cropping regenerates only the display files
+(original is never touched) and re-syncs if the photo is primary + published.
+- The **customer app is fed the crop**: `catalogue-sync.buildDoc` sends
+  `display_url ?? image_url` (and `display_thumb_url ?? thumb_url ?? image_url`).
+  No `mnap-customer` change — it renders whatever URL it receives.
+- Image helpers live in `lib/image.ts`: `centerCrop()`, `renderCrop()`, `CROP_RATIO` (4/5).
+- **Migration:** `supabase/migrations/wa_026_image_crop.sql` adds `display_url`,
+  `display_thumb_url`, `crop` to `wa_product_images` (all nullable; legacy rows fall
+  back to `image_url`, shown inside a 4:5 CSS box).
 - **Env (Vercel + `.env.local`):** `FIREBASE_SERVICE_ACCOUNT_KEY` = full JSON of a
   `mnap-customer` service-account key (Firebase console → Project settings → Service
   accounts → Generate new private key). Server-only; never exposed to the browser.
@@ -643,6 +664,7 @@ https://wa.me/91{phone}?text={url_encoded_message}
 | `supabase/migrations/wa_001_initial_schema.sql` | Type A tables + RLS |
 | `supabase/migrations/wa_002_seed_topics.sql` | Default interest topics seed |
 | `supabase/migrations/wa_003_intervention_schema.sql` | Type B tables + RLS |
+| `supabase/migrations/wa_026_image_crop.sql` | 4:5 crop cols on `wa_product_images` (`display_url`, `display_thumb_url`, `crop`) |
 | `INTERVENTION_STRATEGY.md` | Full business rules, segment definitions, profiling architecture |
 | `INTERVENTION_MODULE_DISCUSSION.md` | Session-by-session decision log |
 

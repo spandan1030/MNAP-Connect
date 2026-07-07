@@ -51,7 +51,7 @@ export default function PreviewModal({ product, onClose }: { product: WaProduct;
                 <a key={img.id} href={img.image_url} target="_blank" rel="noopener noreferrer"
                   className="snap-center flex-shrink-0 w-full">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={img.image_url} alt="" className="w-full max-h-[55vh] object-contain bg-gray-900" />
+                  <img src={img.display_url ?? img.image_url} alt="" className="w-full max-h-[55vh] object-contain bg-gray-900" />
                 </a>
               ))}
             </div>

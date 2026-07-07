@@ -113,10 +113,10 @@ export default function CataloguePage() {
     if (rows.length) {
       const ids = rows.map(r => r.id)
       const { data: imgs } = await supabase.from('wa_product_images')
-        .select('product_id, image_url, thumb_url').eq('is_primary', true).in('product_id', ids)
+        .select('product_id, image_url, thumb_url, display_url, display_thumb_url').eq('is_primary', true).in('product_id', ids)
       setThumbs(prev => {
         const m = reset ? {} : { ...prev }
-        for (const i of (imgs ?? [])) m[i.product_id] = i.thumb_url ?? i.image_url
+        for (const i of (imgs ?? [])) m[i.product_id] = i.display_thumb_url ?? i.display_url ?? i.thumb_url ?? i.image_url
         return m
       })
     } else if (reset) {
@@ -254,7 +254,7 @@ export default function CataloguePage() {
             <div className="grid grid-cols-2 gap-3">
               {products.map(p => (
                 <Link key={p.id} href={`/catalogue/${p.id}`} className="card overflow-hidden active:bg-gray-50">
-                  <div className="relative aspect-square bg-gray-100 flex items-center justify-center">
+                  <div className="relative aspect-[4/5] bg-gray-100 flex items-center justify-center">
                     {thumbs[p.id] ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={thumbs[p.id]} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />

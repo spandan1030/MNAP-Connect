@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { compressWithThumb } from '@/lib/image'
+import { compressWithThumb, renderCrop, type CropRect } from '@/lib/image'
 import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
+import ImageCropper from '@/components/catalogue/ImageCropper'
 
 export default function NewProductPage() {
   const supabase = createClient()
@@ -17,22 +18,46 @@ export default function NewProductPage() {
   useEffect(() => { fetchCatalogueOptions().then(setOptions) }, [])
   const [files, setFiles]     = useState<File[]>([])
   const [previews, setPreviews] = useState<string[]>([])
+  const [crops, setCrops]     = useState<(CropRect | null)[]>([]) // 4:5 crop per file (null = auto-centre)
+  const [cropIdx, setCropIdx] = useState<number | null>(null)     // photo currently being cropped
+  const [dragOver, setDragOver] = useState(false)
   const [saving, setSaving]   = useState(false)
   const [error, setError]     = useState<string | null>(null)
 
   function set(k: keyof typeof form, v: string) { setForm(f => ({ ...f, [k]: v })) }
 
-  function addFiles(list: FileList) {
+  function addFiles(list: FileList | File[]) {
     const imgs = Array.from(list).filter(f => f.type.startsWith('image/') && f.size <= 30 * 1024 * 1024)
     if (imgs.length === 0) { setError('That file is not a supported image (or is over 30 MB).'); return }
     setFiles(prev => [...prev, ...imgs])
     setPreviews(prev => [...prev, ...imgs.map(f => URL.createObjectURL(f))])
+    setCrops(prev => [...prev, ...imgs.map(() => null)])
   }
   function removeFile(i: number) {
     URL.revokeObjectURL(previews[i])
     setFiles(prev => prev.filter((_, idx) => idx !== i))
     setPreviews(prev => prev.filter((_, idx) => idx !== i))
+    setCrops(prev => prev.filter((_, idx) => idx !== i))
   }
+
+  // Drag-drop onto the Photos card, and paste (Ctrl/⌘+V) anywhere on the page —
+  // handy on a laptop where camera/gallery pickers are awkward.
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault(); setDragOver(false)
+    if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files)
+  }
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const imgs = Array.from(e.clipboardData?.items ?? [])
+        .filter(it => it.kind === 'file' && it.type.startsWith('image/'))
+        .map(it => it.getAsFile())
+        .filter((f): f is File => !!f)
+      if (imgs.length) { e.preventDefault(); addFiles(imgs) }
+    }
+    document.addEventListener('paste', onPaste)
+    return () => document.removeEventListener('paste', onPaste)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function save() {
     if (!form.item_name.trim() && !form.barcode.trim() && files.length === 0) {
@@ -71,7 +96,8 @@ export default function NewProductPage() {
       { field: 'party',       value: form.party },
     ])
 
-    // Upload photos under this product (full + small thumbnail, compressed client-side)
+    // Upload photos under this product. We keep the original (full + thumb) AND a
+    // 4:5-cropped display image (full + thumb) that the customer app is fed.
     let uploadFailed = false
     for (let i = 0; i < files.length; i++) {
       const { full, thumb } = await compressWithThumb(files[i])
@@ -84,7 +110,19 @@ export default function NewProductPage() {
         const { data: tup } = await supabase.storage.from('wa-media').upload(`${base}-thumb.jpg`, thumb, { upsert: false, contentType: 'image/jpeg' })
         if (tup) thumbUrl = supabase.storage.from('wa-media').getPublicUrl(tup.path).data.publicUrl
       }
-      await supabase.from('wa_product_images').insert({ product_id: product.id, image_url: publicUrl, thumb_url: thumbUrl, sort_order: i })
+      // 4:5 crop (uses the chosen frame, or a centred default) for the customer app
+      let displayUrl: string | null = null, displayThumbUrl: string | null = null
+      const cropped = await renderCrop(files[i], crops[i])
+      if (cropped) {
+        const { data: cup } = await supabase.storage.from('wa-media').upload(`${base}-4x5.jpg`, cropped.display, { upsert: false, contentType: 'image/jpeg' })
+        if (cup) displayUrl = supabase.storage.from('wa-media').getPublicUrl(cup.path).data.publicUrl
+        const { data: ctup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-thumb.jpg`, cropped.thumb, { upsert: false, contentType: 'image/jpeg' })
+        if (ctup) displayThumbUrl = supabase.storage.from('wa-media').getPublicUrl(ctup.path).data.publicUrl
+      }
+      await supabase.from('wa_product_images').insert({
+        product_id: product.id, image_url: publicUrl, thumb_url: thumbUrl,
+        display_url: displayUrl, display_thumb_url: displayThumbUrl, crop: crops[i], sort_order: i,
+      })
     }
 
     if (uploadFailed) {
@@ -108,20 +146,27 @@ export default function NewProductPage() {
         {error && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
 
         {/* Photos */}
-        <div className="card p-4 space-y-3">
+        <div className="card p-4 space-y-3"
+          onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}>
           <p className="text-sm font-semibold text-gray-800">Photos</p>
           {previews.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {previews.map((src, i) => (
-                <div key={i} className="relative">
+                <div key={i} className="relative w-16">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={src} alt="" className="w-16 h-16 object-cover rounded-lg border border-gray-200" />
+                  <img src={src} alt="" className="w-16 aspect-[4/5] object-cover rounded-lg border border-gray-200" />
                   <button onClick={() => removeFile(i)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
+                  <button onClick={() => setCropIdx(i)}
+                    className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[9px] font-semibold text-gray-700 bg-white/90 border border-gray-300 px-1.5 py-0.5 rounded-full whitespace-nowrap active:bg-white">
+                    {crops[i] ? '✓ Cropped' : 'Crop'}
+                  </button>
                 </div>
               ))}
             </div>
           )}
-          <div className="flex gap-2">
+          <div className={`flex gap-2 rounded-xl ${dragOver ? 'ring-2 ring-green-500 ring-offset-2' : ''}`}>
             <label className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 cursor-pointer active:bg-gray-50">
               📷 Take photo
               <input type="file" accept="image/*" capture="environment" className="hidden"
@@ -133,7 +178,7 @@ export default function NewProductPage() {
                 onChange={e => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
             </label>
           </div>
-          <p className="text-xs text-gray-400">You can add more photos later too.</p>
+          <p className="text-xs text-gray-400">Drag &amp; drop a file or paste (Ctrl/⌘+V) an image here. Photos show at 4:5 — tap Crop to reposition. You can add more later too.</p>
         </div>
 
         {/* Details */}
@@ -165,6 +210,15 @@ export default function NewProductPage() {
           {saving ? 'Saving…' : 'Save product'}
         </button>
       </main>
+
+      {cropIdx !== null && files[cropIdx] && (
+        <ImageCropper
+          source={files[cropIdx]}
+          initial={crops[cropIdx]}
+          onCancel={() => setCropIdx(null)}
+          onConfirm={crop => { setCrops(prev => prev.map((c, idx) => idx === cropIdx ? crop : c)); setCropIdx(null) }}
+        />
+      )}
     </div>
   )
 }

@@ -176,11 +176,17 @@ export interface WaProduct {
   updated_at: string
 }
 
+// Normalized crop rectangle (0..1) of the 4:5 region taken from the original image.
+export interface CropRect { x: number; y: number; w: number; h: number }
+
 export interface WaProductImage {
   id: string
   product_id: string
-  image_url: string
-  thumb_url: string | null
+  image_url: string          // original upload (any aspect ratio) — never altered
+  thumb_url: string | null   // thumbnail of the original
+  display_url: string | null       // 4:5-cropped full image fed to the customer app
+  display_thumb_url: string | null // 4:5-cropped grid thumbnail
+  crop: CropRect | null            // where the 4:5 frame sits on the original
   sort_order: number
   is_primary: boolean
   created_at: string

@@ -3,11 +3,12 @@
 import { use, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { compressWithThumb } from '@/lib/image'
+import { compressWithThumb, renderCrop, type CropRect } from '@/lib/image'
 import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
 import ShareSheet from '@/components/catalogue/ShareSheet'
 import AddToPlanSheet from '@/components/catalogue/AddToPlanSheet'
+import ImageCropper from '@/components/catalogue/ImageCropper'
 import type { WaProduct, WaProductImage } from '@/lib/types'
 
 export default function ProductPage({ params }: { params: Promise<{ id: string }> }) {
@@ -33,6 +34,8 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   const [uploading, setUploading] = useState(false)
   const [error, setError]     = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const [cropImg, setCropImg] = useState<WaProductImage | null>(null) // existing photo being re-cropped
 
   useEffect(() => {
     async function load() {
@@ -132,7 +135,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
     await supabase.from('wa_products').update({ needs_review: v }).eq('id', id)
   }
 
-  async function addPhotos(list: FileList) {
+  async function addPhotos(list: FileList | File[]) {
     setUploading(true); setError(null)
     const imgs = Array.from(list).filter(f => f.type.startsWith('image/') && f.size <= 30 * 1024 * 1024)
     let order = images.length
@@ -147,14 +150,69 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         const { data: tup } = await supabase.storage.from('wa-media').upload(`${base}-thumb.jpg`, thumb, { upsert: false, contentType: 'image/jpeg' })
         if (tup) thumbUrl = supabase.storage.from('wa-media').getPublicUrl(tup.path).data.publicUrl
       }
+      // 4:5 crop (centred by default) for the customer app
+      let displayUrl: string | null = null, displayThumbUrl: string | null = null
+      const cropped = await renderCrop(raw)
+      if (cropped) {
+        const { data: cup } = await supabase.storage.from('wa-media').upload(`${base}-4x5.jpg`, cropped.display, { upsert: false, contentType: 'image/jpeg' })
+        if (cup) displayUrl = supabase.storage.from('wa-media').getPublicUrl(cup.path).data.publicUrl
+        const { data: ctup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-thumb.jpg`, cropped.thumb, { upsert: false, contentType: 'image/jpeg' })
+        if (ctup) displayThumbUrl = supabase.storage.from('wa-media').getPublicUrl(ctup.path).data.publicUrl
+      }
       // first ever photo becomes the primary automatically
       const makePrimary = images.length === 0 && order === 0
-      const { data: row } = await supabase.from('wa_product_images').insert({ product_id: id, image_url: publicUrl, thumb_url: thumbUrl, sort_order: order, is_primary: makePrimary }).select('*').single()
+      const { data: row } = await supabase.from('wa_product_images').insert({
+        product_id: id, image_url: publicUrl, thumb_url: thumbUrl,
+        display_url: displayUrl, display_thumb_url: displayThumbUrl, crop: null,
+        sort_order: order, is_primary: makePrimary,
+      }).select('*').single()
       if (row) setImages(prev => [...prev, row as WaProductImage])
       order++
     }
     setUploading(false)
     if (showInApp) syncToApp() // first photo may have become primary
+  }
+
+  // Drag-drop onto the Photos card + paste (Ctrl/⌘+V) — laptop convenience.
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault(); setDragOver(false)
+    if (e.dataTransfer.files?.length) addPhotos(e.dataTransfer.files)
+  }
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const imgs = Array.from(e.clipboardData?.items ?? [])
+        .filter(it => it.kind === 'file' && it.type.startsWith('image/'))
+        .map(it => it.getAsFile())
+        .filter((f): f is File => !!f)
+      if (imgs.length) { e.preventDefault(); addPhotos(imgs) }
+    }
+    document.addEventListener('paste', onPaste)
+    return () => document.removeEventListener('paste', onPaste)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [images.length])
+
+  // Re-crop an existing photo: regenerate the 4:5 display from the original, swap
+  // in the new files (deleting the old display files), and re-sync if it's live.
+  async function applyCrop(img: WaProductImage, crop: CropRect, decoded: HTMLImageElement) {
+    setError(null)
+    const cropped = await renderCrop(decoded, crop)
+    if (!cropped) { setError('Could not crop this image.'); return }
+    const base = `products/${id}/${Date.now()}-crop`
+    const { data: cup, error: cErr } = await supabase.storage.from('wa-media').upload(`${base}-4x5.jpg`, cropped.display, { upsert: false, contentType: 'image/jpeg' })
+    if (cErr || !cup) { setError(`Crop upload failed: ${cErr?.message ?? 'unknown error'}`); return }
+    const displayUrl = supabase.storage.from('wa-media').getPublicUrl(cup.path).data.publicUrl
+    let displayThumbUrl: string | null = null
+    const { data: ctup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-thumb.jpg`, cropped.thumb, { upsert: false, contentType: 'image/jpeg' })
+    if (ctup) displayThumbUrl = supabase.storage.from('wa-media').getPublicUrl(ctup.path).data.publicUrl
+
+    await supabase.from('wa_product_images').update({ display_url: displayUrl, display_thumb_url: displayThumbUrl, crop }).eq('id', img.id)
+    // remove the superseded display files (keep the original intact)
+    const stale = [img.display_url, img.display_thumb_url]
+      .map(u => u?.split('/wa-media/')[1]).filter(Boolean) as string[]
+    if (stale.length) await supabase.storage.from('wa-media').remove(stale)
+
+    setImages(prev => prev.map(i => i.id === img.id ? { ...i, display_url: displayUrl, display_thumb_url: displayThumbUrl, crop } : i))
+    if (showInApp && img.is_primary) syncToApp() // the app is fed the crop
   }
 
   async function setPrimary(img: WaProductImage) {
@@ -167,7 +225,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
 
   async function deleteImage(img: WaProductImage) {
     await supabase.from('wa_product_images').delete().eq('id', img.id)
-    const paths = [img.image_url, img.thumb_url]
+    const paths = [img.image_url, img.thumb_url, img.display_url, img.display_thumb_url]
       .map(u => u?.split('/wa-media/')[1]).filter(Boolean) as string[]
     if (paths.length) await supabase.storage.from('wa-media').remove(paths)
     const rest = images.filter(i => i.id !== img.id)
@@ -229,18 +287,25 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         </div>
 
         {/* Photos */}
-        <div className="card p-4 space-y-3">
+        <div className="card p-4 space-y-3"
+          onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}>
           <p className="text-sm font-semibold text-gray-800">Photos</p>
           {images.length > 0 && (
             <>
               <div className="flex flex-wrap gap-3">
                 {images.map(img => (
-                  <div key={img.id} className="relative">
+                  <div key={img.id} className="relative w-20">
                     <a href={img.image_url} target="_blank" rel="noopener noreferrer">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={img.image_url} alt="" className={`w-20 h-20 object-cover rounded-lg border-2 ${img.is_primary ? 'border-green-500' : 'border-gray-200'}`} />
+                      <img src={img.display_url ?? img.image_url} alt="" className={`w-20 aspect-[4/5] object-cover rounded-lg border-2 ${img.is_primary ? 'border-green-500' : 'border-gray-200'}`} />
                     </a>
                     <button onClick={() => deleteImage(img)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
+                    <button onClick={() => setCropImg(img)}
+                      className="absolute top-1 left-1 text-[9px] font-semibold text-gray-700 bg-white/90 border border-gray-300 px-1.5 py-0.5 rounded-full active:bg-white">
+                      Crop
+                    </button>
                     {img.is_primary ? (
                       <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 text-[9px] font-bold text-white bg-green-600 px-1.5 py-0.5 rounded-full whitespace-nowrap">★ Primary</span>
                     ) : (
@@ -252,10 +317,10 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
                   </div>
                 ))}
               </div>
-              <p className="text-[11px] text-gray-400">The ★ primary photo is the thumbnail and the default image when sharing.</p>
+              <p className="text-[11px] text-gray-400">Shown at 4:5 (what customers see) — tap Crop to reposition the frame. The ★ primary photo is the thumbnail and default share image. Tap a photo to view the original.</p>
             </>
           )}
-          <div className="flex gap-2">
+          <div className={`flex gap-2 rounded-xl ${dragOver ? 'ring-2 ring-green-500 ring-offset-2' : ''}`}>
             <label className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 cursor-pointer active:bg-gray-50 ${uploading ? 'opacity-50' : ''}`}>
               {uploading ? 'Uploading…' : '📷 Take photo'}
               <input type="file" accept="image/*" capture="environment" className="hidden" disabled={uploading}
@@ -267,6 +332,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
                 onChange={e => { if (e.target.files) addPhotos(e.target.files); e.target.value = '' }} />
             </label>
           </div>
+          <p className="text-xs text-gray-400">Drag &amp; drop a file or paste (Ctrl/⌘+V) an image here.</p>
         </div>
 
         {/* Details */}
@@ -349,6 +415,15 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         <AddToPlanSheet
           product={{ ...product, item_name: form.item_name, design: form.design, description: form.description, purity: form.purity, weight: form.weight ? Number(form.weight) : null }}
           onClose={() => setPlanOpen(false)}
+        />
+      )}
+
+      {cropImg && (
+        <ImageCropper
+          source={cropImg.image_url}
+          initial={cropImg.crop}
+          onCancel={() => setCropImg(null)}
+          onConfirm={(crop, decoded) => { const target = cropImg; setCropImg(null); applyCrop(target, crop, decoded) }}
         />
       )}
     </div>

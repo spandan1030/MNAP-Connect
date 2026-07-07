@@ -56,8 +56,9 @@ function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: 
     // Unmapped purity → we still publish, but the app shows "Enquire" instead of a price.
     priceHidden: karat === null,
     makingPercent: p.making_percent ?? null,
-    image: primary?.image_url ?? null,
-    thumb: primary?.thumb_url ?? primary?.image_url ?? null,
+    // Feed the 4:5 crop; fall back to the original for photos taken before cropping existed.
+    image: primary?.display_url ?? primary?.image_url ?? null,
+    thumb: primary?.display_thumb_url ?? primary?.thumb_url ?? primary?.image_url ?? null,
     // Shown to customers only while published, active and not sold.
     active: Boolean(p.show_in_app) && p.is_active && !p.is_sold,
     source: 'connect',

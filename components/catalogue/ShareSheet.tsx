@@ -31,7 +31,7 @@ export default function ShareSheet({
       .filter(Boolean)
     return bits.join(' · ')
   }, [product])
-  const [imageUrl, setImageUrl] = useState<string>(images[0]?.image_url ?? '')
+  const [imageUrl, setImageUrl] = useState<string>(images[0]?.display_url ?? images[0]?.image_url ?? '')
   const [caption, setCaption]   = useState('')
   const [sending, setSending]   = useState(false)
   const [error, setError]       = useState<string | null>(null)
@@ -148,15 +148,18 @@ export default function ShareSheet({
                   <div>
                     <p className="text-xs font-medium text-gray-600 mb-1.5">Photo</p>
                     <div className="flex flex-wrap gap-2">
-                      {images.map(img => (
-                        <button key={img.id} onClick={() => setImageUrl(img.image_url)}
-                          className={`w-16 h-16 rounded-lg overflow-hidden border-2 ${imageUrl === img.image_url ? 'border-green-600' : 'border-transparent'}`}>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={img.image_url} alt="" className="w-full h-full object-cover" />
-                        </button>
-                      ))}
+                      {images.map(img => {
+                        const url = img.display_url ?? img.image_url
+                        return (
+                          <button key={img.id} onClick={() => setImageUrl(url)}
+                            className={`w-16 rounded-lg overflow-hidden border-2 ${imageUrl === url ? 'border-green-600' : 'border-transparent'}`}>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={url} alt="" className="w-16 aspect-[4/5] object-cover" />
+                          </button>
+                        )
+                      })}
                       <button onClick={() => setImageUrl('')}
-                        className={`w-16 h-16 rounded-lg border-2 text-[10px] font-medium ${imageUrl === '' ? 'border-green-600 text-green-700' : 'border-gray-300 text-gray-500'}`}>
+                        className={`w-16 aspect-[4/5] rounded-lg border-2 text-[10px] font-medium ${imageUrl === '' ? 'border-green-600 text-green-700' : 'border-gray-300 text-gray-500'}`}>
                         No photo
                       </button>
                     </div>

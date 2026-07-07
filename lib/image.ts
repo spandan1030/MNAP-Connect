@@ -63,3 +63,65 @@ export async function compressWithThumb(file: File): Promise<{ full: File; thumb
     return { full: file, thumb: null }
   }
 }
+
+// ---- 4:5 crop (customer-app display) --------------------------------------
+// Product photos are shown to customers at a fixed 4:5 portrait. We keep the
+// original upload and derive a cropped 4:5 image (full + thumb) from it. The
+// crop rect is stored normalized (0..1) so the cropper can reopen in place.
+
+export type CropRect = { x: number; y: number; w: number; h: number }
+
+export const CROP_RATIO = 4 / 5      // width / height (portrait)
+const CROP_W = 1280                  // cropped full image, px
+const CROP_H = 1600                  // = CROP_W / CROP_RATIO
+const CROP_THUMB_W = 320             // cropped grid thumbnail, px
+const CROP_THUMB_H = 400
+const CROP_QUALITY = 0.85
+const CROP_THUMB_QUALITY = 0.72
+
+// The largest centered 4:5 rectangle that fits an imgW×imgH image, normalized.
+export function centerCrop(imgW: number, imgH: number): CropRect {
+  if (imgW <= 0 || imgH <= 0) return { x: 0, y: 0, w: 1, h: 1 }
+  const imgRatio = imgW / imgH
+  if (imgRatio > CROP_RATIO) {
+    // too wide → full height, crop the sides
+    const w = (CROP_RATIO * imgH) / imgW
+    return { x: (1 - w) / 2, y: 0, w, h: 1 }
+  }
+  // too tall (or exact) → full width, crop top/bottom
+  const h = (imgW / CROP_RATIO) / imgH
+  return { x: 0, y: (1 - h) / 2, w: 1, h }
+}
+
+async function drawCrop(img: HTMLImageElement, crop: CropRect, outW: number, outH: number, quality: number, name: string): Promise<File | null> {
+  const sx = crop.x * img.width
+  const sy = crop.y * img.height
+  const sw = crop.w * img.width
+  const sh = crop.h * img.height
+  const canvas = document.createElement('canvas')
+  canvas.width = outW
+  canvas.height = outH
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, outW, outH)
+  const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', quality))
+  if (!blob) return null
+  return new File([blob], `${name}.jpg`, { type: 'image/jpeg' })
+}
+
+// Render the 4:5 crop of a source (File or already-decoded image) into a full
+// display image + a small thumbnail. When `crop` is omitted the largest centered
+// 4:5 region is used. Returns null if the source can't be decoded.
+export async function renderCrop(source: File | HTMLImageElement, crop?: CropRect | null): Promise<{ display: File; thumb: File } | null> {
+  try {
+    const img = source instanceof HTMLImageElement ? source : await loadImage(source)
+    const base = source instanceof HTMLImageElement ? 'photo' : (source.name.replace(/\.[^.]+$/, '') || 'photo')
+    const rect = crop ?? centerCrop(img.width, img.height)
+    const display = await drawCrop(img, rect, CROP_W, CROP_H, CROP_QUALITY, `${base}-4x5`)
+    const thumb = await drawCrop(img, rect, CROP_THUMB_W, CROP_THUMB_H, CROP_THUMB_QUALITY, `${base}-4x5-thumb`)
+    if (!display || !thumb) return null
+    return { display, thumb }
+  } catch {
+    return null
+  }
+}
