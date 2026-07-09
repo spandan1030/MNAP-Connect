@@ -351,29 +351,35 @@ export default function CataloguePage() {
   )
 }
 
-// Multi-value picker: selected values show as removable chips; the dropdown adds
-// one more from the remaining options (native select scrolls well on mobile for
-// long option lists). Empty selection ⇒ no filter on this field.
+// Multi-value picker: a scrollable CHECKBOX list — tap any number of options to
+// toggle them (no native dropdown). Empty selection ⇒ no filter on this field.
 function MultiSelect({ label, value, opts, onChange }: { label: string; value: string[]; opts: string[]; onChange: (v: string[]) => void }) {
-  const remaining = opts.filter(o => !value.includes(o))
+  function toggle(o: string) {
+    onChange(value.includes(o) ? value.filter(x => x !== o) : [...value, o])
+  }
   return (
     <div>
-      <label className="text-xs font-medium text-gray-600">{label}</label>
-      {value.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-1">
-          {value.map(v => (
-            <button key={v} onClick={() => onChange(value.filter(x => x !== v))}
-              className="flex items-center gap-1 text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-1 rounded-full active:bg-green-100">
-              {v} <span className="text-green-500">×</span>
-            </button>
-          ))}
-        </div>
-      )}
-      <select value="" onChange={e => { if (e.target.value) onChange([...value, e.target.value]) }}
-        disabled={remaining.length === 0} className="input mt-1 disabled:opacity-50">
-        <option value="">{value.length ? (remaining.length ? 'Add another…' : 'All selected') : 'Any'}</option>
-        {remaining.map(o => <option key={o} value={o}>{o}</option>)}
-      </select>
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-medium text-gray-600">
+          {label}{value.length > 0 && <span className="ml-1 text-green-600">({value.length})</span>}
+        </label>
+        {value.length > 0 && (
+          <button onClick={() => onChange([])} className="text-[11px] text-gray-400 active:text-gray-600">Clear</button>
+        )}
+      </div>
+      <div className="mt-1 max-h-40 overflow-y-auto rounded-xl border border-gray-300 divide-y divide-gray-100">
+        {opts.length === 0 ? (
+          <p className="px-3 py-2 text-xs text-gray-400">No options yet</p>
+        ) : opts.map(o => {
+          const on = value.includes(o)
+          return (
+            <label key={o} className="flex items-center gap-2.5 px-3 py-2 text-sm cursor-pointer active:bg-gray-50">
+              <input type="checkbox" checked={on} onChange={() => toggle(o)} className="w-4 h-4 accent-green-600 flex-shrink-0" />
+              <span className={`truncate ${on ? 'text-gray-900 font-medium' : 'text-gray-600'}`}>{o}</span>
+            </label>
+          )
+        })}
+      </div>
     </div>
   )
 }
