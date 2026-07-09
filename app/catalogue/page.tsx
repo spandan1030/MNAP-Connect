@@ -10,24 +10,45 @@ import type { WaProduct } from '@/lib/types'
 
 type Status = 'all' | 'instock' | 'sold' | 'review'
 
+type Published = 'all' | 'yes' | 'no'
+
 interface Filters {
-  item_name: string
-  design: string
-  description: string
-  purity: string
-  party: string
+  item_name: string[]
+  design: string[]
+  description: string[]
+  purity: string[]
+  party: string[]
   wMin: number | null
   wMax: number | null
+  published: Published
 }
 
-const EMPTY_FILTERS: Filters = { item_name: '', design: '', description: '', purity: '', party: '', wMin: null, wMax: null }
-const DEFAULT_FILTERS: Filters = { ...EMPTY_FILTERS, purity: '22K' }
+const EMPTY_FILTERS: Filters = { item_name: [], design: [], description: [], purity: [], party: [], wMin: null, wMax: null, published: 'all' }
+const DEFAULT_FILTERS: Filters = { ...EMPTY_FILTERS, purity: ['22K'] }
 const STORAGE_KEY = 'mnap_catalogue_filters'
 const PAGE_SIZE = 48
 
+// Coerce a stored filter blob into the current shape. Earlier versions saved each
+// text filter as a single string; wrap those into arrays so old saves still load.
+function normalizeFilters(raw: Record<string, unknown>): Filters {
+  const arr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string')
+    : typeof v === 'string' && v ? [v] : []
+  return {
+    item_name: arr(raw.item_name),
+    design: arr(raw.design),
+    description: arr(raw.description),
+    purity: arr(raw.purity),
+    party: arr(raw.party),
+    wMin: typeof raw.wMin === 'number' ? raw.wMin : null,
+    wMax: typeof raw.wMax === 'number' ? raw.wMax : null,
+    published: raw.published === 'yes' || raw.published === 'no' ? raw.published : 'all',
+  }
+}
+
 function initialFilters(): Filters {
   if (typeof window !== 'undefined') {
-    try { const raw = window.localStorage.getItem(STORAGE_KEY); if (raw) return { ...EMPTY_FILTERS, ...JSON.parse(raw) } } catch { /* ignore */ }
+    try { const raw = window.localStorage.getItem(STORAGE_KEY); if (raw) return normalizeFilters(JSON.parse(raw)) } catch { /* ignore */ }
   }
   return DEFAULT_FILTERS
 }
@@ -95,13 +116,15 @@ export default function CataloguePage() {
     if (st === 'instock') qb = qb.eq('is_sold', false)
     else if (st === 'sold') qb = qb.eq('is_sold', true)
     else if (st === 'review') qb = qb.eq('needs_review', true)
-    if (f.item_name)   qb = qb.eq('item_name', f.item_name)
-    if (f.design)      qb = qb.eq('design', f.design)
-    if (f.description) qb = qb.eq('description', f.description)
-    if (f.purity)      qb = qb.eq('purity', f.purity)
-    if (f.party)       qb = qb.eq('party', f.party)
+    if (f.item_name.length)   qb = qb.in('item_name', f.item_name)
+    if (f.design.length)      qb = qb.in('design', f.design)
+    if (f.description.length) qb = qb.in('description', f.description)
+    if (f.purity.length)      qb = qb.in('purity', f.purity)
+    if (f.party.length)       qb = qb.in('party', f.party)
     if (f.wMin != null) qb = qb.gte('weight', f.wMin)
     if (f.wMax != null) qb = qb.lte('weight', f.wMax)
+    if (f.published === 'yes') qb = qb.eq('show_in_app', true)
+    else if (f.published === 'no') qb = qb.eq('show_in_app', false)
     const q = s.trim().replace(/[,%()]/g, ' ').trim()
     if (q) qb = qb.or(`item_name.ilike.%${q}%,barcode.ilike.%${q}%,party.ilike.%${q}%,purity.ilike.%${q}%,design.ilike.%${q}%,description.ilike.%${q}%`)
 
@@ -174,8 +197,9 @@ export default function CataloguePage() {
   }
 
   const activeCount =
-    (filters.item_name ? 1 : 0) + (filters.design ? 1 : 0) + (filters.description ? 1 : 0) +
-    (filters.purity ? 1 : 0) + (filters.party ? 1 : 0) + (filters.wMin != null || filters.wMax != null ? 1 : 0)
+    (filters.item_name.length ? 1 : 0) + (filters.design.length ? 1 : 0) + (filters.description.length ? 1 : 0) +
+    (filters.purity.length ? 1 : 0) + (filters.party.length ? 1 : 0) +
+    (filters.wMin != null || filters.wMax != null ? 1 : 0) + (filters.published !== 'all' ? 1 : 0)
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -215,15 +239,26 @@ export default function CataloguePage() {
 
         {panelOpen && (
           <div className="card p-4 space-y-3">
-            <Select label="Item name"   value={filters.item_name}   opts={options.item_name}   onChange={v => setF('item_name', v)} />
-            <Select label="Design"       value={filters.design}      opts={options.design}      onChange={v => setF('design', v)} />
-            <Select label="Description"  value={filters.description} opts={options.description} onChange={v => setF('description', v)} />
-            <div className="flex gap-3">
-              <div className="flex-1"><Select label="Purity" value={filters.purity} opts={options.purity} onChange={v => setF('purity', v)} /></div>
-              <div className="flex-1"><Select label="Party"  value={filters.party}  opts={options.party}  onChange={v => setF('party', v)} /></div>
-            </div>
+            <MultiSelect label="Item name"   value={filters.item_name}   opts={options.item_name}   onChange={v => setF('item_name', v)} />
+            <MultiSelect label="Design"       value={filters.design}      opts={options.design}      onChange={v => setF('design', v)} />
+            <MultiSelect label="Description"  value={filters.description} opts={options.description} onChange={v => setF('description', v)} />
+            <MultiSelect label="Purity"       value={filters.purity}      opts={options.purity}      onChange={v => setF('purity', v)} />
+            <MultiSelect label="Party"        value={filters.party}       opts={options.party}       onChange={v => setF('party', v)} />
             <WeightRange max={maxWeight} min={filters.wMin} maxV={filters.wMax}
               onChange={(lo, hi) => setFilters(f => ({ ...f, wMin: lo, wMax: hi }))} />
+            <div>
+              <label className="text-xs font-medium text-gray-600">Customer app</label>
+              <div className="flex gap-2 mt-1">
+                {([['all', 'Any'], ['yes', 'Published'], ['no', 'Not published']] as const).map(([v, l]) => (
+                  <button key={v} onClick={() => setF('published', v)}
+                    className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                      filters.published === v ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
+                    }`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="flex gap-2 pt-1">
               <button onClick={resetFilters} className="btn-secondary flex-1">Reset</button>
               <button onClick={saveFilters} className="btn-primary flex-1">{savedNote ? '✓ Saved' : 'Save filter'}</button>
@@ -316,13 +351,28 @@ export default function CataloguePage() {
   )
 }
 
-function Select({ label, value, opts, onChange }: { label: string; value: string; opts: string[]; onChange: (v: string) => void }) {
+// Multi-value picker: selected values show as removable chips; the dropdown adds
+// one more from the remaining options (native select scrolls well on mobile for
+// long option lists). Empty selection ⇒ no filter on this field.
+function MultiSelect({ label, value, opts, onChange }: { label: string; value: string[]; opts: string[]; onChange: (v: string[]) => void }) {
+  const remaining = opts.filter(o => !value.includes(o))
   return (
     <div>
       <label className="text-xs font-medium text-gray-600">{label}</label>
-      <select value={value} onChange={e => onChange(e.target.value)} className="input mt-1">
-        <option value="">Any</option>
-        {opts.map(o => <option key={o} value={o}>{o}</option>)}
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-1">
+          {value.map(v => (
+            <button key={v} onClick={() => onChange(value.filter(x => x !== v))}
+              className="flex items-center gap-1 text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-1 rounded-full active:bg-green-100">
+              {v} <span className="text-green-500">×</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <select value="" onChange={e => { if (e.target.value) onChange([...value, e.target.value]) }}
+        disabled={remaining.length === 0} className="input mt-1 disabled:opacity-50">
+        <option value="">{value.length ? (remaining.length ? 'Add another…' : 'All selected') : 'Any'}</option>
+        {remaining.map(o => <option key={o} value={o}>{o}</option>)}
       </select>
     </div>
   )
