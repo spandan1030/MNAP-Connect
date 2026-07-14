@@ -1,0 +1,391 @@
+'use client'
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import Navbar from '@/components/ui/Navbar'
+import { createClient } from '@/lib/supabase/client'
+import {
+  CALL_TOPICS, CALL_INTENTS, TOPIC_LABEL,
+  RECENCY_COLORS, VALUE_COLORS, telUrl,
+} from '@/lib/calls'
+import { cn } from '@/lib/utils'
+import type { WaBCallCampaign } from '@/lib/types'
+
+interface MarkerLite {
+  recency_tier: string | null
+  value_tier: string | null
+  rfm_segment: string | null
+  frequency_tier: string | null
+  audience_labels: string[] | null
+  lifetime_value: number | null
+  total_bills: number | null
+}
+interface Card {
+  taskId: string
+  customerId: string
+  name: string
+  phone: string
+  dnc: boolean
+  marker: MarkerLite | null
+}
+interface Summary { attempts: number; successes: number; topics: string[] }
+
+type Phase = 'idle' | 'outcome' | 'success'
+
+const today = () => new Date().toLocaleDateString('en-CA')
+
+export default function CallsPage() {
+  const supabase = createClient()
+
+  const [campaign, setCampaign] = useState<WaBCallCampaign | null>(null)
+  const [cards, setCards] = useState<Card[]>([])
+  const [idx, setIdx] = useState(0)
+  const [override, setOverride] = useState<Card | null>(null)   // from search
+  const [loading, setLoading] = useState(true)
+
+  const [summary, setSummary] = useState<Summary | null>(null)
+  const [phase, setPhase] = useState<Phase>('idle')
+  const [logId, setLogId] = useState<string | null>(null)
+  const [topics, setTopics] = useState<string[]>([])
+  const [intent, setIntent] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  const [search, setSearch] = useState('')
+  const [searchMsg, setSearchMsg] = useState('')
+  const [hiddenOpen, setHiddenOpen] = useState(false)
+  const [hidden, setHidden] = useState<Card[]>([])
+
+  const current = override ?? cards[idx] ?? null
+
+  // ── initial load ──
+  useEffect(() => { loadDeck() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadDeck() {
+    setLoading(true)
+    const { data: camp } = await supabase
+      .from('wa_b_call_campaigns').select('*').eq('is_active', true)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+    if (!camp) { setCampaign(null); setCards([]); setLoading(false); return }
+    setCampaign(camp as WaBCallCampaign)
+
+    // live tasks: pending, not attempted today
+    const t = today()
+    const tasks: { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean } }[] = []
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data } = await supabase
+        .from('wa_b_call_tasks')
+        .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call)')
+        .eq('campaign_id', (camp as WaBCallCampaign).id)
+        .eq('status', 'pending')
+        .or(`last_attempt_date.is.null,last_attempt_date.lt.${t}`)
+        .range(from, from + PAGE - 1)
+      const rows = (data ?? []) as unknown as typeof tasks
+      tasks.push(...rows)
+      if (rows.length < PAGE) break
+    }
+
+    const custIds = tasks.map(t => t.customer.id)
+    const markerBy = await loadMarkers(custIds)
+    setCards(tasks.map(t => ({
+      taskId: t.id,
+      customerId: t.customer.id,
+      name: t.customer.name,
+      phone: t.customer.phone,
+      dnc: t.customer.is_do_not_call,
+      marker: markerBy[t.customer.id] ?? null,
+    })))
+    setIdx(0)
+    setLoading(false)
+  }
+
+  async function loadMarkers(custIds: string[]): Promise<Record<string, MarkerLite>> {
+    const out: Record<string, MarkerLite> = {}
+    for (let i = 0; i < custIds.length; i += 1000) {
+      const slice = custIds.slice(i, i + 1000)
+      const { data } = await supabase
+        .from('wa_b_markers')
+        .select('customer_id,recency_tier,value_tier,rfm_segment,frequency_tier,audience_labels,lifetime_value,total_bills')
+        .in('customer_id', slice)
+      for (const m of (data ?? []) as (MarkerLite & { customer_id: string })[]) {
+        out[m.customer_id] = m
+      }
+    }
+    return out
+  }
+
+  // ── per-card summary ──
+  const loadSummary = useCallback(async (customerId: string) => {
+    setSummary(null)
+    const { data } = await supabase
+      .from('wa_b_call_logs').select('success,topics').eq('customer_id', customerId)
+    const logs = (data ?? []) as { success: boolean | null; topics: string[] | null }[]
+    const topicSet = new Set<string>()
+    let successes = 0
+    for (const l of logs) {
+      if (l.success) { successes++; (l.topics ?? []).forEach(t => topicSet.add(t)) }
+    }
+    setSummary({ attempts: logs.length, successes, topics: [...topicSet] })
+  }, [supabase])
+
+  useEffect(() => {
+    if (current) { loadSummary(current.customerId); resetCallState() }
+  }, [current?.customerId])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  function resetCallState() {
+    setPhase('idle'); setLogId(null); setTopics([]); setIntent(null)
+  }
+
+  // ── call flow ──
+  async function startCall() {
+    if (!current) return
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const { data } = await supabase
+      .from('wa_b_call_logs')
+      .insert({ task_id: current.taskId, customer_id: current.customerId, called_by: user.id, success: null })
+      .select('id').single()
+    if (data) setLogId(data.id)
+    setPhase('outcome')
+    window.location.href = telUrl(current.phone)   // open dialer
+  }
+
+  async function submitFail() {
+    if (!logId) return
+    setSaving(true)
+    await supabase.from('wa_b_call_logs').update({ success: false, outcome_at: new Date().toISOString() }).eq('id', logId)
+    setSaving(false)
+    advance()
+  }
+
+  async function submitSuccess() {
+    if (!logId || !intent) return
+    setSaving(true)
+    await supabase.from('wa_b_call_logs')
+      .update({ success: true, topics, intent, outcome_at: new Date().toISOString() })
+      .eq('id', logId)
+    setSaving(false)
+    advance()
+  }
+
+  // remove current card from the deck and move on
+  function advance() {
+    if (override) { setOverride(null); resetCallState(); return }
+    setCards(prev => {
+      const next = prev.filter((_, i) => i !== idx)
+      setIdx(i => Math.min(i, Math.max(0, next.length - 1)))
+      return next
+    })
+    resetCallState()
+  }
+
+  function go(delta: number) {
+    if (override) { setOverride(null); return }
+    setIdx(i => Math.max(0, Math.min(cards.length - 1, i + delta)))
+  }
+
+  // ── search ──
+  async function doSearch() {
+    setSearchMsg('')
+    const digits = search.replace(/\D/g, '').slice(-10)
+    if (digits.length !== 10) { setSearchMsg('Enter a 10-digit number'); return }
+    if (!campaign) return
+    const { data } = await supabase
+      .from('wa_b_call_tasks')
+      .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call)')
+      .eq('campaign_id', campaign.id)
+      .eq('customer.phone', digits)
+      .maybeSingle()
+    if (!data) { setSearchMsg('No card for that number in this campaign'); return }
+    const row = data as unknown as { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean } }
+    const markerBy = await loadMarkers([row.customer.id])
+    setOverride({
+      taskId: row.id, customerId: row.customer.id, name: row.customer.name,
+      phone: row.customer.phone, dnc: row.customer.is_do_not_call, marker: markerBy[row.customer.id] ?? null,
+    })
+    setSearch('')
+  }
+
+  // ── hidden (don't-call) cards ──
+  async function openHidden() {
+    if (!campaign) return
+    const { data } = await supabase
+      .from('wa_b_call_tasks')
+      .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call)')
+      .eq('campaign_id', campaign.id).eq('status', 'hidden')
+    const rows = (data ?? []) as unknown as { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean } }[]
+    setHidden(rows.map(r => ({
+      taskId: r.id, customerId: r.customer.id, name: r.customer.name,
+      phone: r.customer.phone, dnc: r.customer.is_do_not_call, marker: null,
+    })))
+    setHiddenOpen(true)
+  }
+
+  // ── swipe ──
+  const touchX = useRef<number | null>(null)
+  function onTouchStart(e: React.TouchEvent) { touchX.current = e.touches[0].clientX }
+  function onTouchEnd(e: React.TouchEvent) {
+    if (touchX.current == null) return
+    const dx = e.changedTouches[0].clientX - touchX.current
+    if (Math.abs(dx) > 60) go(dx < 0 ? 1 : -1)
+    touchX.current = null
+  }
+
+  // ── render ──
+  if (loading) return <Shell><Center>Loading…</Center></Shell>
+  if (!campaign) return <Shell><Center>No active call campaign. Ask admin to create one in Call Control.</Center></Shell>
+
+  return (
+    <Shell>
+      <div className="max-w-lg mx-auto w-full px-4 py-3 space-y-3">
+        {/* header: campaign + search + hidden menu */}
+        <div className="flex items-center gap-2">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-gray-900 truncate">{campaign.name}</p>
+            <p className="text-[11px] text-gray-400">{override ? 'Searched card' : `${cards.length} to call`}</p>
+          </div>
+          <button onClick={openHidden} aria-label="Hidden cards" className="text-gray-400 hover:text-gray-700 p-1.5">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="flex gap-2">
+          <input className="input flex-1" placeholder="Search phone…" value={search}
+            onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && doSearch()} inputMode="numeric" />
+          <button onClick={doSearch} className="text-xs font-medium text-gray-700 border border-gray-200 px-3 rounded-lg">Find</button>
+        </div>
+        {searchMsg && <p className="text-[11px] text-red-600">{searchMsg}</p>}
+
+        {!current && <Center>All done for today 🎉</Center>}
+
+        {current && (
+          <div className="card p-4 space-y-3" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+            {/* name + number */}
+            <div className="flex items-start justify-between">
+              <div>
+                <h1 className="text-base font-bold text-gray-900">{current.name}</h1>
+                <p className="text-xs text-gray-500">+91 {current.phone}</p>
+              </div>
+              {override && <button onClick={() => setOverride(null)} className="text-[11px] text-gray-500 border border-gray-200 rounded-lg px-2 py-1">Back to list</button>}
+            </div>
+
+            {/* markers */}
+            {current.marker && (
+              <div className="flex flex-wrap gap-1.5">
+                {current.marker.recency_tier && <Chip className={RECENCY_COLORS[current.marker.recency_tier]}>{current.marker.recency_tier}</Chip>}
+                {current.marker.value_tier && <Chip className={VALUE_COLORS[current.marker.value_tier]}>{current.marker.value_tier}</Chip>}
+                {current.marker.rfm_segment && <Chip className="bg-gray-50 text-gray-600 border-gray-200">{current.marker.rfm_segment}</Chip>}
+                {current.marker.frequency_tier && <Chip className="bg-gray-50 text-gray-600 border-gray-200">{current.marker.frequency_tier}</Chip>}
+              </div>
+            )}
+            {current.marker?.audience_labels?.length ? (
+              <div className="flex flex-wrap gap-1">
+                {current.marker.audience_labels.map(a => (
+                  <span key={a} className="text-[10px] px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-100">{a}</span>
+                ))}
+              </div>
+            ) : null}
+
+            {/* summary */}
+            {summary && (
+              <div className="text-[11px] text-gray-500 border-t border-gray-100 pt-2">
+                {summary.attempts === 0
+                  ? 'No calls yet.'
+                  : <>Calls: <b className="text-gray-700">{summary.attempts}</b> · Connected: <b className="text-gray-700">{summary.successes}</b>
+                     {summary.topics.length > 0 && <> · Interested in: {summary.topics.map(t => TOPIC_LABEL[t] ?? t).join(', ')}</>}</>}
+              </div>
+            )}
+
+            {/* action zone */}
+            {current.dnc ? (
+              <p className="text-xs font-bold text-red-600 border-t border-gray-100 pt-3">Marked “Don’t call”.</p>
+            ) : phase === 'idle' ? (
+              <button onClick={startCall} className="btn-primary w-full py-3 text-sm">📞 Call</button>
+            ) : phase === 'outcome' ? (
+              <div className="space-y-2 border-t border-gray-100 pt-3">
+                <p className="text-xs font-medium text-gray-600 text-center">Did the call connect?</p>
+                <div className="flex gap-2">
+                  <button onClick={() => setPhase('success')} disabled={saving}
+                    className="flex-1 py-3 rounded-xl border-2 border-green-500 text-green-700 font-bold text-lg">✓</button>
+                  <button onClick={submitFail} disabled={saving}
+                    className="flex-1 py-3 rounded-xl border-2 border-red-400 text-red-600 font-bold text-lg">✗</button>
+                </div>
+              </div>
+            ) : (
+              /* success → topics + intent */
+              <div className="space-y-3 border-t border-gray-100 pt-3">
+                <div>
+                  <p className="text-[11px] text-gray-400 font-medium mb-1">What are they interested in?</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CALL_TOPICS.map(t => (
+                      <button key={t.value} type="button"
+                        onClick={() => setTopics(p => p.includes(t.value) ? p.filter(x => x !== t.value) : [...p, t.value])}
+                        className={cn('px-3 py-1.5 rounded-lg text-xs border font-medium',
+                          topics.includes(t.value) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-700 border-gray-200')}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] text-gray-400 font-medium mb-1">Will they come?</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CALL_INTENTS.map(i => (
+                      <button key={i.value} type="button" onClick={() => setIntent(i.value)}
+                        className={cn('px-3 py-1.5 rounded-lg text-xs border', intent === i.value ? i.color : i.idle)}>
+                        {i.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button onClick={submitSuccess} disabled={saving || !intent} className="btn-primary w-full py-2.5">
+                  {saving ? 'Saving…' : 'Submit'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* deck nav */}
+        {!override && cards.length > 0 && (
+          <div className="flex items-center justify-between">
+            <button onClick={() => go(-1)} disabled={idx === 0} className="text-xs text-gray-500 border border-gray-200 rounded-lg px-4 py-2 disabled:opacity-40">← Prev</button>
+            <span className="text-[11px] text-gray-400">{idx + 1} / {cards.length}</span>
+            <button onClick={() => go(1)} disabled={idx >= cards.length - 1} className="text-xs text-gray-500 border border-gray-200 rounded-lg px-4 py-2 disabled:opacity-40">Next →</button>
+          </div>
+        )}
+      </div>
+
+      {/* hidden cards modal */}
+      {hiddenOpen && (
+        <>
+          <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setHiddenOpen(false)} />
+          <div className="fixed inset-x-4 top-16 z-50 bg-white rounded-xl border border-gray-200 shadow-lg max-w-lg mx-auto max-h-[70vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 sticky top-0 bg-white">
+              <p className="text-sm font-semibold text-gray-700">Hidden — Don’t call ({hidden.length})</p>
+              <button onClick={() => setHiddenOpen(false)} className="text-gray-400 text-lg leading-none">×</button>
+            </div>
+            {hidden.length === 0 && <p className="text-xs text-gray-400 p-4">None.</p>}
+            {hidden.map(h => (
+              <div key={h.taskId} className="px-4 py-2 border-b border-gray-50 last:border-0">
+                <p className="text-xs font-medium text-gray-800">{h.name}</p>
+                <p className="text-[11px] text-gray-400">+91 {h.phone}</p>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Shell>
+  )
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return <div className="min-h-screen flex flex-col"><Navbar />{children}</div>
+}
+function Center({ children }: { children: React.ReactNode }) {
+  return <main className="flex-1 flex items-center justify-center text-gray-400 text-sm px-6 text-center py-20">{children}</main>
+}
+function Chip({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <span className={cn('text-xs px-2.5 py-1 rounded-full border font-medium', className)}>{children}</span>
+}

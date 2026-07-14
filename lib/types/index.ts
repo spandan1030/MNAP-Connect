@@ -129,6 +129,72 @@ export interface WaBInteraction {
   logged_at: string
 }
 
+// ── Cold-Call Module (wa_028) ─────────────────────────────────────────────────
+
+export interface WaBMarker {
+  customer_id: string
+  recency_tier: string | null
+  value_tier: string | null
+  rfm_segment: string | null
+  frequency_tier: string | null
+  audience_labels: string[] | null
+  lifetime_value: number | null
+  total_bills: number | null
+  days_since_last_purchase: number | null
+  is_high_value: boolean | null
+  is_likely_wedding: boolean | null
+  primary_metal: string | null
+  outreach_bucket: string | null
+  markers: Record<string, unknown> | null
+  import_batch: string | null
+  imported_at: string
+}
+
+export interface WaBCallCampaign {
+  id: string
+  name: string
+  filter_json: CallFilter | null
+  created_by: string | null
+  created_at: string
+  is_active: boolean
+}
+
+export type CallTaskStatus = 'pending' | 'done' | 'hidden'
+
+export interface WaBCallTask {
+  id: string
+  campaign_id: string
+  customer_id: string
+  status: CallTaskStatus
+  attempts: number
+  last_attempt_date: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type CallIntent = 'will_come' | 'not_sure' | 'wont_come' | 'dont_call'
+
+export interface WaBCallLog {
+  id: string
+  task_id: string
+  customer_id: string
+  called_by: string
+  called_at: string
+  success: boolean | null
+  topics: string[] | null
+  intent: CallIntent | null
+  outcome_at: string | null
+  notes: string | null
+}
+
+// Filter admins apply to build a campaign (stored in campaign.filter_json).
+export interface CallFilter {
+  recency_tier?: string[]
+  value_tier?: string[]
+  is_high_value?: boolean
+  is_likely_wedding?: boolean
+}
+
 // ── WhatsApp Messaging (wa_004) ───────────────────────────────────────────────
 
 export interface WaThread {
