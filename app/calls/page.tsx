@@ -62,6 +62,7 @@ export default function CallsPage() {
   const [searchMsg, setSearchMsg] = useState('')
   const [hiddenOpen, setHiddenOpen] = useState(false)
   const [hidden, setHidden] = useState<Card[]>([])
+  const [cardMenu, setCardMenu] = useState(false)
 
   const current = override ?? cards[idx] ?? null
 
@@ -145,7 +146,32 @@ export default function CallsPage() {
   }, [current?.customerId])   // eslint-disable-line react-hooks/exhaustive-deps
 
   function resetCallState() {
-    setPhase('idle'); setLogId(null); setTopics([]); setIntent(null)
+    setPhase('idle'); setLogId(null); setTopics([]); setIntent(null); setCardMenu(false)
+  }
+
+  // ── mark "don't call" directly from the card (no call needed) ──
+  // Sets is_do_not_call + hides the task. Excludes from calling ONLY —
+  // seeding/ad audiences and every other module ignore this flag.
+  async function markDontCall() {
+    if (!current) return
+    setSaving(true)
+    await supabase.from('wa_b_customers')
+      .update({ is_do_not_call: true, dnc_at: new Date().toISOString() })
+      .eq('id', current.customerId)
+    await supabase.from('wa_b_call_tasks').update({ status: 'hidden' }).eq('id', current.taskId)
+    setSaving(false)
+    setCardMenu(false)
+    advance()
+  }
+
+  // ── undo: allow calling again (from the hidden list) ──
+  async function restoreCard(card: Card) {
+    await supabase.from('wa_b_customers')
+      .update({ is_do_not_call: false, dnc_at: null })
+      .eq('id', card.customerId)
+    await supabase.from('wa_b_call_tasks').update({ status: 'pending' }).eq('id', card.taskId)
+    setHidden(prev => prev.filter(h => h.taskId !== card.taskId))
+    setCards(prev => [{ ...card, dnc: false }, ...prev])
   }
 
   // ── call flow ──
@@ -280,7 +306,36 @@ export default function CallsPage() {
                 <h1 className="text-base font-bold text-gray-900">{current.name}</h1>
                 <p className="text-xs text-gray-500">+91 {current.phone}</p>
               </div>
-              {override && <button onClick={() => setOverride(null)} className="text-[11px] text-gray-500 border border-gray-200 rounded-lg px-2 py-1">Back to list</button>}
+              <div className="flex items-center gap-1 shrink-0">
+                {override && <button onClick={() => setOverride(null)} className="text-[11px] text-gray-500 border border-gray-200 rounded-lg px-2 py-1">Back to list</button>}
+                {/* per-card three-dot menu */}
+                <div className="relative">
+                  <button onClick={() => setCardMenu(o => !o)} aria-label="Card menu"
+                    className="text-gray-400 hover:text-gray-700 p-1.5 -mr-1.5">
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" />
+                    </svg>
+                  </button>
+                  {cardMenu && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setCardMenu(false)} />
+                      <div className="absolute right-0 top-8 z-20 w-40 bg-white rounded-lg border border-gray-200 shadow-lg py-1">
+                        {current.dnc ? (
+                          <button onClick={() => { setCardMenu(false); restoreCard(current) }}
+                            className="w-full text-left px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-50">
+                            Allow calling again
+                          </button>
+                        ) : (
+                          <button onClick={markDontCall} disabled={saving}
+                            className="w-full text-left px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-50">
+                            Don’t call
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* markers */}
@@ -399,9 +454,15 @@ export default function CallsPage() {
             </div>
             {hidden.length === 0 && <p className="text-xs text-gray-400 p-4">None.</p>}
             {hidden.map(h => (
-              <div key={h.taskId} className="px-4 py-2 border-b border-gray-50 last:border-0">
-                <p className="text-xs font-medium text-gray-800">{h.name}</p>
-                <p className="text-[11px] text-gray-400">+91 {h.phone}</p>
+              <div key={h.taskId} className="px-4 py-2 border-b border-gray-50 last:border-0 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-gray-800 truncate">{h.name}</p>
+                  <p className="text-[11px] text-gray-400">+91 {h.phone}</p>
+                </div>
+                <button onClick={() => restoreCard(h)}
+                  className="shrink-0 text-[11px] font-medium text-green-700 border border-green-200 rounded-lg px-2.5 py-1 hover:bg-green-50">
+                  Allow
+                </button>
               </div>
             ))}
           </div>
