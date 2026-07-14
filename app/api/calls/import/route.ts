@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { SALES_CATEGORY_TO_INTEREST, METALS } from '@/lib/signals'
 
 // Bulk-import one BATCH of leads (from customer-signals leads_import.csv).
 // Client parses the CSV and POSTs rows in chunks. This route:
@@ -133,5 +134,33 @@ export async function POST(req: NextRequest) {
     .upsert(markerRows, { onConflict: 'customer_id' })
   if (mErr) return Response.json({ error: mErr.message }, { status: 500 })
 
-  return Response.json({ customers: phones.length, markers: markerRows.length })
+  // 4. Derive sales-source interest signals (product + metal affinity) into
+  //    the unified wa_signals layer. Phone-keyed, refreshed in place.
+  const now = new Date().toISOString()
+  const sigRows: { phone: string; interest: string; source: string; weight: number; evidence: string; last_seen: string }[] = []
+  for (const p of phones) {
+    const blob = parseMarkers(byPhone.get(p)!.markers_json) ?? {}
+    const seen = new Set<string>()
+    const push = (interest: string, evidence: string) => {
+      if (seen.has(interest)) return
+      seen.add(interest)
+      sigRows.push({ phone: p, interest, source: 'sales', weight: 1, evidence, last_seen: now })
+    }
+    for (const [cat, interest] of Object.entries(SALES_CATEGORY_TO_INTEREST)) {
+      if (blob[`bought_${cat}`] === true) push(interest, 'bought')
+    }
+    for (const metal of METALS) {
+      if (blob[`buys_${metal}`] === true) push(metal, 'buys')
+    }
+    const pm = byPhone.get(p)!.primary_metal
+    if (pm && (METALS as readonly string[]).includes(pm)) push(pm, 'primary metal')
+  }
+  if (sigRows.length) {
+    const { error: sErr } = await supabaseAdmin
+      .from('wa_signals')
+      .upsert(sigRows, { onConflict: 'phone,interest,source' })
+    if (sErr) return Response.json({ error: sErr.message }, { status: 500 })
+  }
+
+  return Response.json({ customers: phones.length, markers: markerRows.length, signals: sigRows.length })
 }

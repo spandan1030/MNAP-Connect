@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { verifySignature, sendTextMessage, sendImageMessage, sendTemplateMessage, sendInteractiveList, sendInteractiveButtons, getMediaDownloadUrl, downloadMediaBuffer } from '@/lib/whatsapp/api'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { applyPlaceholders } from '@/lib/utils'
+import { topicNameToInterest } from '@/lib/signals'
 
 // Module-level cache for the rate template — avoids 2 DB round trips on warm instances.
 // Expires after 1 hour so template edits eventually take effect.
@@ -295,6 +296,18 @@ async function addInterest(customerId: string, topicId: string) {
   await supabaseAdmin
     .from('wa_customer_interests')
     .upsert({ customer_id: customerId, topic_id: topicId }, { onConflict: 'customer_id,topic_id', ignoreDuplicates: true })
+  // mirror into the unified interest layer (wa_signals), phone-keyed
+  const [{ data: cust }, { data: topic }] = await Promise.all([
+    supabaseAdmin.from('wa_customers').select('phone').eq('id', customerId).maybeSingle(),
+    supabaseAdmin.from('wa_interest_topics').select('name').eq('id', topicId).maybeSingle(),
+  ])
+  const phone = (cust?.phone ?? '').replace(/\D/g, '').slice(-10)
+  const interest = topicNameToInterest(topic?.name)
+  if (phone.length === 10 && interest) {
+    await supabaseAdmin.from('wa_signals').upsert(
+      { phone, interest, source: 'whatsapp', weight: 1, evidence: topic?.name ?? 'chat', last_seen: new Date().toISOString() },
+      { onConflict: 'phone,interest,source' })
+  }
 }
 
 async function findTopicId(namePattern: string): Promise<string | null> {

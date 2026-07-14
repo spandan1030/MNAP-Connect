@@ -7,6 +7,7 @@ import {
   CALL_TOPICS, CALL_INTENTS, TOPIC_LABEL,
   RECENCY_COLORS, VALUE_COLORS, telUrl,
 } from '@/lib/calls'
+import { INTEREST_LABEL, SIGNAL_SOURCE_LABEL, CALL_TOPIC_TO_INTEREST, type SignalSource } from '@/lib/signals'
 import { cn } from '@/lib/utils'
 import type { WaBCallCampaign } from '@/lib/types'
 
@@ -52,6 +53,7 @@ export default function CallsPage() {
   const [loading, setLoading] = useState(true)
 
   const [summary, setSummary] = useState<Summary | null>(null)
+  const [signals, setSignals] = useState<{ interest: string; source: SignalSource }[]>([])
   const [phase, setPhase] = useState<Phase>('idle')
   const [logId, setLogId] = useState<string | null>(null)
   const [topics, setTopics] = useState<string[]>([])
@@ -141,8 +143,16 @@ export default function CallsPage() {
     setSummary({ attempts: logs.length, successes, topics: [...topicSet] })
   }, [supabase])
 
+  // ── converged interest signals (all sources, joined by phone) ──
+  const loadSignals = useCallback(async (phone: string) => {
+    setSignals([])
+    const { data } = await supabase
+      .from('wa_signals').select('interest,source').eq('phone', phone)
+    setSignals((data ?? []) as { interest: string; source: SignalSource }[])
+  }, [supabase])
+
   useEffect(() => {
-    if (current) { loadSummary(current.customerId); resetCallState() }
+    if (current) { loadSummary(current.customerId); loadSignals(current.phone); resetCallState() }
   }, [current?.customerId])   // eslint-disable-line react-hooks/exhaustive-deps
 
   function resetCallState() {
@@ -202,6 +212,14 @@ export default function CallsPage() {
     await supabase.from('wa_b_call_logs')
       .update({ success: true, topics, intent, outcome_at: new Date().toISOString() })
       .eq('id', logId)
+    // feed call topics into the unified interest layer
+    if (current && topics.length) {
+      const now = new Date().toISOString()
+      const rows = topics
+        .map(tp => ({ phone: current.phone, interest: CALL_TOPIC_TO_INTEREST[tp], source: 'call', weight: 1, evidence: `call: ${tp}`, last_seen: now }))
+        .filter(r => r.interest)
+      if (rows.length) await supabase.from('wa_signals').upsert(rows, { onConflict: 'phone,interest,source' })
+    }
     setSaving(false)
     advance()
   }
@@ -354,6 +372,43 @@ export default function CallsPage() {
                 ))}
               </div>
             ) : null}
+
+            {/* converged interests (sales + whatsapp + call + billing) */}
+            {signals.length > 0 && (() => {
+              const byInterest = new Map<string, Set<SignalSource>>()
+              for (const s of signals) {
+                if (!byInterest.has(s.interest)) byInterest.set(s.interest, new Set())
+                byInterest.get(s.interest)!.add(s.source)
+              }
+              const SRC_DOT: Record<SignalSource, string> = {
+                sales: 'bg-amber-500', whatsapp: 'bg-green-500', call: 'bg-blue-500', billing: 'bg-purple-500',
+              }
+              const usedSources = [...new Set(signals.map(s => s.source))]
+              return (
+                <div className="border-t border-gray-100 pt-2 space-y-1">
+                  <p className="text-[10px] text-gray-400 font-medium">Interested in</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[...byInterest.entries()].map(([interest, sources]) => (
+                      <span key={interest}
+                        title={[...sources].map(s => SIGNAL_SOURCE_LABEL[s]).join(', ')}
+                        className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                        {INTEREST_LABEL[interest] ?? interest}
+                        <span className="flex gap-0.5">
+                          {[...sources].map(s => <span key={s} className={cn('w-1.5 h-1.5 rounded-full', SRC_DOT[s])} />)}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+                    {usedSources.map(s => (
+                      <span key={s} className="inline-flex items-center gap-1 text-[9px] text-gray-400">
+                        <span className={cn('w-1.5 h-1.5 rounded-full', SRC_DOT[s])} />{SIGNAL_SOURCE_LABEL[s]}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
 
             {/* last purchase */}
             {current.marker && (() => {

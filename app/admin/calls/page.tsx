@@ -40,6 +40,10 @@ export default function CallControlPage() {
   const [campaigns, setCampaigns] = useState<WaBCallCampaign[]>([])
   const [dbCount, setDbCount] = useState<number | null>(null)
 
+  // ── Converge interest signals ──
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState('')
+
   useEffect(() => { loadCampaigns(); loadDbCount() }, [])
 
   async function loadCampaigns() {
@@ -143,6 +147,23 @@ export default function CallControlPage() {
       setImportResult(`Error: ${(err as Error).message}`)
     } finally {
       setImporting(false)
+    }
+  }
+
+  async function handleSync() {
+    setSyncing(true); setSyncMsg('')
+    try {
+      const res = await fetch('/api/signals/sync', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      })
+      const json = await res.json()
+      setSyncMsg(res.ok
+        ? `Converged ${(json.written ?? 0).toLocaleString('en-IN')} interest signals from ${(json.sources ?? []).join(', ')}.`
+        : `Error: ${json.error}`)
+    } catch (err) {
+      setSyncMsg(`Error: ${(err as Error).message}`)
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -283,6 +304,30 @@ export default function CallControlPage() {
                 : <span className="text-[10px] text-gray-400">inactive</span>}
             </div>
           ))}
+        </section>
+
+        {/* ── Converge interest signals ── */}
+        <section className="card p-4 space-y-3">
+          <div>
+            <p className="text-sm font-semibold text-gray-700">Interest signals</p>
+            <p className="text-xs text-gray-500">
+              Merge WhatsApp chat tags, cold-call topics, and sales-DB affinity into one
+              phone-keyed interest layer shown on every calling card. Sales &amp; call signals
+              update automatically; run this to backfill and pull in WhatsApp chats.
+            </p>
+          </div>
+          <button onClick={handleSync} disabled={syncing} className="btn-primary w-full py-2">
+            {syncing ? 'Converging…' : 'Sync interest signals'}
+          </button>
+          {syncMsg && <p className="text-xs font-medium text-gray-700">{syncMsg}</p>}
+          <a href="/api/signals/export"
+            className="block text-center text-xs font-medium text-gray-700 border border-gray-200 px-3 py-2 rounded-lg">
+            ↓ Export signals for ad audiences (signals_export.csv)
+          </a>
+          <p className="text-[11px] text-gray-400">
+            Drop <code>signals_export.csv</code> into the <code>customer-signals</code> folder and re-run
+            the pipeline to generate interest-based Meta/Google audiences.
+          </p>
         </section>
       </main>
     </div>
