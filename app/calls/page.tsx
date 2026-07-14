@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Navbar from '@/components/ui/Navbar'
 import { createClient } from '@/lib/supabase/client'
 import {
-  CALL_TOPICS, CALL_INTENTS, TOPIC_LABEL,
+  CALL_TOPICS, CALL_INTENTS, TOPIC_LABEL, INTENT_LABEL,
   RECENCY_COLORS, VALUE_COLORS, telUrl,
 } from '@/lib/calls'
 import { INTEREST_LABEL, SIGNAL_SOURCE_LABEL, CALL_TOPIC_TO_INTEREST, type SignalSource } from '@/lib/signals'
@@ -31,6 +31,16 @@ interface Card {
   marker: MarkerLite | null
 }
 interface Summary { attempts: number; successes: number; topics: string[] }
+interface HistoryEntry {
+  logId: string
+  customerId: string
+  name: string
+  phone: string
+  calledAt: string
+  success: boolean | null
+  topics: string[]
+  intent: string | null
+}
 
 type Phase = 'idle' | 'outcome' | 'success'
 
@@ -41,6 +51,10 @@ function agoText(days: number): string {
   if (days < 30) return `${days}d ago`
   if (days < 365) return `${Math.round(days / 30.44)}mo ago`
   return `${(days / 365.25).toFixed(1)}y ago`
+}
+
+function fmtDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
 export default function CallsPage() {
@@ -65,6 +79,16 @@ export default function CallsPage() {
   const [hiddenOpen, setHiddenOpen] = useState(false)
   const [hidden, setHidden] = useState<Card[]>([])
   const [cardMenu, setCardMenu] = useState(false)
+
+  // ── history (recent calls, editable) ──
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [history, setHistory] = useState<HistoryEntry[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [editEntry, setEditEntry] = useState<HistoryEntry | null>(null)
+  const [editSuccess, setEditSuccess] = useState<boolean | null>(null)
+  const [editTopics, setEditTopics] = useState<string[]>([])
+  const [editIntent, setEditIntent] = useState<string | null>(null)
+  const [editSaving, setEditSaving] = useState(false)
 
   const current = override ?? cards[idx] ?? null
 
@@ -198,30 +222,79 @@ export default function CallsPage() {
     window.location.href = telUrl(current.phone)   // open dialer
   }
 
+  // Write an outcome to a call log (used by the live flow and history edits).
+  // The DB trigger flips task status (done / hidden+DNC) off success + intent.
+  async function commitOutcome(theLogId: string, phone: string, success: boolean, theTopics: string[], theIntent: string | null) {
+    const patch = success
+      ? { success: true, topics: theTopics, intent: theIntent, outcome_at: new Date().toISOString() }
+      : { success: false, outcome_at: new Date().toISOString() }
+    await supabase.from('wa_b_call_logs').update(patch).eq('id', theLogId)
+    if (success && theTopics.length) {
+      const now = new Date().toISOString()
+      const rows = theTopics
+        .map(tp => ({ phone, interest: CALL_TOPIC_TO_INTEREST[tp], source: 'call', weight: 1, evidence: `call: ${tp}`, last_seen: now }))
+        .filter(r => r.interest)
+      if (rows.length) await supabase.from('wa_signals').upsert(rows, { onConflict: 'phone,interest,source' })
+    }
+  }
+
   async function submitFail() {
     if (!logId) return
     setSaving(true)
-    await supabase.from('wa_b_call_logs').update({ success: false, outcome_at: new Date().toISOString() }).eq('id', logId)
+    await commitOutcome(logId, current?.phone ?? '', false, [], null)
     setSaving(false)
     advance()
   }
 
   async function submitSuccess() {
-    if (!logId || !intent) return
+    if (!logId || !intent || !current) return
     setSaving(true)
-    await supabase.from('wa_b_call_logs')
-      .update({ success: true, topics, intent, outcome_at: new Date().toISOString() })
-      .eq('id', logId)
-    // feed call topics into the unified interest layer
-    if (current && topics.length) {
-      const now = new Date().toISOString()
-      const rows = topics
-        .map(tp => ({ phone: current.phone, interest: CALL_TOPIC_TO_INTEREST[tp], source: 'call', weight: 1, evidence: `call: ${tp}`, last_seen: now }))
-        .filter(r => r.interest)
-      if (rows.length) await supabase.from('wa_signals').upsert(rows, { onConflict: 'phone,interest,source' })
-    }
+    await commitOutcome(logId, current.phone, true, topics, intent)
     setSaving(false)
     advance()
+  }
+
+  // ── history ──
+  async function loadHistory() {
+    setHistoryLoading(true)
+    const { data } = await supabase
+      .from('wa_b_call_logs')
+      .select('id, customer_id, called_at, success, topics, intent, customer:wa_b_customers!inner(name,phone)')
+      .order('called_at', { ascending: false })
+      .limit(100)
+    const rows = (data ?? []) as unknown as Array<{
+      id: string; customer_id: string; called_at: string; success: boolean | null
+      topics: string[] | null; intent: string | null; customer: { name: string; phone: string }
+    }>
+    setHistory(rows.map(r => ({
+      logId: r.id, customerId: r.customer_id, name: r.customer.name, phone: r.customer.phone,
+      calledAt: r.called_at, success: r.success, topics: r.topics ?? [], intent: r.intent,
+    })))
+    setHistoryLoading(false)
+  }
+
+  function toggleHistory() {
+    const next = !historyOpen
+    setHistoryOpen(next)
+    if (next) loadHistory()
+  }
+
+  function openEdit(e: HistoryEntry) {
+    setEditEntry(e)
+    setEditSuccess(e.success)
+    setEditTopics(e.topics)
+    setEditIntent(e.intent)
+  }
+
+  async function submitEdit() {
+    if (!editEntry || editSuccess === null) return
+    if (editSuccess && !editIntent) return
+    setEditSaving(true)
+    await commitOutcome(editEntry.logId, editEntry.phone, editSuccess, editSuccess ? editTopics : [], editSuccess ? editIntent : null)
+    setEditSaving(false)
+    setEditEntry(null)
+    loadHistory()
+    if (editEntry.customerId === current?.customerId) loadSummary(current.customerId)
   }
 
   // remove current card from the deck and move on
@@ -496,6 +569,33 @@ export default function CallsPage() {
             <button onClick={() => go(1)} disabled={idx >= cards.length - 1} className="text-xs text-gray-500 border border-gray-200 rounded-lg px-4 py-2 disabled:opacity-40">Next →</button>
           </div>
         )}
+
+        {/* history — recent calls, tap to edit details later */}
+        <div className="pt-1">
+          <button onClick={toggleHistory}
+            className="w-full text-xs font-medium text-gray-600 border border-gray-200 rounded-lg py-2">
+            {historyOpen ? 'Hide history ▲' : 'History — recent calls ▼'}
+          </button>
+          {historyOpen && (
+            <div className="mt-2 border border-gray-100 rounded-xl overflow-hidden">
+              {historyLoading && <p className="text-xs text-gray-400 p-3">Loading…</p>}
+              {!historyLoading && history.length === 0 && <p className="text-xs text-gray-400 p-3">No calls logged yet.</p>}
+              <div className="max-h-[50vh] overflow-y-auto divide-y divide-gray-50">
+                {history.map(h => (
+                  <button key={h.logId} onClick={() => openEdit(h)} className="w-full text-left px-3 py-2 hover:bg-gray-50">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-gray-800 truncate">{h.name} <span className="text-gray-400 font-normal">+91 {h.phone}</span></p>
+                        <p className="text-[10px] text-gray-400">{fmtDateTime(h.calledAt)}</p>
+                      </div>
+                      <OutcomeBadge success={h.success} intent={h.intent} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* hidden cards modal */}
@@ -523,6 +623,62 @@ export default function CallsPage() {
           </div>
         </>
       )}
+
+      {/* edit-a-past-call modal (from history) */}
+      {editEntry && (
+        <>
+          <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setEditEntry(null)} />
+          <div className="fixed inset-x-4 top-14 z-50 bg-white rounded-xl border border-gray-200 shadow-lg max-w-lg mx-auto p-4 space-y-3 max-h-[80vh] overflow-y-auto">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-sm font-bold text-gray-900">{editEntry.name}</p>
+                <p className="text-xs text-gray-500">+91 {editEntry.phone} · {fmtDateTime(editEntry.calledAt)}</p>
+              </div>
+              <button onClick={() => setEditEntry(null)} className="text-gray-400 text-lg leading-none">×</button>
+            </div>
+
+            <div className="flex gap-2">
+              <button onClick={() => setEditSuccess(true)}
+                className={cn('flex-1 py-2.5 rounded-xl border-2 font-bold text-sm', editSuccess === true ? 'border-green-500 text-green-700 bg-green-50' : 'border-gray-200 text-gray-400')}>✓ Connected</button>
+              <button onClick={() => { setEditSuccess(false); setEditTopics([]); setEditIntent(null) }}
+                className={cn('flex-1 py-2.5 rounded-xl border-2 font-bold text-sm', editSuccess === false ? 'border-red-400 text-red-600 bg-red-50' : 'border-gray-200 text-gray-400')}>✗ No answer</button>
+            </div>
+
+            {editSuccess && (
+              <>
+                <div>
+                  <p className="text-[11px] text-gray-400 font-medium mb-1">What are they interested in?</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CALL_TOPICS.map(t => (
+                      <button key={t.value} type="button"
+                        onClick={() => setEditTopics(p => p.includes(t.value) ? p.filter(x => x !== t.value) : [...p, t.value])}
+                        className={cn('px-3 py-1.5 rounded-lg text-xs border font-medium', editTopics.includes(t.value) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-700 border-gray-200')}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] text-gray-400 font-medium mb-1">Will they come?</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CALL_INTENTS.map(i => (
+                      <button key={i.value} type="button" onClick={() => setEditIntent(i.value)}
+                        className={cn('px-3 py-1.5 rounded-lg text-xs border', editIntent === i.value ? i.color : i.idle)}>
+                        {i.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            <button onClick={submitEdit} disabled={editSaving || editSuccess === null || (!!editSuccess && !editIntent)}
+              className="btn-primary w-full py-2.5">
+              {editSaving ? 'Saving…' : 'Save details'}
+            </button>
+          </div>
+        </>
+      )}
     </Shell>
   )
 }
@@ -535,4 +691,10 @@ function Center({ children }: { children: React.ReactNode }) {
 }
 function Chip({ children, className }: { children: React.ReactNode; className?: string }) {
   return <span className={cn('text-xs px-2.5 py-1 rounded-full border font-medium', className)}>{children}</span>
+}
+function OutcomeBadge({ success, intent }: { success: boolean | null; intent: string | null }) {
+  const base = 'text-[10px] px-2 py-0.5 rounded-full border whitespace-nowrap shrink-0'
+  if (success === null) return <span className={cn(base, 'text-amber-700 bg-amber-50 border-amber-200')}>Pending</span>
+  if (!success) return <span className={cn(base, 'text-gray-500 bg-gray-50 border-gray-200')}>No answer</span>
+  return <span className={cn(base, 'text-green-700 bg-green-50 border-green-200')}>{intent ? INTENT_LABEL[intent] ?? 'Connected' : 'Connected'}</span>
 }

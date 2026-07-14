@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx'
 import Navbar from '@/components/ui/Navbar'
 import { createClient } from '@/lib/supabase/client'
 import { RECENCY_TIERS, VALUE_TIERS, RFM_SEGMENTS, FREQUENCY_TIERS, PRIMARY_METALS } from '@/lib/calls'
+import { INTERESTS } from '@/lib/signals'
 import { formatDateTime, cn } from '@/lib/utils'
 import type { CallFilter, WaBCallCampaign } from '@/lib/types'
 
@@ -26,6 +27,7 @@ export default function CallControlPage() {
   const [rfm, setRfm] = useState<string[]>([])
   const [frequency, setFrequency] = useState<string[]>([])
   const [metal, setMetal] = useState<string[]>([])
+  const [interests, setInterests] = useState<string[]>([])
   const [highValue, setHighValue] = useState(true)
   const [wedding, setWedding] = useState(false)
   const [lookalike, setLookalike] = useState(false)
@@ -69,6 +71,7 @@ export default function CallControlPage() {
       rfm_segment: rfm.length ? rfm : undefined,
       frequency_tier: frequency.length ? frequency : undefined,
       primary_metal: metal.length ? metal : undefined,
+      interests: interests.length ? interests : undefined,
       is_high_value: highValue || undefined,
       is_likely_wedding: wedding || undefined,
       is_lookalike_seed: lookalike || undefined,
@@ -249,6 +252,19 @@ export default function CallControlPage() {
           {chipGroup('RFM segment', RFM_SEGMENTS, rfm, setRfm)}
           {chipGroup('Frequency tier', FREQUENCY_TIERS, frequency, setFrequency)}
           {chipGroup('Primary metal', PRIMARY_METALS, metal, setMetal)}
+
+          <div>
+            <p className="text-[11px] text-gray-400 font-medium mb-1">Interests <span className="text-gray-300">· chat · call · sales</span></p>
+            <div className="flex flex-wrap gap-1.5">
+              {INTERESTS.map(i => (
+                <button key={i.key} onClick={() => toggle(interests, setInterests, i.key)}
+                  className={cn('px-3 py-1 rounded-lg text-xs border font-medium',
+                    interests.includes(i.key) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200')}>
+                  {i.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div className="flex flex-wrap gap-3">
             {numField('Min lifetime value (₹)', minLtv, setMinLtv, 'e.g. 50000')}

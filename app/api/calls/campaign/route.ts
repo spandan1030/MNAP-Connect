@@ -14,10 +14,29 @@ type Body = { preview?: boolean; name?: string; filter?: CallFilter }
 
 // Base query: customers (excluding DNC) inner-joined to their markers,
 // filtered by the marker criteria. head=true returns only an exact count.
+function tenDigit(raw: string | null | undefined): string {
+  const d = (raw ?? '').replace(/\D/g, '')
+  return d.length > 10 && d.startsWith('91') ? d.slice(-10) : d
+}
+
+// Set of phones that carry any of the requested interests (from wa_signals).
+async function interestPhoneSet(interests: string[]): Promise<Set<string>> {
+  const set = new Set<string>()
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data } = await supabaseAdmin
+      .from('wa_signals').select('phone').in('interest', interests).range(from, from + PAGE - 1)
+    const rows = (data ?? []) as { phone: string }[]
+    for (const r of rows) set.add(tenDigit(r.phone))
+    if (rows.length < PAGE) break
+  }
+  return set
+}
+
 function buildQuery(filter: CallFilter, head: boolean) {
   let q = supabaseAdmin
     .from('wa_b_customers')
-    .select('id, wa_b_markers!inner(customer_id)', head ? { count: 'exact', head: true } : {})
+    .select('id, phone, wa_b_markers!inner(customer_id)', head ? { count: 'exact', head: true } : {})
     .eq('is_do_not_call', false)
 
   if (filter.recency_tier?.length)   q = q.in('wa_b_markers.recency_tier', filter.recency_tier)
@@ -48,11 +67,34 @@ export async function POST(req: NextRequest) {
   const { preview, name, filter } = (await req.json()) as Body
   const f: CallFilter = filter ?? {}
 
+  // Resolve matching customer ids. Marker filters run in the DB; an interest
+  // filter (wa_signals is phone-keyed, no FK to customers) intersects by phone.
+  async function matchingIds(): Promise<{ ids: string[]; error?: string }> {
+    const rows: { id: string; phone: string }[] = []
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await buildQuery(f, false).range(from, from + PAGE - 1)
+      if (error) return { ids: [], error: error.message }
+      const page = (data ?? []) as { id: string; phone: string }[]
+      rows.push(...page)
+      if (page.length < PAGE) break
+    }
+    if (!f.interests?.length) return { ids: rows.map(r => r.id) }
+    const phones = await interestPhoneSet(f.interests)
+    return { ids: rows.filter(r => phones.has(tenDigit(r.phone))).map(r => r.id) }
+  }
+
   // ── Preview: just the count ──
   if (preview) {
-    const { count, error } = await buildQuery(f, true)
-    if (error) return Response.json({ error: error.message }, { status: 500 })
-    return Response.json({ count: count ?? 0 })
+    // Fast path: no interest filter -> exact head count.
+    if (!f.interests?.length) {
+      const { count, error } = await buildQuery(f, true)
+      if (error) return Response.json({ error: error.message }, { status: 500 })
+      return Response.json({ count: count ?? 0 })
+    }
+    const { ids, error } = await matchingIds()
+    if (error) return Response.json({ error }, { status: 500 })
+    return Response.json({ count: ids.length })
   }
 
   // ── Create ──
@@ -60,16 +102,8 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Campaign name required' }, { status: 400 })
   }
 
-  // Gather all matching customer ids (paginate past Supabase's 1000-row cap).
-  const ids: string[] = []
-  const PAGE = 1000
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await buildQuery(f, false).range(from, from + PAGE - 1)
-    if (error) return Response.json({ error: error.message }, { status: 500 })
-    const rows = (data ?? []) as { id: string }[]
-    ids.push(...rows.map(r => r.id))
-    if (rows.length < PAGE) break
-  }
+  const { ids, error: matchErr } = await matchingIds()
+  if (matchErr) return Response.json({ error: matchErr }, { status: 500 })
   if (ids.length === 0) return Response.json({ error: 'No customers match this filter' }, { status: 400 })
 
   // Only one live list at a time — deactivate previous campaigns.
