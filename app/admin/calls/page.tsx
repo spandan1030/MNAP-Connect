@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import * as XLSX from 'xlsx'
 import Navbar from '@/components/ui/Navbar'
 import { createClient } from '@/lib/supabase/client'
-import { RECENCY_TIERS, VALUE_TIERS } from '@/lib/calls'
+import { RECENCY_TIERS, VALUE_TIERS, RFM_SEGMENTS, FREQUENCY_TIERS, PRIMARY_METALS } from '@/lib/calls'
 import { formatDateTime, cn } from '@/lib/utils'
 import type { CallFilter, WaBCallCampaign } from '@/lib/types'
 
@@ -23,16 +23,24 @@ export default function CallControlPage() {
   // ── Campaign builder ──
   const [recency, setRecency] = useState<string[]>(['Lapsed'])
   const [value, setValue] = useState<string[]>([])
+  const [rfm, setRfm] = useState<string[]>([])
+  const [frequency, setFrequency] = useState<string[]>([])
+  const [metal, setMetal] = useState<string[]>([])
   const [highValue, setHighValue] = useState(true)
   const [wedding, setWedding] = useState(false)
+  const [lookalike, setLookalike] = useState(false)
+  const [minLtv, setMinLtv] = useState('')
+  const [minBills, setMinBills] = useState('')
+  const [maxDays, setMaxDays] = useState('')
   const [name, setName] = useState('')
   const [previewCount, setPreviewCount] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
 
   const [campaigns, setCampaigns] = useState<WaBCallCampaign[]>([])
+  const [dbCount, setDbCount] = useState<number | null>(null)
 
-  useEffect(() => { loadCampaigns() }, [])
+  useEffect(() => { loadCampaigns(); loadDbCount() }, [])
 
   async function loadCampaigns() {
     const { data } = await supabase
@@ -42,18 +50,60 @@ export default function CallControlPage() {
     setCampaigns((data as WaBCallCampaign[]) ?? [])
   }
 
+  async function loadDbCount() {
+    const { count } = await supabase
+      .from('wa_b_markers')
+      .select('customer_id', { count: 'exact', head: true })
+    setDbCount(count ?? 0)
+  }
+
   function currentFilter(): CallFilter {
+    const posInt = (s: string) => { const n = Number(s); return s.trim() !== '' && Number.isFinite(n) && n >= 0 ? n : undefined }
     return {
       recency_tier: recency.length ? recency : undefined,
       value_tier: value.length ? value : undefined,
+      rfm_segment: rfm.length ? rfm : undefined,
+      frequency_tier: frequency.length ? frequency : undefined,
+      primary_metal: metal.length ? metal : undefined,
       is_high_value: highValue || undefined,
       is_likely_wedding: wedding || undefined,
+      is_lookalike_seed: lookalike || undefined,
+      min_lifetime_value: posInt(minLtv),
+      min_total_bills: posInt(minBills),
+      max_days_since_last_purchase: posInt(maxDays),
     }
   }
 
   function toggle(list: string[], set: (v: string[]) => void, item: string) {
     set(list.includes(item) ? list.filter(x => x !== item) : [...list, item])
     setPreviewCount(null)
+  }
+
+  function chipGroup(label: string, options: readonly string[], sel: string[], setSel: (v: string[]) => void) {
+    return (
+      <div>
+        <p className="text-[11px] text-gray-400 font-medium mb-1">{label}</p>
+        <div className="flex flex-wrap gap-1.5">
+          {options.map(t => (
+            <button key={t} onClick={() => toggle(sel, setSel, t)}
+              className={cn('px-3 py-1 rounded-lg text-xs border font-medium capitalize',
+                sel.includes(t) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200')}>
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  function numField(label: string, val: string, setter: (v: string) => void, placeholder: string) {
+    return (
+      <div className="flex-1 min-w-[140px]">
+        <p className="text-[11px] text-gray-400 font-medium mb-1">{label}</p>
+        <input type="number" min={0} inputMode="numeric" className="input py-1.5 text-xs" placeholder={placeholder}
+          value={val} onChange={e => { setter(e.target.value); setPreviewCount(null) }} />
+      </div>
+    )
   }
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -88,6 +138,7 @@ export default function CallControlPage() {
         setProgress(Math.min(i + BATCH, rows.length))
       }
       setImportResult(`Imported ${markers} markers across ${customers} customers.`)
+      loadDbCount()
     } catch (err) {
       setImportResult(`Error: ${(err as Error).message}`)
     } finally {
@@ -136,8 +187,13 @@ export default function CallControlPage() {
         {/* ── Import DB ── */}
         <section className="card p-4 space-y-3">
           <div>
-            <p className="text-sm font-semibold text-gray-700">1. Import customer database</p>
-            <p className="text-xs text-gray-500">Upload <code>leads_import.csv</code> from the signals pipeline. Re-uploading refreshes markers in place.</p>
+            <p className="text-sm font-semibold text-gray-700">Refresh database <span className="font-normal text-gray-400">(optional)</span></p>
+            <p className="text-xs text-gray-500">
+              {dbCount != null
+                ? <><span className="font-medium text-gray-700">{dbCount.toLocaleString('en-IN')}</span> customers already loaded — you can build a campaign below without uploading anything. </>
+                : 'Loads the customer base used by every campaign. '}
+              Only upload a new <code>leads_import.csv</code> when you have a fresh export from the signals pipeline; re-uploading refreshes markers in place and adds any new numbers.
+            </p>
           </div>
           <input
             type="file" accept=".csv"
@@ -163,37 +219,23 @@ export default function CallControlPage() {
         {/* ── Build campaign ── */}
         <section className="card p-4 space-y-3">
           <div>
-            <p className="text-sm font-semibold text-gray-700">2. Create a call campaign</p>
-            <p className="text-xs text-gray-500">Filter the database — only matching cards show to the caller. Do-not-call customers are always excluded.</p>
+            <p className="text-sm font-semibold text-gray-700">Create a call campaign</p>
+            <p className="text-xs text-gray-500">Filters run against the customer base already in the database — no upload needed. Only matching cards show to the caller; do-not-call customers are always excluded.</p>
           </div>
 
-          <div>
-            <p className="text-[11px] text-gray-400 font-medium mb-1">Recency tier</p>
-            <div className="flex flex-wrap gap-1.5">
-              {RECENCY_TIERS.map(t => (
-                <button key={t} onClick={() => toggle(recency, setRecency, t)}
-                  className={cn('px-3 py-1 rounded-lg text-xs border font-medium',
-                    recency.includes(t) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200')}>
-                  {t}
-                </button>
-              ))}
-            </div>
+          {chipGroup('Recency tier', RECENCY_TIERS, recency, setRecency)}
+          {chipGroup('Value tier', VALUE_TIERS, value, setValue)}
+          {chipGroup('RFM segment', RFM_SEGMENTS, rfm, setRfm)}
+          {chipGroup('Frequency tier', FREQUENCY_TIERS, frequency, setFrequency)}
+          {chipGroup('Primary metal', PRIMARY_METALS, metal, setMetal)}
+
+          <div className="flex flex-wrap gap-3">
+            {numField('Min lifetime value (₹)', minLtv, setMinLtv, 'e.g. 50000')}
+            {numField('Min total bills', minBills, setMinBills, 'e.g. 2')}
+            {numField('Max days since purchase', maxDays, setMaxDays, 'e.g. 1095')}
           </div>
 
-          <div>
-            <p className="text-[11px] text-gray-400 font-medium mb-1">Value tier</p>
-            <div className="flex flex-wrap gap-1.5">
-              {VALUE_TIERS.map(t => (
-                <button key={t} onClick={() => toggle(value, setValue, t)}
-                  className={cn('px-3 py-1 rounded-lg text-xs border font-medium',
-                    value.includes(t) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200')}>
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-4">
+          <div className="flex flex-wrap gap-x-4 gap-y-2">
             <label className="flex items-center gap-2 text-xs text-gray-700">
               <input type="checkbox" checked={highValue} onChange={e => { setHighValue(e.target.checked); setPreviewCount(null) }} />
               High-value only
@@ -201,6 +243,10 @@ export default function CallControlPage() {
             <label className="flex items-center gap-2 text-xs text-gray-700">
               <input type="checkbox" checked={wedding} onChange={e => { setWedding(e.target.checked); setPreviewCount(null) }} />
               Likely-wedding only
+            </label>
+            <label className="flex items-center gap-2 text-xs text-gray-700">
+              <input type="checkbox" checked={lookalike} onChange={e => { setLookalike(e.target.checked); setPreviewCount(null) }} />
+              Lookalike seed only
             </label>
           </div>
 

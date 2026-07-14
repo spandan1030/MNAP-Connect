@@ -18,6 +18,8 @@ interface MarkerLite {
   audience_labels: string[] | null
   lifetime_value: number | null
   total_bills: number | null
+  last_purchase_date: string | null
+  days_since_last_purchase: number | null
 }
 interface Card {
   taskId: string
@@ -32,6 +34,13 @@ interface Summary { attempts: number; successes: number; topics: string[] }
 type Phase = 'idle' | 'outcome' | 'success'
 
 const today = () => new Date().toLocaleDateString('en-CA')
+
+function agoText(days: number): string {
+  if (days < 1) return 'today'
+  if (days < 30) return `${days}d ago`
+  if (days < 365) return `${Math.round(days / 30.44)}mo ago`
+  return `${(days / 365.25).toFixed(1)}y ago`
+}
 
 export default function CallsPage() {
   const supabase = createClient()
@@ -100,12 +109,16 @@ export default function CallsPage() {
 
   async function loadMarkers(custIds: string[]): Promise<Record<string, MarkerLite>> {
     const out: Record<string, MarkerLite> = {}
-    for (let i = 0; i < custIds.length; i += 1000) {
-      const slice = custIds.slice(i, i + 1000)
-      const { data } = await supabase
+    // `.in()` goes into the request URL — 1000 UUIDs (~40 KB) exceeds Supabase's
+    // gateway URI limit and the whole request fails silently. Keep chunks small.
+    const CHUNK = 100
+    for (let i = 0; i < custIds.length; i += CHUNK) {
+      const slice = custIds.slice(i, i + CHUNK)
+      const { data, error } = await supabase
         .from('wa_b_markers')
-        .select('customer_id,recency_tier,value_tier,rfm_segment,frequency_tier,audience_labels,lifetime_value,total_bills')
+        .select('customer_id,recency_tier,value_tier,rfm_segment,frequency_tier,audience_labels,lifetime_value,total_bills,last_purchase_date,days_since_last_purchase')
         .in('customer_id', slice)
+      if (error) { console.error('loadMarkers failed:', error.message); continue }
       for (const m of (data ?? []) as (MarkerLite & { customer_id: string })[]) {
         out[m.customer_id] = m
       }
@@ -286,6 +299,24 @@ export default function CallsPage() {
                 ))}
               </div>
             ) : null}
+
+            {/* last purchase */}
+            {current.marker && (() => {
+              const m = current.marker
+              if (m.last_purchase_date) {
+                const d = new Date(m.last_purchase_date + 'T00:00:00')
+                const days = Math.round((Date.now() - d.getTime()) / 86400000)
+                return (
+                  <p className="text-[11px] text-gray-500">
+                    Last purchase: <b className="text-gray-700">{d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b> · {agoText(days)}
+                  </p>
+                )
+              }
+              if (m.days_since_last_purchase != null) {
+                return <p className="text-[11px] text-gray-500">Last purchase: {agoText(m.days_since_last_purchase)} <span className="text-gray-400">(approx)</span></p>
+              }
+              return null
+            })()}
 
             {/* summary */}
             {summary && (

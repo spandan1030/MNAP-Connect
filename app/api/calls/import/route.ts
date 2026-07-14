@@ -19,6 +19,7 @@ interface RawRow {
   lifetime_value?: string
   total_bills?: string
   days_since_last_purchase?: string
+  last_purchase_date?: string
   is_high_value?: string
   is_likely_wedding?: string
   primary_metal?: string
@@ -50,6 +51,10 @@ function labels(v: string | undefined): string[] {
 function parseMarkers(v: string | undefined): Record<string, unknown> | null {
   if (!v) return null
   try { return JSON.parse(v) } catch { return null }
+}
+function dateOnly(v: string | undefined): string | null {
+  const s = (v ?? '').trim()
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null
 }
 
 export async function POST(req: NextRequest) {
@@ -112,6 +117,7 @@ export async function POST(req: NextRequest) {
         lifetime_value: num(r.lifetime_value),
         total_bills: int(r.total_bills),
         days_since_last_purchase: int(r.days_since_last_purchase),
+        last_purchase_date: dateOnly(r.last_purchase_date),
         is_high_value: bool(r.is_high_value),
         is_likely_wedding: bool(r.is_likely_wedding),
         primary_metal: r.primary_metal ?? null,

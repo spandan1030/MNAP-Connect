@@ -20,10 +20,18 @@ function buildQuery(filter: CallFilter, head: boolean) {
     .select('id, wa_b_markers!inner(customer_id)', head ? { count: 'exact', head: true } : {})
     .eq('is_do_not_call', false)
 
-  if (filter.recency_tier?.length) q = q.in('wa_b_markers.recency_tier', filter.recency_tier)
-  if (filter.value_tier?.length)   q = q.in('wa_b_markers.value_tier', filter.value_tier)
-  if (filter.is_high_value)        q = q.eq('wa_b_markers.is_high_value', true)
-  if (filter.is_likely_wedding)    q = q.eq('wa_b_markers.is_likely_wedding', true)
+  if (filter.recency_tier?.length)   q = q.in('wa_b_markers.recency_tier', filter.recency_tier)
+  if (filter.value_tier?.length)     q = q.in('wa_b_markers.value_tier', filter.value_tier)
+  if (filter.rfm_segment?.length)    q = q.in('wa_b_markers.rfm_segment', filter.rfm_segment)
+  if (filter.frequency_tier?.length) q = q.in('wa_b_markers.frequency_tier', filter.frequency_tier)
+  if (filter.primary_metal?.length)  q = q.in('wa_b_markers.primary_metal', filter.primary_metal)
+  if (filter.is_high_value)          q = q.eq('wa_b_markers.is_high_value', true)
+  if (filter.is_likely_wedding)      q = q.eq('wa_b_markers.is_likely_wedding', true)
+  if (filter.is_lookalike_seed)      q = q.contains('wa_b_markers.audience_labels', ['Lookalike Seed'])
+  if (filter.min_lifetime_value != null)  q = q.gte('wa_b_markers.lifetime_value', filter.min_lifetime_value)
+  if (filter.min_total_bills != null)     q = q.gte('wa_b_markers.total_bills', filter.min_total_bills)
+  if (filter.max_days_since_last_purchase != null)
+    q = q.lte('wa_b_markers.days_since_last_purchase', filter.max_days_since_last_purchase)
   return q
 }
 

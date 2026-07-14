@@ -191,8 +191,15 @@ export interface WaBCallLog {
 export interface CallFilter {
   recency_tier?: string[]
   value_tier?: string[]
+  rfm_segment?: string[]
+  frequency_tier?: string[]
+  primary_metal?: string[]
   is_high_value?: boolean
   is_likely_wedding?: boolean
+  is_lookalike_seed?: boolean          // audience_labels contains "Lookalike Seed"
+  min_lifetime_value?: number
+  min_total_bills?: number
+  max_days_since_last_purchase?: number
 }
 
 // ── WhatsApp Messaging (wa_004) ───────────────────────────────────────────────

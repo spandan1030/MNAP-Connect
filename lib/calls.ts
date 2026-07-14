@@ -28,8 +28,11 @@ export const INTENT_LABEL: Record<string, string> = Object.fromEntries(
 )
 
 // Filter option lists for the admin campaign builder (match the Python markers).
-export const RECENCY_TIERS = ['Recent', 'Active', 'Lapsed'] as const
-export const VALUE_TIERS   = ['VIP', 'High', 'Mid', 'Regular'] as const
+export const RECENCY_TIERS   = ['Recent', 'Active', 'Lapsed'] as const
+export const VALUE_TIERS     = ['VIP', 'High', 'Mid', 'Regular'] as const
+export const RFM_SEGMENTS    = ['Champion', 'Loyal', 'Promising', 'At-Risk', 'Dormant', 'Lost', 'One-Time-Big'] as const
+export const FREQUENCY_TIERS = ['Frequent', 'Repeat', 'Occasional', 'One-time'] as const
+export const PRIMARY_METALS  = ['gold', 'silver', 'diamond'] as const
 
 // Chip colours for the marker badges on a call card.
 export const RECENCY_COLORS: Record<string, string> = {
