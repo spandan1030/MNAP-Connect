@@ -69,7 +69,7 @@ const ICONS = {
 const PRIMARY = [
   { href: '/messages',        label: 'Messages',  icon: ICONS.messages },
   { href: '/send',            label: 'Send',      icon: ICONS.send },
-  { href: '/customers',       label: 'Customers', icon: ICONS.customers },
+  { href: '/contacts',        label: 'Customers', icon: ICONS.customers },
   { href: '/catalogue',       label: 'Catalogue', icon: ICONS.catalogue },
   { href: '/admin/templates', label: 'Templates', icon: ICONS.templates },
 ]

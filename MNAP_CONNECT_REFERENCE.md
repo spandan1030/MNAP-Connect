@@ -770,6 +770,15 @@ One phone-keyed layer converging interest signals from **all sources** onto one 
 
 **Ingestion:** import route writes sales signals; `/calls` success writes call signals; webhook writes whatsapp signals. `POST /api/signals/sync` = idempotent backfill from all sources.
 
+## 18D. Contact Spine + Customer Book (`wa_034`, 2026-07-16)
+
+**One profile per phone**, unifying Type A (chat/`wa_customers`) and Type B (sales+calls/`wa_b_customers`). Table `contacts(phone UNIQUE, chat_name, billing_name, name, name_override, wa_customer_id, wa_b_customer_id, from_chat, from_sales, chat_opted_out, call_opted_out, is_opted_out GENERATED (chat_opted_out OR call_opted_out), …)`.
+
+- **Kept in sync by triggers** (`sync_contact_from_wa_customers` / `_wa_b_customers`), `AFTER INSERT OR UPDATE OF name/phone/dnd|is_do_not_call`. So enroll, **inbound-chat auto-add**, STOP, sales import, and DNC all reflect into `contacts` with **no app changes**. Functions are `SECURITY DEFINER` (client-side enroll can write) and swallow errors (a contacts hiccup can never roll back a chat reply/enroll). One-time bulk backfill included in the migration.
+- **Unified consent:** `is_opted_out` = chat STOP (`wa_customers.dnd`) OR call DNC (`wa_b_customers.is_do_not_call`). The **legacy enroll opt-in/opt-out (`wa_customers.is_opted_out`) is intentionally ignored** — not yet physically cleared (deferred to the consent phase, since the old broadcast still reads it until it's retired).
+- **Display name:** billing preferred, else chat, never "Unknown" if a real name exists on the other side; `name_override` wins in UI (editable later).
+- **Customer Book UI** `/contacts` (the "Customers" primary tab now points here): searchable by name/number, filter All/Active/Opted-out, rows show value tier + last purchase + source dots; tap → `CustomerPeek` (full biography). API `GET /api/contacts?q=&filter=&limit=&offset=`. Old `/customers` pages remain reachable (enroll/detail) but the tab is the unified book.
+
 **Consumers:** `/calls` card "Interested in" chips (per-source colour dots) · interest-based campaign filter · `GET /api/signals/export` → `signals_export.csv` for the pipeline → **interest-based Meta/Google audiences** (retargeting + value-based lookalike seeds). See `customer-signals/MARKETING_V1_TRACKER.md` §5b/5c and root `MNAP_ECOSYSTEM_OVERVIEW.md`.
 
 ---
