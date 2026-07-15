@@ -43,6 +43,10 @@ export interface MessageTemplate {
   meta_variables: string[] | null   // ["name","rate_24kt",...] — maps to {{1}},{{2}}...
   header_type: 'none' | 'image'     // 'image' = fixed image header sent with every use
   header_image_url: string | null   // publicly accessible URL for the header image
+  // Reach suppression (wa_032): don't pay to send the same message twice.
+  suppression_days: number          // 14 default; 0 = never suppress (daily rate)
+  suppression_bucket: string | null // optional shared window key across templates
+  category: string | null           // 'daily_rate'|'rate'|'offer'|'thankyou'|'custom'
 }
 
 export interface CommunicationLog {
@@ -141,6 +145,8 @@ export interface WaBMarker {
   lifetime_value: number | null
   total_bills: number | null
   days_since_last_purchase: number | null
+  first_purchase_date: string | null
+  last_purchase_date: string | null
   is_high_value: boolean | null
   is_likely_wedding: boolean | null
   primary_metal: string | null
@@ -353,4 +359,70 @@ export interface WaBroadcast {
   failed: number
   sent_by: string | null
   created_at: string
+}
+
+// ── Reach — unified cohort messaging (wa_032) ─────────────────────────────────
+
+export type SendLedgerStatus = 'sent' | 'failed' | 'skipped_suppressed' | 'skipped_dnc'
+
+// One row per WhatsApp send attempt, keyed by phone (cross-universe).
+export interface WaSendLedger {
+  id: string
+  phone: string
+  template_id: string | null
+  meta_template_name: string | null
+  suppression_key: string
+  category: string | null
+  status: SendLedgerStatus
+  wa_message_id: string | null
+  campaign_ref: string | null
+  cohort_label: string | null
+  error: string | null
+  sent_by: string | null
+  sent_at: string
+}
+
+// Cohort selector for the Reach console. Marker fields mirror CallFilter;
+// call/interest/manual fields let any universe feed one list.
+export interface ReachFilter {
+  // marker filters (wa_b_markers)
+  recency_tier?: string[]
+  value_tier?: string[]
+  rfm_segment?: string[]
+  frequency_tier?: string[]
+  primary_metal?: string[]
+  is_high_value?: boolean
+  is_likely_wedding?: boolean
+  is_lookalike_seed?: boolean
+  min_lifetime_value?: number
+  min_total_bills?: number
+  max_days_since_last_purchase?: number
+  // interest signals (wa_signals, any-match, joined by phone)
+  interests?: string[]
+  // call signals
+  campaignIds?: string[]        // membership via wa_b_call_tasks
+  intents?: string[]            // any call log intent (will_come|not_sure|wont_come)
+  callTopics?: string[]         // any successful-call topic (rate|designs|offers|booking)
+  hotLead?: boolean             // wa_b_customers.is_hot_lead
+  calledFrom?: string           // YYYY-MM-DD (call date lower bound)
+  calledTo?: string             // YYYY-MM-DD (call date upper bound, inclusive)
+  // manual list — used alone (paste numbers)
+  phones?: string[]
+}
+
+// A resolved recipient shown in the Reach list (with prior-send context).
+export interface ReachRecipient {
+  phone: string
+  name: string | null
+  customerId: string | null
+  recency_tier: string | null
+  value_tier: string | null
+  rfm_segment: string | null
+  primary_metal: string | null
+  lifetime_value: number | null
+  is_hot_lead: boolean
+  is_do_not_call: boolean
+  dnd: boolean                  // opted out of WhatsApp (sent STOP)
+  pastSends: Array<{ label: string; category: string | null; sentAt: string }>
+  suppressedUntil: string | null // set when the CURRENT template is within its window
 }

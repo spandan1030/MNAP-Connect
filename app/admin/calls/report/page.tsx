@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Navbar from '@/components/ui/Navbar'
+import CustomerPeek from '@/components/ui/CustomerPeek'
 import { createClient } from '@/lib/supabase/client'
 import { CALL_TOPICS, CALL_INTENTS, TOPIC_LABEL, INTENT_LABEL } from '@/lib/calls'
 import { formatDateTime, cn } from '@/lib/utils'
@@ -27,6 +28,7 @@ export default function CallReportPage() {
   const [loading, setLoading] = useState(false)
   const [drill, setDrill] = useState<DrillKey>(null)
   const [activeCampaign, setActiveCampaign] = useState<WaBCallCampaign | null>(null)
+  const [peekPhone, setPeekPhone] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true); setDrill(null)
@@ -107,7 +109,7 @@ export default function CallReportPage() {
             <p className="text-xs font-semibold text-gray-700">★ Hot leads — {hotRows.length}</p>
             {hotRows.map(c => (
               <div key={c.phone} className="flex items-center justify-between text-xs border-b border-gray-50 last:border-0 py-1">
-                <span className="text-gray-800">{c.name}</span>
+                <button onClick={() => setPeekPhone(c.phone)} className="text-gray-800 underline decoration-dotted underline-offset-2">{c.name}</button>
                 <a href={`tel:+91${c.phone}`} className="text-gray-500">+91 {c.phone}</a>
               </div>
             ))}
@@ -149,7 +151,7 @@ export default function CallReportPage() {
             </div>
             {drillRows.map(l => (
               <div key={l.id} className="flex items-center justify-between text-xs border-b border-gray-50 last:border-0 py-1">
-                <span className="text-gray-800">{l.customer.name}</span>
+                <button onClick={() => setPeekPhone(l.customer.phone)} className="text-gray-800 underline decoration-dotted underline-offset-2">{l.customer.name}</button>
                 <a href={`tel:+91${l.customer.phone}`} className="text-gray-500">+91 {l.customer.phone}</a>
               </div>
             ))}
@@ -167,10 +169,10 @@ export default function CallReportPage() {
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-gray-800 truncate">
+                  <button onClick={() => setPeekPhone(l.customer.phone)} className="text-xs font-medium text-gray-800 truncate underline decoration-dotted underline-offset-2 text-left">
                     {l.customer.is_hot_lead && <span className="text-amber-400" title="Hot lead">★ </span>}
                     {l.customer.name}
-                  </span>
+                  </button>
                   <span className="text-[10px] text-gray-400 flex-shrink-0">{formatDateTime(l.called_at)}</span>
                 </div>
                 <p className="text-[11px] text-gray-500">
@@ -183,6 +185,7 @@ export default function CallReportPage() {
           ))}
         </div>
       </main>
+      <CustomerPeek phone={peekPhone} onClose={() => setPeekPhone(null)} />
     </div>
   )
 }

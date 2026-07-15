@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import Navbar from '@/components/ui/Navbar'
-import type { WaThankYouProduct } from '@/lib/types'
+import CustomerPeek from '@/components/ui/CustomerPeek'
+import type { WaThankYouProduct, MessageTemplate } from '@/lib/types'
 
 interface SendResult {
   sent: number; failed: number; total: number
@@ -27,7 +28,7 @@ export default function ThankYouPage() {
   const supabase = createClient()
   const router = useRouter()
 
-  const [tab, setTab]           = useState<'send' | 'messages'>('send')
+  const [tab, setTab]           = useState<'recent' | 'send' | 'messages'>('recent')
   const [products, setProducts] = useState<WaThankYouProduct[]>([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState<string | null>(null)
@@ -57,18 +58,18 @@ export default function ThankYouPage() {
           <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700">←</button>
           <div>
             <h1 className="text-lg font-bold text-gray-900">Thank-you broadcast</h1>
-            <p className="text-xs text-gray-500">Send purchase thank-you messages to buyers.</p>
+            <p className="text-xs text-gray-500">Auto-thank recent buyers, or upload a list.</p>
           </div>
         </div>
 
         {/* Tabs */}
         <div className="flex gap-2">
-          {(['send', 'messages'] as const).map(t => (
+          {(['recent', 'send', 'messages'] as const).map(t => (
             <button key={t} onClick={() => { setTab(t); setError(null) }}
               className={`flex-1 py-2 rounded-lg text-sm font-semibold border transition-colors ${
                 tab === t ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
               }`}>
-              {t === 'send' ? 'Send' : 'Messages'}
+              {t === 'recent' ? 'Recent buyers' : t === 'send' ? 'Upload' : 'Messages'}
             </button>
           ))}
         </div>
@@ -77,12 +78,135 @@ export default function ThankYouPage() {
 
         {loading ? (
           <div className="flex justify-center pt-10"><div className="w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full animate-spin" /></div>
+        ) : tab === 'recent' ? (
+          <RecentBuyersTab setError={setError} />
         ) : tab === 'send' ? (
           <SendTab products={products} setError={setError} />
         ) : (
           <MessagesTab products={products} reload={reload} setError={setError} />
         )}
       </main>
+    </div>
+  )
+}
+
+// ===========================================================================
+// RECENT BUYERS TAB — auto-thank everyone who bought in the last N days.
+// Pulls last_purchase_date straight from wa_b_markers (no upload) and sends
+// via the Reach ledger so nobody is thanked twice inside the window.
+// ===========================================================================
+interface RecentRecipient { phone: string; name: string | null; lastPurchase: string | null; suppressed: boolean; dnd: boolean }
+
+function RecentBuyersTab({ setError }: { setError: (s: string | null) => void }) {
+  const supabase = createClient()
+  const [templates, setTemplates] = useState<MessageTemplate[]>([])
+  const [templateId, setTemplateId] = useState('')
+  const [days, setDays] = useState(14)
+  const [recipients, setRecipients] = useState<RecentRecipient[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [result, setResult] = useState<{ sent: number; skippedSuppressed: number; skippedDnc: number; failed: number } | null>(null)
+  const [peekPhone, setPeekPhone] = useState<string | null>(null)
+
+  useEffect(() => {
+    supabase.from('wa_message_templates').select('*').eq('is_active', true).eq('category', 'thankyou')
+      .not('meta_template_name', 'is', null).order('created_at', { ascending: false })
+      .then(({ data }) => setTemplates((data ?? []) as MessageTemplate[]))
+  }, [supabase])
+
+  const template = templates.find(t => t.id === templateId) ?? null
+  const eligible = recipients.filter(r => !r.suppressed && !r.dnd)
+
+  async function load() {
+    setError(null); setResult(null)
+    if (!templateId) { setError('Pick a thank-you template first.'); return }
+    setLoading(true); setLoaded(false)
+    try {
+      const res = await fetch(`/api/thankyou/recent-buyers?days=${days}&templateId=${templateId}`)
+      const data = await res.json()
+      if (!res.ok) { setError(data.error ?? 'Could not load buyers'); setLoading(false); return }
+      setRecipients(data.recipients ?? [])
+      setLoaded(true)
+    } catch { setError('Network error') } finally { setLoading(false) }
+  }
+
+  async function send() {
+    if (!template || eligible.length === 0) return
+    setSending(true); setError(null)
+    try {
+      const res = await fetch('/api/reach/send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipients: eligible.map(r => ({ phone: r.phone, name: r.name })),
+          templateId, cohortLabel: `Thank-you (bought ≤${days}d)`,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.error ?? 'Send failed'); setSending(false); return }
+      setResult(data)
+      await load()
+    } catch { setError('Network error during send') } finally { setSending(false) }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="card p-4 space-y-3">
+        <div>
+          <label className="text-xs font-medium text-gray-600">Thank-you template</label>
+          <select value={templateId} onChange={e => { setTemplateId(e.target.value); setLoaded(false) }} className="input mt-1 text-sm">
+            <option value="">Choose a template (category: thank-you)…</option>
+            {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+          {templates.length === 0 && (
+            <p className="text-[11px] text-amber-600 mt-1">No thank-you templates yet. In Templates, link a Meta template and set its category to <b>Thank-you</b>.</p>
+          )}
+        </div>
+        <div className="flex items-end gap-2">
+          <label className="text-xs font-medium text-gray-600">
+            Bought in the last
+            <input type="number" min={1} max={90} value={days} onChange={e => { setDays(Math.max(1, Math.min(90, parseInt(e.target.value) || 14))); setLoaded(false) }}
+              className="input mt-1 text-sm w-20" />
+          </label>
+          <span className="text-xs text-gray-500 pb-2.5">days</span>
+          <button onClick={load} disabled={loading} className="btn-primary ml-auto disabled:opacity-60">{loading ? 'Loading…' : 'Load buyers'}</button>
+        </div>
+        {template && template.suppression_days > 0 && (
+          <p className="text-[11px] text-gray-500">Skips anyone already thanked with this template in the last {template.suppression_days} days.</p>
+        )}
+      </div>
+
+      {result && (
+        <div className="text-xs bg-green-50 border border-green-100 rounded-lg px-3 py-2 text-green-800">
+          Sent {result.sent} · skipped {result.skippedSuppressed} (already thanked) · {result.skippedDnc} opted-out · {result.failed} failed.
+        </div>
+      )}
+
+      {loaded && (
+        <div className="card p-3 space-y-2">
+          <p className="text-xs font-semibold text-gray-700">
+            {recipients.length} buyer{recipients.length !== 1 ? 's' : ''} · {eligible.length} to thank
+          </p>
+          <div className="space-y-1.5 max-h-[48vh] overflow-y-auto">
+            {recipients.map(r => (
+              <div key={r.phone} className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 ${r.suppressed || r.dnd ? 'border-gray-100 bg-gray-50' : 'border-gray-200'}`}>
+                <button onClick={() => setPeekPhone(r.phone)} className="min-w-0 text-left">
+                  <span className="text-xs font-medium text-gray-800 truncate underline decoration-dotted underline-offset-2">{r.name || 'Unknown'}</span>
+                  <span className="text-[11px] text-gray-400 ml-1.5">+91 {r.phone}</span>
+                </button>
+                <span className="text-[10px] text-gray-400 flex-shrink-0">
+                  {r.suppressed ? 'already thanked' : r.dnd ? 'opted out' : r.lastPurchase ? new Date(r.lastPurchase).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+          <button onClick={send} disabled={sending || eligible.length === 0} className="btn-primary w-full disabled:opacity-60">
+            {sending ? 'Sending…' : `Send thank-you to ${eligible.length}`}
+          </button>
+        </div>
+      )}
+
+      <CustomerPeek phone={peekPhone} onClose={() => setPeekPhone(null)} />
     </div>
   )
 }

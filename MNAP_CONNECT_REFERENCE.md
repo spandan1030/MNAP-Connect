@@ -746,6 +746,58 @@ Two communication types to build:
 
 ---
 
+## 18A. Cold-Call Marker-Validation Module (`wa_028`, live 2026-07-14)
+
+Salesmen cold-call sales-derived "lost leads" and log structured feedback. Feeds three loops: tune pipeline thresholds, ad-audience hygiene, reactivation playbook.
+
+**Data path (CSV bridge):** `customer-signals` pipeline → `leads_import.csv` → **Call Control import** → `wa_b_customers` (+`source='sales_import'`) + `wa_b_markers` → calling deck → outcomes logged → **feedback CSV export** → pipeline `apply_call_feedback()` → call-level markers.
+
+**Tables:** `wa_b_markers` (imported marker snapshot: recency/value/rfm/frequency tiers, audience_labels[], lifetime_value, total_bills, days_since_last_purchase, is_high_value, is_likely_wedding, primary_metal, outreach_bucket, **last_purchase_date** (`wa_029`), markers JSONB) · `wa_b_call_campaigns` (name, filter_json) · `wa_b_call_tasks` (queue: pending/done/hidden, attempts) · `wa_b_call_logs` (success, topics[], intent, notes). Triggers auto-bump attempts and flip task status (done / hidden+DNC) on outcome. `wa_b_customers` gained `source`, `is_do_not_call`, `dnc_at`.
+
+**Screens:** `/admin/calls` (Call Control — import, full marker + **interest** filter campaign builder, live DB count, signals sync/export) · `/calls` (salesman deck — one card at a time, tap-to-call, markers + converged interests + last-purchase date, Success→topics→intent, per-card three-dot **"Don't call"**, **editable history of last 100 calls**, search, hidden list) · `/admin/calls/report` (range summary, drill-down, feedback CSV). Routes under `/api/calls/*`.
+
+**Outcome model:** Success/Fail → topics[] (rate/designs/offers/booking) → intent (will_come/not_sure/wont_come/dont_call). Daily-retry on fail; dont_call → DNC + hidden (**calling-only exclusion — never suppresses seeding or other modules**).
+
+## 18B. Unified Interest Signals (`wa_030`, applied 2026-07-15)
+
+One phone-keyed layer converging interest signals from **all sources** onto one canonical taxonomy — crossing the Type A / Type B split (which are separate tables joined only by phone).
+
+**Table:** `wa_signals(phone, interest, source, weight, evidence, last_seen)`, UNIQUE(phone, interest, source). **Taxonomy** (`lib/signals.ts`): engagement (rate/designs/offers/scheme/exchange/cash/repair) · product (necklace/ring/bangles/earrings/chain/mangalsutra/pendant/bracelet/anklet/investment) · metal (gold/silver/diamond).
+
+**Sources → signals:** `sales` ← `wa_b_markers.markers` (bought_*/buys_*/primary_metal) · `whatsapp` ← `wa_customer_interests` + `wa_lead_captures` (webhook `addInterest()` mirrors live) · `call` ← `wa_b_call_logs.topics` · `billing` ← reserved (Step 4 POS tags).
+
+**Ingestion:** import route writes sales signals; `/calls` success writes call signals; webhook writes whatsapp signals. `POST /api/signals/sync` = idempotent backfill from all sources.
+
+**Consumers:** `/calls` card "Interested in" chips (per-source colour dots) · interest-based campaign filter · `GET /api/signals/export` → `signals_export.csv` for the pipeline → **interest-based Meta/Google audiences** (retargeting + value-based lookalike seeds). See `customer-signals/MARKETING_V1_TRACKER.md` §5b/5c and root `MNAP_ECOSYSTEM_OVERVIEW.md`.
+
+---
+
+## 18C. Reach — Unified Cohort Messaging (`wa_032`, Phase 1 — 2026-07-15)
+
+Message **any cohort** assembled from call signals, chat signals, markers, or a pasted number list — with a phone-keyed **send ledger** that prevents paying to send the same template twice.
+
+**Migration `wa_032_reach.sql`:**
+- `wa_send_ledger(phone, template_id, meta_template_name, suppression_key, category, status, wa_message_id, campaign_ref, cohort_label, error, sent_by, sent_at)` — one row per send **attempt**, keyed by **phone** (cross-universe: works for the whole call-imported DB, not just Type A). `status ∈ sent|failed|skipped_suppressed|skipped_dnc`. This is the money-guard **and** the funnel/reply-context spine. Indexes: `(phone, suppression_key, sent_at) WHERE status='sent'` (suppression) + `(phone, sent_at)` (history).
+- `wa_message_templates` gains `suppression_days` (default 14; **0 = never suppress**, daily rate), `suppression_bucket` (optional shared window across templates), `category` ('daily_rate'|'rate'|'offer'|'thankyou'|'custom').
+- `wa_b_markers.first_purchase_date` (pipeline already computes it; exported via `LEAD_HOT_COLUMNS`, stored on import — for the Phase 2 customer peek).
+
+**Suppression rule:** "same message" = same `suppression_key` (= `suppression_bucket` else `template.id`). A phone is skipped (Meta is **never called** → no spend) if it has a `status='sent'` ledger row with that key inside `suppression_days`. Daily-rate templates (0 days) never suppress; `/send` keeps handling those.
+
+**Routes:**
+- `POST /api/reach/resolve { filter, templateId }` → resolves the cohort to phones (active filter families **intersected** — marker ⋈ `wa_b_markers`, call-campaign ⋈ `wa_b_call_tasks`, call-log intent/topics/date ⋈ `wa_b_call_logs`, `hotLead`, interests ⋈ `wa_signals`, or a manual `phones` list). Decorates up to 1000 with markers, opt-out flags, prior sends (90d), and `suppressedUntil` for the chosen template.
+- `POST /api/reach/send { recipients, templateId, cohortLabel, campaignRef }` → **server re-verifies** DNC (`wa_b_customers.is_do_not_call`) + DND (`wa_customers.dnd`) + suppression, sends the approved template, threads the message (replies land in the inbox), and writes the ledger.
+
+**UI `/reach`** (nav → More → Reach): pick template → build cohort (call/chat/marker chips or paste) → Find recipients → review list (each row shows markers + "Sent before: …" history; suppressed/opted-out rows pre-unchecked) → send to selected. `ReachFilter`/`ReachRecipient` in `lib/types`.
+
+**Scope split (feature audit):** `/send` = fast **daily-rate** tool (no suppression, correct). `/reach` = everything else, 14-day guarded. Respects all opt-outs; first-party only.
+
+**Phase 2 (2026-07-15, no migration — uses wa_032 columns):**
+- **Universal customer peek** — `GET /api/customer/peek?phone=` gathers one phone's full story across universes (Type B customer + markers incl. first/last purchase, Type A chat + opt-out, `wa_signals` interests by source, `wa_b_call_logs` history, `wa_send_ledger` message history). Reusable drawer `components/ui/CustomerPeek.tsx` (`<CustomerPeek phone onClose/>`). Wired to tappable names/phones on **/reach, /admin/calls/report, /messages inbox (ⓘ), /calls deck, /send** — "click a number → who is this, new or known, tags, first+last purchase, calls, messages."
+- **Thank-you "recent buyers" auto-mode** — new default tab on `/admin/thankyou`: `GET /api/thankyou/recent-buyers?days=14&templateId=` pulls buyers with `wa_b_markers.last_purchase_date` in the window (no upload), shows per-phone thank-you suppression, one-click sends via `/api/reach/send` (category 'thankyou', 14-day guard). Legacy upload tabs kept. Needs a `wa_message_templates` row with `category='thankyou'`.
+- **Inbox funnel context:** `wa_send_ledger.cohort_label` shows in the peek's message history (e.g. "Thank-you (bought ≤14d)", "Lapsed VIP Winback"). Full funnel UI still parked.
+
+---
+
 ## 19. Known Constraints
 
 | Constraint | Detail |
@@ -761,8 +813,8 @@ Two communication types to build:
 
 ---
 
-*Document created: 12 May 2026 — last updated: 17 June 2026 (engagement API, Catalogue/Inventory/Purchase modules — see `ENGAGEMENT_SYSTEM.md`)*
+*Document created: 12 May 2026 — last updated: 15 July 2026 (added §18A Cold-Call module `wa_028`/`wa_029`, §18B Unified Interest Signals `wa_030`; see root `MNAP_ECOSYSTEM_OVERVIEW.md` for the cross-app picture)*
 *Project folder: `C:\Users\spand\Desktop\Management Software\mnap-connect`*
 *Supabase project: shared with MNAP — `tqnirshwiqpwbqdcrgbr`*
-*Migrations: `supabase/migrations/wa_001_initial_schema.sql`, `wa_002_seed_topics.sql`, `wa_003_intervention_schema.sql`*
+*Migrations: `wa_001`…`wa_027` (see `supabase/migrations/`), `wa_028_calling.sql`, `wa_029_last_purchase_date.sql`, `wa_030_signals.sql`*
 *Strategy: `INTERVENTION_STRATEGY.md` — `INTERVENTION_MODULE_DISCUSSION.md`*

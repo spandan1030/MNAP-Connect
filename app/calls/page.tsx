@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Navbar from '@/components/ui/Navbar'
+import CustomerPeek from '@/components/ui/CustomerPeek'
 import { createClient } from '@/lib/supabase/client'
 import {
   CALL_TOPICS, CALL_INTENTS, TOPIC_LABEL, INTENT_LABEL,
@@ -101,6 +102,7 @@ export default function CallsPage() {
 
   const current = override ?? cards[idx] ?? null
   const marker = current ? markers[current.customerId] ?? null : null
+  const [peekPhone, setPeekPhone] = useState<string | null>(null)
 
   // ── initial load ──
   useEffect(() => { loadDeck() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -417,10 +419,10 @@ export default function CallsPage() {
           <div className="card p-4 space-y-3" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
             {/* name + number */}
             <div className="flex items-start justify-between">
-              <div>
-                <h1 className="text-base font-bold text-gray-900">{current.name}</h1>
+              <button onClick={() => setPeekPhone(current.phone)} className="text-left">
+                <h1 className="text-base font-bold text-gray-900 underline decoration-dotted underline-offset-2">{current.name}</h1>
                 <p className="text-xs text-gray-500">+91 {current.phone}</p>
-              </div>
+              </button>
               <div className="flex items-center gap-1 shrink-0">
                 {override && <button onClick={() => setOverride(null)} className="text-[11px] text-gray-500 border border-gray-200 rounded-lg px-2 py-1">Back to list</button>}
                 {/* hot-lead star — appears only once the call is marked connected
@@ -731,6 +733,8 @@ export default function CallsPage() {
           </div>
         </>
       )}
+
+      <CustomerPeek phone={peekPhone} onClose={() => setPeekPhone(null)} />
     </Shell>
   )
 }

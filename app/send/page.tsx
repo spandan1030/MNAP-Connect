@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Navbar from '@/components/ui/Navbar'
+import CustomerPeek from '@/components/ui/CustomerPeek'
 import { applyPlaceholders } from '@/lib/utils'
 import type { InterestTopic, Customer, MessageTemplate } from '@/lib/types'
 
@@ -50,6 +51,7 @@ export default function SendPage() {
   const [loading, setLoading] = useState(true)
   const [todayLogs, setTodayLogs] = useState<TodayLog[]>([])
   const [todayRates, setTodayRates] = useState<TodayRates | null>(null)
+  const [peekPhone, setPeekPhone] = useState<string | null>(null)
 
   // Per-customer send flow state
   const [step, setStep] = useState<Step>('list')
@@ -379,8 +381,10 @@ export default function SendPage() {
             return (
               <div key={customer.id} className="card p-4 flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="font-semibold text-gray-900 text-sm truncate">{customer.name}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">+91 {customer.phone}</p>
+                  <button onClick={() => setPeekPhone(customer.phone)} className="text-left">
+                    <p className="font-semibold text-gray-900 text-sm truncate underline decoration-dotted underline-offset-2">{customer.name}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">+91 {customer.phone}</p>
+                  </button>
                   <div className="flex flex-wrap gap-1 mt-1.5">
                     {customer.interests.slice(0, 3).map(tid => (
                       <span key={tid} className="text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded-full border border-green-100">
@@ -667,6 +671,8 @@ export default function SendPage() {
           </div>
         </div>
       )}
+
+      <CustomerPeek phone={peekPhone} onClose={() => setPeekPhone(null)} />
     </div>
   )
 }

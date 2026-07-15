@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import Navbar from '@/components/ui/Navbar'
+import CustomerPeek from '@/components/ui/CustomerPeek'
 import NewThreadButton from './NewThreadButton'
 import type { WaThread } from '@/lib/types'
 
@@ -11,6 +12,7 @@ export default function MessagesPage() {
   const supabase = createClient()
   const [threads, setThreads] = useState<WaThread[]>([])
   const [loading, setLoading] = useState(true)
+  const [peekPhone, setPeekPhone] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -125,6 +127,11 @@ export default function MessagesPage() {
                   </div>
                 </div>
 
+                <button
+                  onClick={e => { e.preventDefault(); e.stopPropagation(); setPeekPhone(thread.phone) }}
+                  aria-label="Who is this?"
+                  className="flex-shrink-0 w-6 h-6 rounded-full border border-gray-200 text-gray-400 text-[11px] font-bold flex items-center justify-center active:bg-gray-100"
+                >i</button>
                 <svg className="w-4 h-4 text-gray-300 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
@@ -133,6 +140,8 @@ export default function MessagesPage() {
           </div>
         )}
       </main>
+
+      <CustomerPeek phone={peekPhone} onClose={() => setPeekPhone(null)} />
     </div>
   )
 }

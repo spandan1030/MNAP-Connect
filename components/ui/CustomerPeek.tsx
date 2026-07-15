@@ -1,0 +1,201 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { INTEREST_LABEL, SIGNAL_SOURCE_LABEL } from '@/lib/signals'
+import { INTENT_LABEL, TOPIC_LABEL } from '@/lib/calls'
+
+// Universal customer peek: tap any phone number anywhere → who is this?
+// Brand-new or known, markers, first/last purchase, interests, call + message
+// history. Render once per page: <CustomerPeek phone={peekPhone} onClose={...} />.
+
+interface PeekData {
+  phone: string
+  known: boolean
+  isNew: boolean
+  name: string | null
+  source: string | null
+  flags: { is_hot_lead: boolean; is_do_not_call: boolean; dnd: boolean; is_opted_out: boolean }
+  markers: {
+    recency_tier: string | null; value_tier: string | null; rfm_segment: string | null
+    frequency_tier: string | null; primary_metal: string | null; lifetime_value: number | null
+    total_bills: number | null; days_since_last_purchase: number | null
+    first_purchase_date: string | null; last_purchase_date: string | null
+    audience_labels: string[] | null; is_high_value: boolean | null; is_likely_wedding: boolean | null
+  } | null
+  interests: Record<string, string[]>
+  calls: Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string }>
+  sends: Array<{ label: string; category: string | null; status: string; cohort: string | null; sentAt: string }>
+}
+
+const SOURCE_DOT: Record<string, string> = {
+  sales: 'bg-amber-400', whatsapp: 'bg-green-500', call: 'bg-blue-500', billing: 'bg-purple-500',
+}
+
+function fmtDate(s: string | null): string {
+  if (!s) return '—'
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+function fmtDateTime(s: string): string {
+  const d = new Date(s)
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })
+}
+
+export default function CustomerPeek({ phone, onClose }: { phone: string | null; onClose: () => void }) {
+  const [data, setData] = useState<PeekData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!phone) { setData(null); setError(null); return }
+    setLoading(true); setError(null); setData(null)
+    fetch(`/api/customer/peek?phone=${encodeURIComponent(phone)}`)
+      .then(r => r.json())
+      .then(d => { if (d.error) setError(d.error); else setData(d) })
+      .catch(() => setError('Could not load'))
+      .finally(() => setLoading(false))
+  }, [phone])
+
+  if (!phone) return null
+  const m = data?.markers
+
+  return (
+    <div className="fixed inset-0 z-[60] flex flex-col justify-end bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+        <div className="flex-shrink-0 px-5 pt-4 pb-3 border-b border-gray-100">
+          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-3" />
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="font-bold text-gray-900 truncate">{data?.name || (loading ? 'Loading…' : 'Unknown')}</p>
+                {data?.flags.is_hot_lead && <span className="text-amber-400" title="Hot lead">★</span>}
+                {data?.isNew && <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full">NEW — not in DB</span>}
+                {data?.flags.is_do_not_call && <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full">Don&apos;t call</span>}
+                {data?.flags.dnd && <span className="text-[10px] font-bold text-gray-600 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full">Opted out</span>}
+              </div>
+              <a href={`tel:+91${phone}`} className="text-xs text-gray-500">+91 {phone}</a>
+            </div>
+            <button onClick={onClose} className="text-gray-400 text-xl leading-none flex-shrink-0">×</button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
+          {loading && <p className="text-sm text-gray-400 text-center py-6">Loading…</p>}
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          {data && !loading && (
+            <>
+              {/* Purchase history */}
+              {m && (m.first_purchase_date || m.last_purchase_date || m.lifetime_value != null) ? (
+                <Section title="Purchase history">
+                  <div className="grid grid-cols-2 gap-2">
+                    <KV k="First purchase" v={fmtDate(m.first_purchase_date)} />
+                    <KV k="Last purchase" v={fmtDate(m.last_purchase_date)} />
+                    <KV k="Lifetime value" v={m.lifetime_value != null ? `₹${Math.round(m.lifetime_value).toLocaleString('en-IN')}` : '—'} />
+                    <KV k="Bills" v={m.total_bills != null ? String(m.total_bills) : '—'} />
+                  </div>
+                </Section>
+              ) : (
+                <p className="text-xs text-gray-400">No purchase history on file{data.isNew ? ' — brand-new contact.' : '.'}</p>
+              )}
+
+              {/* Markers */}
+              {m && (
+                <Section title="Markers">
+                  <div className="flex flex-wrap gap-1.5">
+                    {m.recency_tier && <Tag>{m.recency_tier}</Tag>}
+                    {m.value_tier && <Tag>{m.value_tier}</Tag>}
+                    {m.rfm_segment && <Tag>{m.rfm_segment}</Tag>}
+                    {m.frequency_tier && <Tag>{m.frequency_tier}</Tag>}
+                    {m.primary_metal && <Tag>{m.primary_metal}</Tag>}
+                    {m.is_high_value && <Tag>High value</Tag>}
+                    {m.is_likely_wedding && <Tag>Wedding</Tag>}
+                    {(m.audience_labels ?? []).map(l => <Tag key={l}>{l}</Tag>)}
+                  </div>
+                </Section>
+              )}
+
+              {/* Interests by source */}
+              {Object.keys(data.interests).length > 0 && (
+                <Section title="Interested in">
+                  <div className="space-y-1">
+                    {Object.entries(data.interests).map(([src, keys]) => (
+                      <div key={src} className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`w-1.5 h-1.5 rounded-full ${SOURCE_DOT[src] ?? 'bg-gray-400'}`} />
+                        <span className="text-[10px] text-gray-400 w-16">{SIGNAL_SOURCE_LABEL[src as keyof typeof SIGNAL_SOURCE_LABEL] ?? src}</span>
+                        {[...new Set(keys)].map(k => <Tag key={k}>{INTEREST_LABEL[k] ?? k}</Tag>)}
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+              )}
+
+              {/* Call history */}
+              {data.calls.length > 0 && (
+                <Section title={`Calls (${data.calls.length})`}>
+                  <div className="space-y-1">
+                    {data.calls.map((c, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs">
+                        <span className={c.success === true ? 'text-green-600' : c.success === false ? 'text-red-500' : 'text-gray-300'}>
+                          {c.success === true ? '✓' : c.success === false ? '✗' : '•'}
+                        </span>
+                        <span className="text-gray-400 w-20 flex-shrink-0">{fmtDateTime(c.called_at)}</span>
+                        <span className="text-gray-700 truncate">
+                          {c.intent ? INTENT_LABEL[c.intent] : ''}
+                          {c.topics?.length ? ` · ${c.topics.map(t => TOPIC_LABEL[t] ?? t).join(', ')}` : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+              )}
+
+              {/* Message history */}
+              <Section title={`Messages sent (${data.sends.length})`}>
+                {data.sends.length === 0 ? (
+                  <p className="text-xs text-gray-400">No WhatsApp messages sent yet.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {data.sends.map((s, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs">
+                        <span className={s.status === 'sent' ? 'text-green-600' : 'text-gray-300'}>
+                          {s.status === 'sent' ? '✓' : s.status === 'failed' ? '✗' : '•'}
+                        </span>
+                        <span className="text-gray-400 w-20 flex-shrink-0">{fmtDateTime(s.sentAt)}</span>
+                        <span className="text-gray-700 truncate">{s.label}{s.cohort ? ` · ${s.cohort}` : ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Section>
+            </>
+          )}
+        </div>
+        <div className="flex-shrink-0 px-5 py-3 border-t border-gray-100">
+          <a href={`https://wa.me/91${phone}`} target="_blank" rel="noreferrer"
+            className="btn-secondary w-full text-center block">Open WhatsApp chat</a>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">{title}</p>
+      {children}
+    </div>
+  )
+}
+function KV({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
+      <p className="text-[10px] text-gray-400">{k}</p>
+      <p className="text-xs font-semibold text-gray-800">{v}</p>
+    </div>
+  )
+}
+function Tag({ children }: { children: React.ReactNode }) {
+  return <span className="text-[10px] bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded-full">{children}</span>
+}

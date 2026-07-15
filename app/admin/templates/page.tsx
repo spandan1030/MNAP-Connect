@@ -39,6 +39,9 @@ export default function TemplatesPage() {
   const [headerType, setHeaderType] = useState<'none' | 'image'>('none')
   const [headerImageUrl, setHeaderImageUrl] = useState('')
   const [showMetaSection, setShowMetaSection] = useState(false)
+  // Reach suppression (wa_032)
+  const [category, setCategory] = useState('custom')
+  const [suppressionDays, setSuppressionDays] = useState(14)
 
   useEffect(() => { loadData() }, [])
 
@@ -79,6 +82,8 @@ export default function TemplatesPage() {
     setMetaVars(t.meta_variables?.join(', ') ?? '')
     setHeaderType(t.header_type ?? 'none')
     setHeaderImageUrl(t.header_image_url ?? '')
+    setCategory(t.category ?? 'custom')
+    setSuppressionDays(t.suppression_days ?? 14)
     setShowMetaSection(!!(t.meta_template_name))
     setShowPreview(false)
     setError('')
@@ -88,6 +93,7 @@ export default function TemplatesPage() {
   function resetForm() {
     setEditingId(null); setFormName(''); setFormTopic('none'); setFormBody('')
     setMetaName(''); setMetaLang('en'); setMetaVars(''); setHeaderType('none'); setHeaderImageUrl(''); setShowMetaSection(false)
+    setCategory('custom'); setSuppressionDays(14)
     setError(''); setShowPreview(false)
   }
 
@@ -110,6 +116,8 @@ export default function TemplatesPage() {
       meta_variables:     parsedVars,
       header_type:        headerType,
       header_image_url:   headerType === 'image' ? (headerImageUrl.trim() || null) : null,
+      category:           category || 'custom',
+      suppression_days:   category === 'daily_rate' ? 0 : Math.max(0, suppressionDays || 0),
     }
     if (editingId) {
       await supabase.from('wa_message_templates').update(payload).eq('id', editingId)
@@ -246,6 +254,48 @@ export default function TemplatesPage() {
                     className="input font-mono text-sm"
                     placeholder="en"
                   />
+                </div>
+
+                {/* Reach: category + suppression window */}
+                <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 space-y-3">
+                  <p className="text-xs font-semibold text-amber-800">Reach settings (cohort messaging)</p>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-500">Category</label>
+                    <select
+                      value={category}
+                      onChange={e => {
+                        const c = e.target.value
+                        setCategory(c)
+                        if (c === 'daily_rate') setSuppressionDays(0)
+                        else if (suppressionDays === 0) setSuppressionDays(14)
+                      }}
+                      className="input text-sm"
+                    >
+                      <option value="daily_rate">Daily rate (no suppression)</option>
+                      <option value="rate">Rate alert</option>
+                      <option value="offer">Offer / promo</option>
+                      <option value="thankyou">Thank-you (transactional)</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-500">
+                      Suppression window (days) — don&apos;t resend this template to the same number within
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={suppressionDays}
+                      onChange={e => setSuppressionDays(Math.max(0, parseInt(e.target.value) || 0))}
+                      disabled={category === 'daily_rate'}
+                      className="input text-sm disabled:opacity-50"
+                    />
+                    <p className="text-[10px] text-gray-400">
+                      {category === 'daily_rate'
+                        ? 'Daily rate is exempt — always sends.'
+                        : `${suppressionDays} day${suppressionDays === 1 ? '' : 's'}. Reach skips (won't spend) if this number already got this template within the window.`}
+                    </p>
+                  </div>
                 </div>
 
                 <div className="space-y-2">

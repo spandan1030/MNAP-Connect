@@ -20,6 +20,7 @@ interface RawRow {
   lifetime_value?: string
   total_bills?: string
   days_since_last_purchase?: string
+  first_purchase_date?: string
   last_purchase_date?: string
   is_high_value?: string
   is_likely_wedding?: string
@@ -118,6 +119,7 @@ export async function POST(req: NextRequest) {
         lifetime_value: num(r.lifetime_value),
         total_bills: int(r.total_bills),
         days_since_last_purchase: int(r.days_since_last_purchase),
+        first_purchase_date: dateOnly(r.first_purchase_date),
         last_purchase_date: dateOnly(r.last_purchase_date),
         is_high_value: bool(r.is_high_value),
         is_likely_wedding: bool(r.is_likely_wedding),
