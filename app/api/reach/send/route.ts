@@ -29,8 +29,8 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { recipients, templateId, cohortLabel, campaignRef } = (await req.json()) as {
-    recipients?: Recipient[]; templateId?: string; cohortLabel?: string; campaignRef?: string
+  const { recipients, templateId, cohortLabel, campaignRef, ignoreSuppression } = (await req.json()) as {
+    recipients?: Recipient[]; templateId?: string; cohortLabel?: string; campaignRef?: string; ignoreSuppression?: boolean
   }
   if (!templateId) return Response.json({ error: 'templateId required' }, { status: 400 })
   if (!Array.isArray(recipients) || recipients.length === 0) {
@@ -73,8 +73,9 @@ export async function POST(req: NextRequest) {
   }
 
   // Suppression set — phones that already got this template-key within the window.
+  // A manual/test send can opt out of the guard (still respects DNC/opt-out).
   const suppSet = new Set<string>()
-  if (suppDays > 0) {
+  if (suppDays > 0 && !ignoreSuppression) {
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - suppDays)
     for (let i = 0; i < phones.length; i += 300) {
       const { data } = await supabaseAdmin.from('wa_send_ledger').select('phone')

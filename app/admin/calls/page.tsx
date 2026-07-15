@@ -119,7 +119,11 @@ export default function CallControlPage() {
     setFileName(file.name)
     setImportResult('')
     const buf = await file.arrayBuffer()
-    const wb = XLSX.read(buf, { type: 'array' })
+    // cellDates + dateNF forces every date cell to ISO (yyyy-mm-dd) regardless of
+    // the machine's locale. Without this, SheetJS reformats 2022-06-04 -> "6/4/22",
+    // which the server's YYYY-MM-DD guard rejects, silently nulling the purchase
+    // dates for the whole import.
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true, dateNF: 'yyyy-mm-dd' })
     const sheet = wb.Sheets[wb.SheetNames[0]]
     const parsed = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '', raw: false })
     setRows(parsed)

@@ -162,28 +162,60 @@ export default function TemplatesPage() {
             required
           />
 
-          <select
-            value={formTopic}
-            onChange={e => {
-              const id = e.target.value
-              setFormTopic(id)
-              // The Thank-you / Purchased topic is the umbrella for transactional
-              // thank-you messages — align the reach category so the same template
-              // shows up in the thank-you broadcast without setting anything twice.
-              const chosen = topics.find(t => t.id === id)
-              if (chosen && /thank|purchas/i.test(chosen.name)) {
-                setCategory('thankyou')
-                if (suppressionDays === 0) setSuppressionDays(14)
-                setShowMetaSection(true)
-              }
-            }}
-            className="input"
-          >
+          <select value={formTopic} onChange={e => setFormTopic(e.target.value)} className="input">
             <option value="none">General (no specific topic)</option>
             {topics.map(t => (
               <option key={t.id} value={t.id}>{t.parent_id ? `  ↳ ${t.name}` : t.name}</option>
             ))}
           </select>
+
+          {/* Message type — the single control that decides where a template is
+              usable (thank-you broadcast, reach cohorts) and its resend guard.
+              Not a customer-interest topic; it's what KIND of message this is. */}
+          <div className="rounded-xl border border-gray-200 p-3 space-y-3">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-gray-700">Message type</label>
+              <select
+                value={category}
+                onChange={e => {
+                  const c = e.target.value
+                  setCategory(c)
+                  if (c === 'daily_rate') setSuppressionDays(0)
+                  else if (suppressionDays === 0) setSuppressionDays(14)
+                }}
+                className="input text-sm"
+              >
+                <option value="custom">Custom / one-off</option>
+                <option value="daily_rate">Daily rate (no resend guard)</option>
+                <option value="rate">Rate alert</option>
+                <option value="offer">Offer / promo</option>
+                <option value="thankyou">Thank-you (used by the thank-you broadcast)</option>
+              </select>
+              <p className="text-[10px] text-gray-400">
+                {category === 'thankyou'
+                  ? 'Appears in the thank-you broadcast (Recent buyers + manual send).'
+                  : category === 'daily_rate'
+                  ? 'Daily rate — always sends, never suppressed.'
+                  : 'Available in Reach cohort sends.'}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-gray-500">
+                Don&apos;t resend to the same number within
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  value={suppressionDays}
+                  onChange={e => setSuppressionDays(Math.max(0, parseInt(e.target.value) || 0))}
+                  disabled={category === 'daily_rate'}
+                  className="input text-sm w-24 disabled:opacity-50"
+                />
+                <span className="text-xs text-gray-500">days</span>
+              </div>
+            </div>
+          </div>
 
           {/* Placeholder chips */}
           <div>
@@ -270,48 +302,6 @@ export default function TemplatesPage() {
                     className="input font-mono text-sm"
                     placeholder="en"
                   />
-                </div>
-
-                {/* Reach: category + suppression window */}
-                <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 space-y-3">
-                  <p className="text-xs font-semibold text-amber-800">Reach settings (cohort messaging)</p>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-gray-500">Category</label>
-                    <select
-                      value={category}
-                      onChange={e => {
-                        const c = e.target.value
-                        setCategory(c)
-                        if (c === 'daily_rate') setSuppressionDays(0)
-                        else if (suppressionDays === 0) setSuppressionDays(14)
-                      }}
-                      className="input text-sm"
-                    >
-                      <option value="daily_rate">Daily rate (no suppression)</option>
-                      <option value="rate">Rate alert</option>
-                      <option value="offer">Offer / promo</option>
-                      <option value="thankyou">Thank-you (transactional)</option>
-                      <option value="custom">Custom</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-gray-500">
-                      Suppression window (days) — don&apos;t resend this template to the same number within
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={suppressionDays}
-                      onChange={e => setSuppressionDays(Math.max(0, parseInt(e.target.value) || 0))}
-                      disabled={category === 'daily_rate'}
-                      className="input text-sm disabled:opacity-50"
-                    />
-                    <p className="text-[10px] text-gray-400">
-                      {category === 'daily_rate'
-                        ? 'Daily rate is exempt — always sends.'
-                        : `${suppressionDays} day${suppressionDays === 1 ? '' : 's'}. Reach skips (won't spend) if this number already got this template within the window.`}
-                    </p>
-                  </div>
                 </div>
 
                 <div className="space-y-2">
