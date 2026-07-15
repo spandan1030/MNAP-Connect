@@ -3,7 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import {
-  topicNameToInterest, CALL_TOPIC_TO_INTEREST,
+  CALL_TOPIC_TO_INTEREST,
   SALES_CATEGORY_TO_INTEREST, METALS, type SignalSource,
 } from '@/lib/signals'
 
@@ -63,10 +63,12 @@ export async function POST(req: NextRequest) {
 
   const map = new Map<string, Sig>()
 
-  // Topic id -> name (used by WhatsApp interests + lead captures).
-  const topics = await fetchAll<{ id: string; name: string }>((f, t) =>
-    supabaseAdmin.from('wa_interest_topics').select('id,name').range(f, t))
+  // Topic id -> canonical key + name (wa_033). Interpretation is the topic's
+  // own key — no label guessing.
+  const topics = await fetchAll<{ id: string; name: string; key: string | null }>((f, t) =>
+    supabaseAdmin.from('wa_interest_topics').select('id,name,key').range(f, t))
   const topicName = new Map(topics.map(t => [t.id, t.name]))
+  const topicKey  = new Map(topics.map(t => [t.id, t.key]))
 
   // ── WhatsApp: interests + lead captures (Type A, phone via wa_customers) ──
   if (want.has('whatsapp')) {
@@ -78,7 +80,7 @@ export async function POST(req: NextRequest) {
       supabaseAdmin.from('wa_customer_interests').select('customer_id,topic_id,created_at').range(f, t))
     for (const r of interests) {
       const name = topicName.get(r.topic_id)
-      add(map, aPhone.get(r.customer_id) ?? null, topicNameToInterest(name), 'whatsapp', name ?? 'topic', r.created_at)
+      add(map, aPhone.get(r.customer_id) ?? null, topicKey.get(r.topic_id) ?? null, 'whatsapp', name ?? 'topic', r.created_at)
     }
 
     const leads = await fetchAll<{ customer_id: string | null; metal: string | null; product_topic_id: string | null; wants_designs: boolean | null; created_at: string | null }>((f, t) =>
@@ -86,7 +88,7 @@ export async function POST(req: NextRequest) {
     for (const l of leads) {
       const phone = l.customer_id ? (aPhone.get(l.customer_id) ?? null) : null
       if (l.metal && METALS.includes(l.metal as typeof METALS[number])) add(map, phone, l.metal, 'whatsapp', 'lead: metal', l.created_at)
-      if (l.product_topic_id) add(map, phone, topicNameToInterest(topicName.get(l.product_topic_id)), 'whatsapp', 'lead: product', l.created_at)
+      if (l.product_topic_id) add(map, phone, topicKey.get(l.product_topic_id) ?? null, 'whatsapp', 'lead: product', l.created_at)
       if (l.wants_designs) add(map, phone, 'designs', 'whatsapp', 'lead: wants designs', l.created_at)
     }
   }

@@ -5,6 +5,11 @@ export interface InterestTopic {
   sort_order: number
   is_active: boolean
   created_at: string
+  // Canonical taxonomy (wa_033): stable interest slug shared across chat,
+  // calls, sales and segments; group + whether the call screen offers it.
+  key?: string | null
+  topic_group?: 'engagement' | 'product' | 'metal' | 'system' | null
+  is_callable?: boolean
   children?: InterestTopic[]
 }
 

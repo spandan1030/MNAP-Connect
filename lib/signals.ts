@@ -50,42 +50,16 @@ export const INTEREST_GROUP: Record<string, InterestGroup> =
 // ── Source mappers ──────────────────────────────────────────────────────────
 
 // Cold-call topics (lib/calls CALL_TOPICS) -> canonical interest.
+// Explicit, controlled alias (not regex): the call vocabulary is coarser than
+// the taxonomy, so 'booking' rolls up to the 'scheme' interest.
 export const CALL_TOPIC_TO_INTEREST: Record<string, string> = {
   rate: 'rate', designs: 'designs', offers: 'offers', booking: 'scheme',
 }
 
-// WhatsApp interest-topic NAME -> canonical interest, by keyword.
-// Order matters: more specific engagement terms before generic metal names
-// ("Gold Exchange" -> exchange, "Gold Savings Scheme" -> scheme).
-const TOPIC_RULES: Array<[RegExp, string]> = [
-  [/exchange/i, 'exchange'],
-  [/cash|loan/i, 'cash'],
-  [/scheme|saving|sip|booking|deposit/i, 'scheme'],
-  [/repair|service/i, 'repair'],
-  [/discount|sale|festive|offer/i, 'offers'],
-  [/rate/i, 'rate'],
-  [/design/i, 'designs'],
-  [/necklace|haar|\bhar\b|rani/i, 'necklace'],
-  [/mangalsutra|mangal/i, 'mangalsutra'],
-  [/bangle|kada|kangan|churi|\bbala\b|valaya/i, 'bangles'],
-  [/earring|jhumk|\bbali\b|stud|\btop/i, 'earrings'],
-  [/pendant|locket/i, 'pendant'],
-  [/bracelet/i, 'bracelet'],
-  [/anklet|payal/i, 'anklet'],
-  [/\bring\b|anguthi/i, 'ring'],
-  [/chain/i, 'chain'],
-  [/coin|\bbar\b|biscuit|kasu|ingot|guinea|sikka|invest/i, 'investment'],
-  [/diamond/i, 'diamond'],
-  [/silver/i, 'silver'],
-  [/gold/i, 'gold'],
-]
-
-export function topicNameToInterest(name: string | null | undefined): string | null {
-  const n = (name ?? '').trim()
-  if (!n) return null
-  for (const [re, key] of TOPIC_RULES) if (re.test(n)) return key
-  return null
-}
+// NOTE: interpretation of a subscription/chatbot topic is no longer guessed
+// from its label. Every wa_interest_topics row carries a canonical `key`
+// (migration wa_033); callers read topic.key directly. The old name-regex
+// (topicNameToInterest / TOPIC_RULES) has been removed.
 
 // Sales pipeline column -> canonical interest.
 // Product flags in wa_b_markers.markers are `bought_<cat>`; metal flags `buys_<metal>`.
