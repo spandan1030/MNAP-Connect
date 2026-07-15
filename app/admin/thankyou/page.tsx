@@ -109,10 +109,24 @@ function RecentBuyersTab({ setError }: { setError: (s: string | null) => void })
   const [result, setResult] = useState<{ sent: number; skippedSuppressed: number; skippedDnc: number; failed: number } | null>(null)
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
 
+  // Templates come straight from the Templates module — anything filed under the
+  // "Thank You" / "Purchased" topic (the umbrella), plus any still tagged with the
+  // legacy category='thankyou' so nothing already set up disappears.
   useEffect(() => {
-    supabase.from('wa_message_templates').select('*').eq('is_active', true).eq('category', 'thankyou')
-      .not('meta_template_name', 'is', null).order('created_at', { ascending: false })
-      .then(({ data }) => setTemplates((data ?? []) as MessageTemplate[]))
+    async function loadTemplates() {
+      const { data: topics } = await supabase.from('wa_interest_topics').select('id, name')
+      const thankTopicIds = new Set(
+        (topics ?? [])
+          .filter((t: { id: string; name: string }) => /thank|purchas/i.test(t.name))
+          .map((t: { id: string; name: string }) => t.id)
+      )
+      const { data } = await supabase.from('wa_message_templates').select('*')
+        .eq('is_active', true).not('meta_template_name', 'is', null)
+        .order('created_at', { ascending: false })
+      const all = (data ?? []) as MessageTemplate[]
+      setTemplates(all.filter(t => (t.topic_id && thankTopicIds.has(t.topic_id)) || t.category === 'thankyou'))
+    }
+    loadTemplates()
   }, [supabase])
 
   const template = templates.find(t => t.id === templateId) ?? null
@@ -155,11 +169,11 @@ function RecentBuyersTab({ setError }: { setError: (s: string | null) => void })
         <div>
           <label className="text-xs font-medium text-gray-600">Thank-you template</label>
           <select value={templateId} onChange={e => { setTemplateId(e.target.value); setLoaded(false) }} className="input mt-1 text-sm">
-            <option value="">Choose a template (category: thank-you)…</option>
+            <option value="">Choose a thank-you template…</option>
             {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
           {templates.length === 0 && (
-            <p className="text-[11px] text-amber-600 mt-1">No thank-you templates yet. In Templates, link a Meta template and set its category to <b>Thank-you</b>.</p>
+            <p className="text-[11px] text-amber-600 mt-1">No thank-you templates yet. In <b>Templates</b>, link a Meta template and file it under the <b>Thank You</b> topic — it&apos;ll appear here automatically.</p>
           )}
         </div>
         <div className="flex items-end gap-2">

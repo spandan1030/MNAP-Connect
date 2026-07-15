@@ -162,7 +162,23 @@ export default function TemplatesPage() {
             required
           />
 
-          <select value={formTopic} onChange={e => setFormTopic(e.target.value)} className="input">
+          <select
+            value={formTopic}
+            onChange={e => {
+              const id = e.target.value
+              setFormTopic(id)
+              // The Thank-you / Purchased topic is the umbrella for transactional
+              // thank-you messages — align the reach category so the same template
+              // shows up in the thank-you broadcast without setting anything twice.
+              const chosen = topics.find(t => t.id === id)
+              if (chosen && /thank|purchas/i.test(chosen.name)) {
+                setCategory('thankyou')
+                if (suppressionDays === 0) setSuppressionDays(14)
+                setShowMetaSection(true)
+              }
+            }}
+            className="input"
+          >
             <option value="none">General (no specific topic)</option>
             {topics.map(t => (
               <option key={t.id} value={t.id}>{t.parent_id ? `  ↳ ${t.name}` : t.name}</option>
