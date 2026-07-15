@@ -14,7 +14,7 @@ export type CallTopic = typeof CALL_TOPICS[number]['value']
 export const CALL_INTENTS = [
   { value: 'will_come', label: 'Will come', color: 'bg-green-600 text-white border-green-600',   idle: 'bg-white text-green-700 border-green-300' },
   { value: 'not_sure',  label: 'Not sure',  color: 'bg-yellow-500 text-white border-yellow-500', idle: 'bg-white text-yellow-700 border-yellow-300' },
-  { value: 'wont_come', label: "Won't come",color: 'bg-orange-500 text-white border-orange-500', idle: 'bg-white text-orange-700 border-orange-300' },
+  { value: 'wont_come', label: 'No Come',    color: 'bg-orange-500 text-white border-orange-500', idle: 'bg-white text-orange-700 border-orange-300' },
   { value: 'dont_call', label: "Don't call",color: 'bg-red-600 text-white border-red-600',       idle: 'bg-white text-red-700 border-red-300 font-bold' },
 ] as const
 

@@ -53,8 +53,8 @@ export async function GET(req: NextRequest) {
   }
 
   // Customers (sales-imported).
-  const customers = await fetchAll<{ id: string; name: string; phone: string; is_do_not_call: boolean }>((f, t) =>
-    supabaseAdmin.from('wa_b_customers').select('id,name,phone,is_do_not_call').eq('source', 'sales_import').range(f, t))
+  const customers = await fetchAll<{ id: string; name: string; phone: string; is_do_not_call: boolean; is_hot_lead: boolean }>((f, t) =>
+    supabaseAdmin.from('wa_b_customers').select('id,name,phone,is_do_not_call,is_hot_lead').eq('source', 'sales_import').range(f, t))
   const custList = restrictIds ? customers.filter(c => restrictIds!.has(c.id)) : customers
   const idSet = new Set(custList.map(c => c.id))
 
@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
     'call_attempts', 'call_successes', 'reached', 'unreachable',
     'last_call_date', 'last_intent',
     'topic_rate', 'topic_designs', 'topic_offers', 'topic_booking',
-    'is_do_not_call',
+    'is_do_not_call', 'is_hot_lead',
   ]
   const lines = [header.join(',')]
   for (const c of custList) {
@@ -105,6 +105,7 @@ export async function GET(req: NextRequest) {
       a?.topics.has('offers') ? 'true' : 'false',
       a?.topics.has('booking') ? 'true' : 'false',
       c.is_do_not_call ? 'true' : 'false',
+      c.is_hot_lead ? 'true' : 'false',
     ].map(csvCell)
     lines.push(row.join(','))
   }

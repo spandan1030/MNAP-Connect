@@ -28,6 +28,7 @@ interface Card {
   name: string
   phone: string
   dnc: boolean
+  hot: boolean
 }
 interface Summary { attempts: number; successes: number; topics: string[] }
 interface HistoryEntry {
@@ -113,12 +114,12 @@ export default function CallsPage() {
 
     // live tasks: pending, not attempted today
     const t = today()
-    const tasks: { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean } }[] = []
+    const tasks: { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean; is_hot_lead: boolean } }[] = []
     const PAGE = 1000
     for (let from = 0; ; from += PAGE) {
       const { data } = await supabase
         .from('wa_b_call_tasks')
-        .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call)')
+        .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call,is_hot_lead)')
         .eq('campaign_id', (camp as WaBCallCampaign).id)
         .eq('status', 'pending')
         .or(`last_attempt_date.is.null,last_attempt_date.lt.${t}`)
@@ -134,6 +135,7 @@ export default function CallsPage() {
       name: t.customer.name,
       phone: t.customer.phone,
       dnc: t.customer.is_do_not_call,
+      hot: t.customer.is_hot_lead,
     })))
     setIdx(0)
     setLoading(false)
@@ -186,6 +188,19 @@ export default function CallsPage() {
 
   function resetCallState() {
     setPhase('idle'); setLogId(null); setTopics([]); setIntent(null); setCardMenu(false)
+  }
+
+  // ── star / un-star a hot lead (meaningful convo) — one tap, no call needed ──
+  // A per-customer flag (like DNC). Exported to call_feedback.csv and used by the
+  // pipeline as a call marker + lookalike seed. Optimistic; patches the live card.
+  async function toggleHotLead() {
+    if (!current) return
+    const next = !current.hot
+    if (override) setOverride({ ...override, hot: next })
+    setCards(prev => prev.map(c => c.customerId === current.customerId ? { ...c, hot: next } : c))
+    await supabase.from('wa_b_customers')
+      .update({ is_hot_lead: next, hot_lead_at: next ? new Date().toISOString() : null })
+      .eq('id', current.customerId)
   }
 
   // ── mark "don't call" directly from the card (no call needed) ──
@@ -326,15 +341,15 @@ export default function CallsPage() {
     if (!campaign) return
     const { data } = await supabase
       .from('wa_b_call_tasks')
-      .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call)')
+      .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call,is_hot_lead)')
       .eq('campaign_id', campaign.id)
       .eq('customer.phone', digits)
       .maybeSingle()
     if (!data) { setSearchMsg('No card for that number in this campaign'); return }
-    const row = data as unknown as { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean } }
+    const row = data as unknown as { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean; is_hot_lead: boolean } }
     setOverride({
       taskId: row.id, customerId: row.customer.id, name: row.customer.name,
-      phone: row.customer.phone, dnc: row.customer.is_do_not_call,
+      phone: row.customer.phone, dnc: row.customer.is_do_not_call, hot: row.customer.is_hot_lead,
     })   // marker loads lazily via the per-card effect
     setSearch('')
   }
@@ -344,12 +359,12 @@ export default function CallsPage() {
     if (!campaign) return
     const { data } = await supabase
       .from('wa_b_call_tasks')
-      .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call)')
+      .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call,is_hot_lead)')
       .eq('campaign_id', campaign.id).eq('status', 'hidden')
-    const rows = (data ?? []) as unknown as { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean } }[]
+    const rows = (data ?? []) as unknown as { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean; is_hot_lead: boolean } }[]
     setHidden(rows.map(r => ({
       taskId: r.id, customerId: r.customer.id, name: r.customer.name,
-      phone: r.customer.phone, dnc: r.customer.is_do_not_call,
+      phone: r.customer.phone, dnc: r.customer.is_do_not_call, hot: r.customer.is_hot_lead,
     })))
     setHiddenOpen(true)
   }
@@ -403,6 +418,15 @@ export default function CallsPage() {
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 {override && <button onClick={() => setOverride(null)} className="text-[11px] text-gray-500 border border-gray-200 rounded-lg px-2 py-1">Back to list</button>}
+                {/* hot-lead star — one tap to flag a meaningful lead */}
+                <button onClick={toggleHotLead} title="Hot lead"
+                  aria-label={current.hot ? 'Remove hot-lead star' : 'Mark as hot lead'} className="p-1">
+                  <svg className={cn('w-6 h-6', current.hot ? 'text-amber-400' : 'text-gray-300')}
+                    fill={current.hot ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round"
+                      d="M11.48 3.5a.56.56 0 011.04 0l2.12 4.66 5.1.53c.49.05.69.66.32 1l-3.8 3.44 1.06 5.02c.1.48-.42.85-.85.6L12 16.9l-4.47 2.4c-.43.24-.95-.13-.85-.6l1.06-5.03-3.8-3.43a.56.56 0 01.32-1l5.1-.53 2.12-4.66z" />
+                  </svg>
+                </button>
                 {/* per-card three-dot menu */}
                 <div className="relative">
                   <button onClick={() => setCardMenu(o => !o)} aria-label="Card menu"
