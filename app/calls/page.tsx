@@ -40,6 +40,7 @@ interface HistoryEntry {
   success: boolean | null
   topics: string[]
   intent: string | null
+  hot: boolean
 }
 
 type Phase = 'idle' | 'outcome' | 'success'
@@ -190,18 +191,21 @@ export default function CallsPage() {
     setPhase('idle'); setLogId(null); setTopics([]); setIntent(null); setCardMenu(false)
   }
 
-  // ── star / un-star a hot lead (meaningful convo) — one tap, no call needed ──
+  // ── star / un-star a hot lead (meaningful convo) — one tap ──
   // A per-customer flag (like DNC). Exported to call_feedback.csv and used by the
-  // pipeline as a call marker + lookalike seed. Optimistic; patches the live card.
-  async function toggleHotLead() {
-    if (!current) return
-    const next = !current.hot
-    if (override) setOverride({ ...override, hot: next })
-    setCards(prev => prev.map(c => c.customerId === current.customerId ? { ...c, hot: next } : c))
+  // pipeline as a call marker + lookalike seed. Optimistic; patches every local
+  // collection the customer can appear in (deck, search, hidden, history, edit).
+  async function setHotLead(customerId: string, next: boolean) {
+    setCards(prev => prev.map(c => c.customerId === customerId ? { ...c, hot: next } : c))
+    setOverride(prev => prev && prev.customerId === customerId ? { ...prev, hot: next } : prev)
+    setHidden(prev => prev.map(c => c.customerId === customerId ? { ...c, hot: next } : c))
+    setHistory(prev => prev.map(h => h.customerId === customerId ? { ...h, hot: next } : h))
+    setEditEntry(prev => prev && prev.customerId === customerId ? { ...prev, hot: next } : prev)
     await supabase.from('wa_b_customers')
       .update({ is_hot_lead: next, hot_lead_at: next ? new Date().toISOString() : null })
-      .eq('id', current.customerId)
+      .eq('id', customerId)
   }
+  function toggleHotLead() { if (current) setHotLead(current.customerId, !current.hot) }
 
   // ── mark "don't call" directly from the card (no call needed) ──
   // Sets is_do_not_call + hides the task. Excludes from calling ONLY —
@@ -279,16 +283,17 @@ export default function CallsPage() {
     setHistoryLoading(true)
     const { data } = await supabase
       .from('wa_b_call_logs')
-      .select('id, customer_id, called_at, success, topics, intent, customer:wa_b_customers!inner(name,phone)')
+      .select('id, customer_id, called_at, success, topics, intent, customer:wa_b_customers!inner(name,phone,is_hot_lead)')
       .order('called_at', { ascending: false })
       .limit(100)
     const rows = (data ?? []) as unknown as Array<{
       id: string; customer_id: string; called_at: string; success: boolean | null
-      topics: string[] | null; intent: string | null; customer: { name: string; phone: string }
+      topics: string[] | null; intent: string | null; customer: { name: string; phone: string; is_hot_lead: boolean }
     }>
     setHistory(rows.map(r => ({
       logId: r.id, customerId: r.customer_id, name: r.customer.name, phone: r.customer.phone,
       calledAt: r.called_at, success: r.success, topics: r.topics ?? [], intent: r.intent,
+      hot: r.customer.is_hot_lead,
     })))
     setHistoryLoading(false)
   }
@@ -418,15 +423,18 @@ export default function CallsPage() {
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 {override && <button onClick={() => setOverride(null)} className="text-[11px] text-gray-500 border border-gray-200 rounded-lg px-2 py-1">Back to list</button>}
-                {/* hot-lead star — one tap to flag a meaningful lead */}
-                <button onClick={toggleHotLead} title="Hot lead"
-                  aria-label={current.hot ? 'Remove hot-lead star' : 'Mark as hot lead'} className="p-1">
-                  <svg className={cn('w-6 h-6', current.hot ? 'text-amber-400' : 'text-gray-300')}
-                    fill={current.hot ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                    <path strokeLinecap="round" strokeLinejoin="round"
-                      d="M11.48 3.5a.56.56 0 011.04 0l2.12 4.66 5.1.53c.49.05.69.66.32 1l-3.8 3.44 1.06 5.02c.1.48-.42.85-.85.6L12 16.9l-4.47 2.4c-.43.24-.95-.13-.85-.6l1.06-5.03-3.8-3.43a.56.56 0 01.32-1l5.1-.53 2.12-4.66z" />
-                  </svg>
-                </button>
+                {/* hot-lead star — appears only once the call is marked connected
+                    (success phase now, or a prior connected call on this customer) */}
+                {(phase === 'success' || (summary?.successes ?? 0) > 0) && (
+                  <button onClick={toggleHotLead} title="Hot lead"
+                    aria-label={current.hot ? 'Remove hot-lead star' : 'Mark as hot lead'} className="p-1">
+                    <svg className={cn('w-6 h-6', current.hot ? 'text-amber-400' : 'text-gray-300')}
+                      fill={current.hot ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round"
+                        d="M11.48 3.5a.56.56 0 011.04 0l2.12 4.66 5.1.53c.49.05.69.66.32 1l-3.8 3.44 1.06 5.02c.1.48-.42.85-.85.6L12 16.9l-4.47 2.4c-.43.24-.95-.13-.85-.6l1.06-5.03-3.8-3.43a.56.56 0 01.32-1l5.1-.53 2.12-4.66z" />
+                    </svg>
+                  </button>
+                )}
                 {/* per-card three-dot menu */}
                 <div className="relative">
                   <button onClick={() => setCardMenu(o => !o)} aria-label="Card menu"
@@ -613,7 +621,10 @@ export default function CallsPage() {
                   <button key={h.logId} onClick={() => openEdit(h)} className="w-full text-left px-3 py-2 hover:bg-gray-50">
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="text-xs font-medium text-gray-800 truncate">{h.name} <span className="text-gray-400 font-normal">+91 {h.phone}</span></p>
+                        <p className="text-xs font-medium text-gray-800 truncate">
+                          {h.hot && <span className="text-amber-400" title="Hot lead">★ </span>}
+                          {h.name} <span className="text-gray-400 font-normal">+91 {h.phone}</span>
+                        </p>
                         <p className="text-[10px] text-gray-400">{fmtDateTime(h.calledAt)}</p>
                       </div>
                       <OutcomeBadge success={h.success} intent={h.intent} />
@@ -662,7 +673,20 @@ export default function CallsPage() {
                 <p className="text-sm font-bold text-gray-900">{editEntry.name}</p>
                 <p className="text-xs text-gray-500">+91 {editEntry.phone} · {fmtDateTime(editEntry.calledAt)}</p>
               </div>
-              <button onClick={() => setEditEntry(null)} className="text-gray-400 text-lg leading-none">×</button>
+              <div className="flex items-center gap-1 shrink-0">
+                {/* star — only for connected calls */}
+                {editSuccess === true && (
+                  <button onClick={() => setHotLead(editEntry.customerId, !editEntry.hot)} title="Hot lead"
+                    aria-label={editEntry.hot ? 'Remove hot-lead star' : 'Mark as hot lead'} className="p-1">
+                    <svg className={cn('w-6 h-6', editEntry.hot ? 'text-amber-400' : 'text-gray-300')}
+                      fill={editEntry.hot ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round"
+                        d="M11.48 3.5a.56.56 0 011.04 0l2.12 4.66 5.1.53c.49.05.69.66.32 1l-3.8 3.44 1.06 5.02c.1.48-.42.85-.85.6L12 16.9l-4.47 2.4c-.43.24-.95-.13-.85-.6l1.06-5.03-3.8-3.43a.56.56 0 01.32-1l5.1-.53 2.12-4.66z" />
+                    </svg>
+                  </button>
+                )}
+                <button onClick={() => setEditEntry(null)} className="text-gray-400 text-lg leading-none">×</button>
+              </div>
             </div>
 
             <div className="flex gap-2">

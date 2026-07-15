@@ -13,7 +13,7 @@ interface LogRow {
   topics: string[] | null
   intent: string | null
   called_at: string
-  customer: { name: string; phone: string }
+  customer: { name: string; phone: string; is_hot_lead: boolean }
 }
 type DrillKey = { kind: 'topic' | 'intent'; value: string } | null
 
@@ -34,7 +34,7 @@ export default function CallReportPage() {
     const toD = new Date(`${to}T00:00:00`); toD.setDate(toD.getDate() + 1)
     const { data } = await supabase
       .from('wa_b_call_logs')
-      .select('id,success,topics,intent,called_at,customer:wa_b_customers!inner(name,phone)')
+      .select('id,success,topics,intent,called_at,customer:wa_b_customers!inner(name,phone,is_hot_lead)')
       .gte('called_at', fromD.toISOString())
       .lt('called_at', toD.toISOString())
       .order('called_at', { ascending: false })
@@ -62,6 +62,12 @@ export default function CallReportPage() {
         : l.intent === drill.value)
     : []
 
+  // Hot leads = distinct starred customers called in this range (star is a
+  // current per-customer flag, so we dedupe by phone across their calls).
+  const hotRows = Array.from(
+    new Map(logs.filter(l => l.customer.is_hot_lead).map(l => [l.customer.phone, l.customer])).values()
+  )
+
   const exportHref = activeCampaign ? `/api/calls/export?campaign=${activeCampaign.id}` : '/api/calls/export'
 
   return (
@@ -88,11 +94,25 @@ export default function CallReportPage() {
         </div>
 
         {/* summary */}
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           <Tile label="Calls" value={attempts} />
           <Tile label="Connected" value={connected} accent="text-green-700" />
           <Tile label="No answer" value={notConnected} accent="text-gray-500" />
+          <Tile label="★ Hot leads" value={hotRows.length} accent="text-amber-500" />
         </div>
+
+        {/* hot leads — starred customers in range */}
+        {hotRows.length > 0 && (
+          <div className="card p-3 space-y-1.5">
+            <p className="text-xs font-semibold text-gray-700">★ Hot leads — {hotRows.length}</p>
+            {hotRows.map(c => (
+              <div key={c.phone} className="flex items-center justify-between text-xs border-b border-gray-50 last:border-0 py-1">
+                <span className="text-gray-800">{c.name}</span>
+                <a href={`tel:+91${c.phone}`} className="text-gray-500">+91 {c.phone}</a>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* topics — click to drill */}
         <div className="card p-3 space-y-2">
@@ -147,7 +167,10 @@ export default function CallReportPage() {
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-gray-800 truncate">{l.customer.name}</span>
+                  <span className="text-xs font-medium text-gray-800 truncate">
+                    {l.customer.is_hot_lead && <span className="text-amber-400" title="Hot lead">★ </span>}
+                    {l.customer.name}
+                  </span>
                   <span className="text-[10px] text-gray-400 flex-shrink-0">{formatDateTime(l.called_at)}</span>
                 </div>
                 <p className="text-[11px] text-gray-500">
