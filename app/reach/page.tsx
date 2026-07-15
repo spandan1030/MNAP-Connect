@@ -212,10 +212,19 @@ export default function ReachPage() {
                 ))}
               </FilterGroup>
 
-              <FilterGroup label="Interested in (chat + call + sales)">
+              <FilterGroup label="Interested in">
                 {ENGAGEMENT_INTERESTS.map(i => (
                   <Chip key={i.key} on={has('interests', i.key)} onClick={() => toggleArr('interests', i.key)}>{i.label}</Chip>
                 ))}
+                {!!filter.interests?.length && (
+                  <div className="w-full flex items-center gap-1.5 mt-1.5 pt-1.5 border-t border-gray-100">
+                    <span className="text-[10px] text-gray-400 mr-0.5">from</span>
+                    {([['whatsapp', 'Chat'], ['call', 'Call'], ['sales', 'Sales']] as const).map(([v, label]) => (
+                      <Chip key={v} on={has('interestSources', v)} onClick={() => toggleArr('interestSources', v)}>{label}</Chip>
+                    ))}
+                    <span className="text-[10px] text-gray-400 ml-0.5">{filter.interestSources?.length ? '' : '(any source)'}</span>
+                  </div>
+                )}
               </FilterGroup>
 
               <FilterGroup label="Recency">

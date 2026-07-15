@@ -60,16 +60,18 @@ export async function POST(req: NextRequest) {
   const { data: rates } = await supabaseAdmin
     .from('daily_rates').select('rate_24kt, rate_22kt, rate_18kt').eq('date', todayStr).maybeSingle()
 
-  // Opt-out sets (DNC on Type B, DND/STOP on Type A).
-  const dncSet = new Set<string>(), dndSet = new Set<string>()
+  // Unified opt-out from the contact spine (STOP ∪ DNC) + display-name fallback.
+  const optedOut = new Set<string>()
+  const nameByPhone = new Map<string, string>()
   for (let i = 0; i < phones.length; i += 300) {
-    const chunk = phones.slice(i, i + 300)
-    const [{ data: b }, { data: a }] = await Promise.all([
-      supabaseAdmin.from('wa_b_customers').select('phone, is_do_not_call').in('phone', chunk),
-      supabaseAdmin.from('wa_customers').select('phone, dnd').in('phone', chunk),
-    ])
-    for (const r of (b ?? []) as { phone: string; is_do_not_call: boolean }[]) if (r.is_do_not_call) dncSet.add(tenDigit(r.phone))
-    for (const r of (a ?? []) as { phone: string; dnd: boolean }[]) if (r.dnd) dndSet.add(tenDigit(r.phone))
+    const { data } = await supabaseAdmin.from('contacts')
+      .select('phone, name, name_override, is_opted_out').in('phone', phones.slice(i, i + 300))
+    for (const r of (data ?? []) as Array<{ phone: string; name: string | null; name_override: string | null; is_opted_out: boolean }>) {
+      const p = tenDigit(r.phone)
+      if (r.is_opted_out) optedOut.add(p)
+      const nm = (r.name_override || r.name || '').trim()
+      if (nm && nm !== 'Unknown') nameByPhone.set(p, nm)
+    }
   }
 
   // Suppression set — phones that already got this template-key within the window.
@@ -110,9 +112,9 @@ export async function POST(req: NextRequest) {
   const ledgerRows: Array<Record<string, unknown>> = []
 
   for (const p of phones) {
-    const name = (byPhone.get(p)?.name ?? '').trim()
+    const name = (byPhone.get(p)?.name ?? '').trim() || (nameByPhone.get(p) ?? '')
 
-    if (dncSet.has(p) || dndSet.has(p)) {
+    if (optedOut.has(p)) {
       skippedDnc++; results.push({ phone: p, status: 'skipped_dnc' }); continue
     }
     if (suppSet.has(p)) {

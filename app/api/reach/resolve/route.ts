@@ -150,8 +150,10 @@ export async function POST(req: NextRequest) {
       const set = new Set<string>()
       const PAGE = 1000
       for (let from = 0; ; from += PAGE) {
-        const { data } = await supabaseAdmin.from('wa_signals').select('phone')
-          .in('interest', f.interests).range(from, from + PAGE - 1)
+        let q = supabaseAdmin.from('wa_signals').select('phone').in('interest', f.interests)
+        // Source facet: 'whatsapp' (chat) | 'call' | 'sales'. Empty = any source.
+        if (f.interestSources?.length) q = q.in('source', f.interestSources)
+        const { data } = await q.range(from, from + PAGE - 1)
         const rows = (data ?? []) as { phone: string }[]
         for (const r of rows) set.add(tenDigit(r.phone))
         if (rows.length < PAGE) break
@@ -185,11 +187,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // DND (Type A opt-out via STOP).
-  const dndSet = new Set<string>()
+  // Unified consent + display name from the contact spine (covers chat-only
+  // leads that have no wa_b_customers row). chat_opted_out = STOP, call_opted_out = DNC.
+  const contactByPhone = new Map<string, { name: string | null; chat: boolean; call: boolean }>()
   for (let i = 0; i < phones.length; i += 300) {
-    const { data } = await supabaseAdmin.from('wa_customers').select('phone, dnd').in('phone', phones.slice(i, i + 300))
-    for (const r of (data ?? []) as { phone: string; dnd: boolean }[]) if (r.dnd) dndSet.add(tenDigit(r.phone))
+    const { data } = await supabaseAdmin.from('contacts')
+      .select('phone, name, name_override, chat_opted_out, call_opted_out').in('phone', phones.slice(i, i + 300))
+    for (const r of (data ?? []) as Array<{ phone: string; name: string | null; name_override: string | null; chat_opted_out: boolean; call_opted_out: boolean }>) {
+      contactByPhone.set(tenDigit(r.phone), { name: r.name_override || r.name, chat: r.chat_opted_out, call: r.call_opted_out })
+    }
   }
 
   // Prior sends (last 90d) for history + suppression.
@@ -221,6 +227,7 @@ export async function POST(req: NextRequest) {
   const recipients: ReachRecipient[] = phones.map(p => {
     const c = custByPhone.get(p)
     const m = markerByPhone.get(p) ?? {}
+    const ct = contactByPhone.get(p)
     const sends = ledgerByPhone.get(p) ?? []
     let suppressedUntil: string | null = null
     if (suppKey && suppDays > 0) {
@@ -232,7 +239,7 @@ export async function POST(req: NextRequest) {
     }
     return {
       phone: p,
-      name: c?.name ?? null,
+      name: ct?.name ?? c?.name ?? null,
       customerId: c?.id ?? null,
       recency_tier: (m.recency_tier as string) ?? null,
       value_tier: (m.value_tier as string) ?? null,
@@ -240,8 +247,8 @@ export async function POST(req: NextRequest) {
       primary_metal: (m.primary_metal as string) ?? null,
       lifetime_value: (m.lifetime_value as number) ?? null,
       is_hot_lead: c?.is_hot_lead ?? false,
-      is_do_not_call: c?.is_do_not_call ?? false,
-      dnd: dndSet.has(p),
+      is_do_not_call: ct?.call ?? c?.is_do_not_call ?? false,   // call DNC (unified)
+      dnd: ct?.chat ?? false,                                    // chat STOP (unified)
       pastSends: sends.map(s => ({ label: s.label, category: s.category, sentAt: s.sentAt })),
       suppressedUntil,
     }

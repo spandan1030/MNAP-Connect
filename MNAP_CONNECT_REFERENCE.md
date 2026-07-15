@@ -802,6 +802,10 @@ Message **any cohort** assembled from call signals, chat signals, markers, or a 
 
 **Scope split (feature audit):** `/send` = fast **daily-rate** tool (no suppression, correct). `/reach` = everything else, 14-day guarded. Respects all opt-outs; first-party only.
 
+**Phase 4 increment 1 (2026-07-16, no migration):**
+- **Interest source facet (chat-only cohorts):** `ReachFilter.interestSources?: ('whatsapp'|'call'|'sales')[]` (empty = any). Resolve applies `.in('source', …)` to the `wa_signals` interests family. UI: source chips (Chat/Call/Sales) appear under the interests once any interest is picked. e.g. "interested in offers **from Chat**" = 4 vs 13 from Call.
+- **Unified consent via the contact spine:** `/api/reach/resolve` + `/api/reach/send` now read opt-out from `contacts` (STOP ∪ DNC) instead of separate `wa_customers.dnd` / `wa_b_customers.is_do_not_call` lookups, and fall back to the contact's display name — so chat-only leads (no Type B row) are first-class in Reach and correctly gated.
+
 **Phase 2 (2026-07-15, no migration — uses wa_032 columns):**
 - **Universal customer peek** — `GET /api/customer/peek?phone=` gathers one phone's full story across universes (Type B customer + markers incl. first/last purchase, Type A chat + opt-out, `wa_signals` interests by source, `wa_b_call_logs` history, `wa_send_ledger` message history). Reusable drawer `components/ui/CustomerPeek.tsx` (`<CustomerPeek phone onClose/>`). Wired to tappable names/phones on **/reach, /admin/calls/report, /messages inbox (ⓘ), /calls deck, /send** — "click a number → who is this, new or known, tags, first+last purchase, calls, messages."
 - **`/admin/thankyou` (rebuilt 2026-07-16)** — two tabs, ONE source of truth: templates in the **Templates module** whose **Message type = Thank-you** (`category='thankyou'`, active, Meta-linked). No separate template store.

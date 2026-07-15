@@ -404,6 +404,7 @@ export interface ReachFilter {
   max_days_since_last_purchase?: number
   // interest signals (wa_signals, any-match, joined by phone)
   interests?: string[]
+  interestSources?: string[]    // wa_signals.source facet: 'whatsapp'|'call'|'sales' (empty = any source)
   // call signals
   campaignIds?: string[]        // membership via wa_b_call_tasks
   intents?: string[]            // any call log intent (will_come|not_sure|wont_come)
