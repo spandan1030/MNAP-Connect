@@ -28,7 +28,6 @@ interface Card {
   name: string
   phone: string
   dnc: boolean
-  marker: MarkerLite | null
 }
 interface Summary { attempts: number; successes: number; topics: string[] }
 interface HistoryEntry {
@@ -66,6 +65,14 @@ export default function CallsPage() {
   const [override, setOverride] = useState<Card | null>(null)   // from search
   const [loading, setLoading] = useState(true)
 
+  // Markers are loaded lazily, per visible card (never in bulk up front) so the
+  // deck paints after 1 request instead of ~1 per 100 cards. `undefined` = not
+  // yet fetched, `null` = fetched, no marker row. markersRef mirrors state so the
+  // loader can dedup without re-subscribing.
+  const [markers, setMarkers] = useState<Record<string, MarkerLite | null>>({})
+  const markersRef = useRef(markers)
+  markersRef.current = markers
+
   const [summary, setSummary] = useState<Summary | null>(null)
   const [signals, setSignals] = useState<{ interest: string; source: SignalSource }[]>([])
   const [phase, setPhase] = useState<Phase>('idle')
@@ -91,6 +98,7 @@ export default function CallsPage() {
   const [editSaving, setEditSaving] = useState(false)
 
   const current = override ?? cards[idx] ?? null
+  const marker = current ? markers[current.customerId] ?? null : null
 
   // ── initial load ──
   useEffect(() => { loadDeck() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -120,38 +128,30 @@ export default function CallsPage() {
       if (rows.length < PAGE) break
     }
 
-    const custIds = tasks.map(t => t.customer.id)
-    const markerBy = await loadMarkers(custIds)
     setCards(tasks.map(t => ({
       taskId: t.id,
       customerId: t.customer.id,
       name: t.customer.name,
       phone: t.customer.phone,
       dnc: t.customer.is_do_not_call,
-      marker: markerBy[t.customer.id] ?? null,
     })))
     setIdx(0)
     setLoading(false)
   }
 
-  async function loadMarkers(custIds: string[]): Promise<Record<string, MarkerLite>> {
-    const out: Record<string, MarkerLite> = {}
-    // `.in()` goes into the request URL — 1000 UUIDs (~40 KB) exceeds Supabase's
-    // gateway URI limit and the whole request fails silently. Keep chunks small.
-    const CHUNK = 100
-    for (let i = 0; i < custIds.length; i += CHUNK) {
-      const slice = custIds.slice(i, i + CHUNK)
-      const { data, error } = await supabase
-        .from('wa_b_markers')
-        .select('customer_id,recency_tier,value_tier,rfm_segment,frequency_tier,audience_labels,lifetime_value,total_bills,last_purchase_date,days_since_last_purchase')
-        .in('customer_id', slice)
-      if (error) { console.error('loadMarkers failed:', error.message); continue }
-      for (const m of (data ?? []) as (MarkerLite & { customer_id: string })[]) {
-        out[m.customer_id] = m
-      }
-    }
-    return out
-  }
+  // Fetch ONE card's marker on demand and cache it. Called for the visible card
+  // (and a one-ahead prefetch) — never in bulk, so a slow network only ever waits
+  // on a single small request instead of a chain of them.
+  const loadMarker = useCallback(async (customerId: string) => {
+    if (!customerId || markersRef.current[customerId] !== undefined) return
+    const { data, error } = await supabase
+      .from('wa_b_markers')
+      .select('recency_tier,value_tier,rfm_segment,frequency_tier,audience_labels,lifetime_value,total_bills,last_purchase_date,days_since_last_purchase')
+      .eq('customer_id', customerId)
+      .maybeSingle()
+    if (error) { console.error('loadMarker failed:', error.message); return }
+    setMarkers(prev => ({ ...prev, [customerId]: (data as MarkerLite) ?? null }))
+  }, [supabase])
 
   // ── per-card summary ──
   const loadSummary = useCallback(async (customerId: string) => {
@@ -176,7 +176,12 @@ export default function CallsPage() {
   }, [supabase])
 
   useEffect(() => {
-    if (current) { loadSummary(current.customerId); loadSignals(current.phone); resetCallState() }
+    if (!current) return
+    loadSummary(current.customerId)
+    loadSignals(current.phone)
+    loadMarker(current.customerId)          // visible card
+    if (!override) loadMarker(cards[idx + 1]?.customerId ?? '')   // prefetch next
+    resetCallState()
   }, [current?.customerId])   // eslint-disable-line react-hooks/exhaustive-deps
 
   function resetCallState() {
@@ -327,11 +332,10 @@ export default function CallsPage() {
       .maybeSingle()
     if (!data) { setSearchMsg('No card for that number in this campaign'); return }
     const row = data as unknown as { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean } }
-    const markerBy = await loadMarkers([row.customer.id])
     setOverride({
       taskId: row.id, customerId: row.customer.id, name: row.customer.name,
-      phone: row.customer.phone, dnc: row.customer.is_do_not_call, marker: markerBy[row.customer.id] ?? null,
-    })
+      phone: row.customer.phone, dnc: row.customer.is_do_not_call,
+    })   // marker loads lazily via the per-card effect
     setSearch('')
   }
 
@@ -345,7 +349,7 @@ export default function CallsPage() {
     const rows = (data ?? []) as unknown as { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean } }[]
     setHidden(rows.map(r => ({
       taskId: r.id, customerId: r.customer.id, name: r.customer.name,
-      phone: r.customer.phone, dnc: r.customer.is_do_not_call, marker: null,
+      phone: r.customer.phone, dnc: r.customer.is_do_not_call,
     })))
     setHiddenOpen(true)
   }
@@ -430,17 +434,17 @@ export default function CallsPage() {
             </div>
 
             {/* markers */}
-            {current.marker && (
+            {marker && (
               <div className="flex flex-wrap gap-1.5">
-                {current.marker.recency_tier && <Chip className={RECENCY_COLORS[current.marker.recency_tier]}>{current.marker.recency_tier}</Chip>}
-                {current.marker.value_tier && <Chip className={VALUE_COLORS[current.marker.value_tier]}>{current.marker.value_tier}</Chip>}
-                {current.marker.rfm_segment && <Chip className="bg-gray-50 text-gray-600 border-gray-200">{current.marker.rfm_segment}</Chip>}
-                {current.marker.frequency_tier && <Chip className="bg-gray-50 text-gray-600 border-gray-200">{current.marker.frequency_tier}</Chip>}
+                {marker.recency_tier && <Chip className={RECENCY_COLORS[marker.recency_tier]}>{marker.recency_tier}</Chip>}
+                {marker.value_tier && <Chip className={VALUE_COLORS[marker.value_tier]}>{marker.value_tier}</Chip>}
+                {marker.rfm_segment && <Chip className="bg-gray-50 text-gray-600 border-gray-200">{marker.rfm_segment}</Chip>}
+                {marker.frequency_tier && <Chip className="bg-gray-50 text-gray-600 border-gray-200">{marker.frequency_tier}</Chip>}
               </div>
             )}
-            {current.marker?.audience_labels?.length ? (
+            {marker?.audience_labels?.length ? (
               <div className="flex flex-wrap gap-1">
-                {current.marker.audience_labels.map(a => (
+                {marker.audience_labels.map(a => (
                   <span key={a} className="text-[10px] px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-100">{a}</span>
                 ))}
               </div>
@@ -484,8 +488,8 @@ export default function CallsPage() {
             })()}
 
             {/* last purchase */}
-            {current.marker && (() => {
-              const m = current.marker
+            {marker && (() => {
+              const m = marker
               if (m.last_purchase_date) {
                 const d = new Date(m.last_purchase_date + 'T00:00:00')
                 const days = Math.round((Date.now() - d.getTime()) / 86400000)
