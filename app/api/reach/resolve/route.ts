@@ -146,6 +146,20 @@ export async function POST(req: NextRequest) {
       families.push(set)
     }
 
+    if (f.subscribedTopics?.length) {
+      // Opt-in consent family: customers (Type A) subscribed to any of these
+      // topics — reproduces the old topic broadcast as a segment condition.
+      const ids = await pagedIds<{ customer_id: string }>((from, to) =>
+        supabaseAdmin.from('wa_customer_interests').select('customer_id').in('topic_id', f.subscribedTopics!).range(from, to))
+      const set = new Set<string>()
+      const uniq = [...new Set(ids)]
+      for (let i = 0; i < uniq.length; i += 300) {
+        const { data } = await supabaseAdmin.from('wa_customers').select('phone').in('id', uniq.slice(i, i + 300))
+        for (const r of (data ?? []) as { phone: string }[]) set.add(tenDigit(r.phone))
+      }
+      families.push(set)
+    }
+
     if (f.interests?.length) {
       const set = new Set<string>()
       const PAGE = 1000

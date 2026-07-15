@@ -6,7 +6,7 @@ import CustomerPeek from '@/components/ui/CustomerPeek'
 import { createClient } from '@/lib/supabase/client'
 import { CALL_TOPICS, RECENCY_TIERS, VALUE_TIERS } from '@/lib/calls'
 import { INTERESTS } from '@/lib/signals'
-import type { MessageTemplate, ReachFilter, ReachRecipient, WaBCallCampaign } from '@/lib/types'
+import type { InterestTopic, MessageTemplate, ReachFilter, ReachRecipient, WaBCallCampaign } from '@/lib/types'
 
 // Intent options for the cohort (dont_call is never a messaging target).
 const REACH_INTENTS = [
@@ -33,6 +33,7 @@ export default function ReachPage() {
 
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [campaigns, setCampaigns] = useState<WaBCallCampaign[]>([])
+  const [topics, setTopics] = useState<InterestTopic[]>([])
   const [templateId, setTemplateId] = useState<string>('')
   const template = templates.find(t => t.id === templateId) ?? null
 
@@ -58,6 +59,10 @@ export default function ReachPage() {
       .then(({ data }) => setTemplates((data ?? []) as MessageTemplate[]))
     supabase.from('wa_b_call_campaigns').select('*').order('created_at', { ascending: false }).limit(30)
       .then(({ data }) => setCampaigns((data ?? []) as WaBCallCampaign[]))
+    // Subscribable topics (opt-in consent) — parents only, excluding system rows.
+    supabase.from('wa_interest_topics').select('*').eq('is_active', true).is('parent_id', null)
+      .order('sort_order')
+      .then(({ data }) => setTopics(((data ?? []) as InterestTopic[]).filter(t => t.topic_group !== 'system')))
   }, [supabase])
 
   // ── filter helpers ──
@@ -226,6 +231,14 @@ export default function ReachPage() {
                   </div>
                 )}
               </FilterGroup>
+
+              {topics.length > 0 && (
+                <FilterGroup label="Subscribed to (opted in)">
+                  {topics.map(t => (
+                    <Chip key={t.id} on={has('subscribedTopics', t.id)} onClick={() => toggleArr('subscribedTopics', t.id)}>{t.name}</Chip>
+                  ))}
+                </FilterGroup>
+              )}
 
               <FilterGroup label="Recency">
                 {RECENCY_TIERS.map(r => <Chip key={r} on={has('recency_tier', r)} onClick={() => toggleArr('recency_tier', r)}>{r}</Chip>)}

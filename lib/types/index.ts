@@ -405,6 +405,7 @@ export interface ReachFilter {
   // interest signals (wa_signals, any-match, joined by phone)
   interests?: string[]
   interestSources?: string[]    // wa_signals.source facet: 'whatsapp'|'call'|'sales' (empty = any source)
+  subscribedTopics?: string[]   // opt-in consent: wa_customer_interests.topic_id (reproduces topic broadcast)
   // call signals
   campaignIds?: string[]        // membership via wa_b_call_tasks
   intents?: string[]            // any call log intent (will_come|not_sure|wont_come)
