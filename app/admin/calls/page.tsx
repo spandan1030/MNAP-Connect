@@ -46,27 +46,7 @@ export default function CallControlPage() {
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState('')
 
-  // ── Salesmen roster ──
-  const [salesmen, setSalesmen] = useState<Array<{ id: string; name: string; alias: string; is_active: boolean }>>([])
-  const [smName, setSmName] = useState('')
-  const [smAlias, setSmAlias] = useState('')
-
-  useEffect(() => { loadCampaigns(); loadDbCount(); loadSalesmen() }, [])
-
-  async function loadSalesmen() {
-    const { data } = await supabase.from('salesmen').select('id, name, alias, is_active').order('created_at')
-    setSalesmen((data ?? []) as Array<{ id: string; name: string; alias: string; is_active: boolean }>)
-  }
-  async function addSalesman() {
-    const name = smName.trim(), alias = smAlias.trim()
-    if (!name || !alias) return
-    await supabase.from('salesmen').insert({ name, alias })
-    setSmName(''); setSmAlias(''); loadSalesmen()
-  }
-  async function toggleSalesman(id: string, next: boolean) {
-    await supabase.from('salesmen').update({ is_active: next }).eq('id', id)
-    loadSalesmen()
-  }
+  useEffect(() => { loadCampaigns(); loadDbCount() }, [])
 
   async function loadCampaigns() {
     const { data } = await supabase
@@ -233,28 +213,7 @@ export default function CallControlPage() {
         </div>
 
         {/* ── Salesmen ── */}
-        <section className="card p-4 space-y-3">
-          <div>
-            <p className="text-sm font-semibold text-gray-700">Salesmen</p>
-            <p className="text-xs text-gray-500">The roster the calling screen picks from. Each call &amp; walk-in is tagged with the active salesman&apos;s alias.</p>
-          </div>
-          <div className="flex gap-2">
-            <input className="input flex-1 text-sm" placeholder="Name" value={smName} onChange={e => setSmName(e.target.value)} />
-            <input className="input w-24 text-sm" placeholder="Alias" value={smAlias} onChange={e => setSmAlias(e.target.value)} />
-            <button onClick={addSalesman} disabled={!smName.trim() || !smAlias.trim()} className="btn-primary px-3 text-sm disabled:opacity-50">Add</button>
-          </div>
-          {salesmen.length === 0 && <p className="text-xs text-gray-400">None yet.</p>}
-          {salesmen.map(s => (
-            <div key={s.id} className="flex items-center justify-between border-b border-gray-100 last:border-0 py-1.5">
-              <p className="text-xs text-gray-800"><b>{s.alias}</b> · {s.name}</p>
-              <button onClick={() => toggleSalesman(s.id, !s.is_active)}
-                className={cn('text-[10px] px-2 py-0.5 rounded-full border font-medium',
-                  s.is_active ? 'text-green-700 bg-green-50 border-green-200' : 'text-gray-400 border-gray-200')}>
-                {s.is_active ? 'Active' : 'Inactive'}
-              </button>
-            </div>
-          ))}
-        </section>
+        <SalesmenRoster supabase={supabase} />
 
         {/* ── Import DB ── */}
         <section className="card p-4 space-y-3">
@@ -395,5 +354,64 @@ export default function CallControlPage() {
         </section>
       </main>
     </div>
+  )
+}
+
+// Salesmen roster — its own component so typing in the add fields only re-renders
+// this small box, not the whole (heavy) Call Control page. Re-rendering the entire
+// page on every keystroke lagged the controlled inputs enough that the mobile
+// keyboard reset the caret and typed text came out reversed.
+type Salesman = { id: string; name: string; alias: string; is_active: boolean }
+
+function SalesmenRoster({ supabase }: { supabase: ReturnType<typeof createClient> }) {
+  const [salesmen, setSalesmen] = useState<Salesman[]>([])
+  const [smName, setSmName] = useState('')
+  const [smAlias, setSmAlias] = useState('')
+
+  useEffect(() => { loadSalesmen() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadSalesmen() {
+    const { data } = await supabase.from('salesmen').select('id, name, alias, is_active').order('created_at')
+    setSalesmen((data ?? []) as Salesman[])
+  }
+  async function addSalesman() {
+    const name = smName.trim(), alias = smAlias.trim()
+    if (!name || !alias) return
+    await supabase.from('salesmen').insert({ name, alias })
+    setSmName(''); setSmAlias(''); loadSalesmen()
+  }
+  async function toggleSalesman(id: string, next: boolean) {
+    await supabase.from('salesmen').update({ is_active: next }).eq('id', id)
+    loadSalesmen()
+  }
+
+  return (
+    <section className="card p-4 space-y-3">
+      <div>
+        <p className="text-sm font-semibold text-gray-700">Salesmen</p>
+        <p className="text-xs text-gray-500">The roster the calling screen picks from. Each call &amp; walk-in is tagged with the active salesman&apos;s alias.</p>
+      </div>
+      <div className="flex gap-2">
+        <input
+          className="flex-1 min-w-0 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+          placeholder="Name" value={smName} onChange={e => setSmName(e.target.value)} />
+        <input
+          className="w-24 flex-shrink-0 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+          placeholder="Alias" value={smAlias} onChange={e => setSmAlias(e.target.value)} />
+        <button onClick={addSalesman} disabled={!smName.trim() || !smAlias.trim()}
+          className="btn-primary px-3 text-sm flex-shrink-0 disabled:opacity-50">Add</button>
+      </div>
+      {salesmen.length === 0 && <p className="text-xs text-gray-400">None yet.</p>}
+      {salesmen.map(s => (
+        <div key={s.id} className="flex items-center justify-between border-b border-gray-100 last:border-0 py-1.5">
+          <p className="text-xs text-gray-800"><b>{s.alias}</b> · {s.name}</p>
+          <button onClick={() => toggleSalesman(s.id, !s.is_active)}
+            className={cn('text-[10px] px-2 py-0.5 rounded-full border font-medium',
+              s.is_active ? 'text-green-700 bg-green-50 border-green-200' : 'text-gray-400 border-gray-200')}>
+            {s.is_active ? 'Active' : 'Inactive'}
+          </button>
+        </div>
+      ))}
+    </section>
   )
 }
