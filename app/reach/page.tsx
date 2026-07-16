@@ -34,6 +34,7 @@ export default function ReachPage() {
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [campaigns, setCampaigns] = useState<WaBCallCampaign[]>([])
   const [topics, setTopics] = useState<InterestTopic[]>([])
+  const [segments, setSegments] = useState<Array<{ id: string; name: string; filter: ReachFilter }>>([])
   const [templateId, setTemplateId] = useState<string>('')
   const template = templates.find(t => t.id === templateId) ?? null
 
@@ -63,7 +64,30 @@ export default function ReachPage() {
     supabase.from('wa_interest_topics').select('*').eq('is_active', true).is('parent_id', null)
       .order('sort_order')
       .then(({ data }) => setTopics(((data ?? []) as InterestTopic[]).filter(t => t.topic_group !== 'system')))
+    loadSegments()
   }, [supabase])
+
+  // Saved segments (wa_035). Defensive: if the table isn't there yet, just none.
+  async function loadSegments() {
+    const { data, error } = await supabase.from('wa_reach_segments').select('id, name, filter').order('created_at', { ascending: false })
+    if (!error) setSegments((data ?? []) as Array<{ id: string; name: string; filter: ReachFilter }>)
+  }
+  async function saveSegment() {
+    if (Object.keys(filter).length === 0) { setError('Build a cohort first, then save it.'); return }
+    const name = window.prompt('Name this segment (e.g. "Daily rate chat cohort")')?.trim()
+    if (!name) return
+    const { data: { user } } = await supabase.auth.getUser()
+    const { error } = await supabase.from('wa_reach_segments').insert({ name, filter, created_by: user?.id ?? null })
+    if (error) { setError('Could not save segment.'); return }
+    loadSegments()
+  }
+  async function deleteSegment(id: string) {
+    await supabase.from('wa_reach_segments').delete().eq('id', id)
+    loadSegments()
+  }
+  function loadSegment(f: ReachFilter) {
+    setMode('build'); setFilter(f); setResolved(false)
+  }
 
   // ── filter helpers ──
   function toggleArr(key: keyof ReachFilter, val: string) {
@@ -195,6 +219,21 @@ export default function ReachPage() {
               className="input resize-none text-sm" placeholder="9876543210, 9123456780, …" />
           ) : (
             <div className="space-y-3">
+              {(segments.length > 0 || Object.keys(filter).length > 0) && (
+                <div className="flex flex-wrap items-center gap-1.5 pb-2 border-b border-gray-100">
+                  <span className="text-[10px] font-semibold text-gray-400 mr-0.5">Saved</span>
+                  {segments.map(s => (
+                    <span key={s.id} className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full border border-gray-200 bg-white text-xs">
+                      <button onClick={() => loadSegment(s.filter)} className="font-medium text-gray-700">{s.name}</button>
+                      <button onClick={() => deleteSegment(s.id)} className="text-gray-300 hover:text-red-500 text-sm leading-none">×</button>
+                    </span>
+                  ))}
+                  {Object.keys(filter).length > 0 && (
+                    <button onClick={saveSegment} className="text-[11px] font-medium text-green-700 border border-green-200 bg-green-50 px-2 py-1 rounded-full">+ Save current</button>
+                  )}
+                </div>
+              )}
+
               <FilterGroup label="Call campaigns">
                 {campaigns.length === 0 && <span className="text-[11px] text-gray-400">No campaigns yet.</span>}
                 {campaigns.map(c => (
