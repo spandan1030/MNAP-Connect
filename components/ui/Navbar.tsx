@@ -84,7 +84,7 @@ const MORE = [
   { href: '/reports',        label: 'Reports',   icon: ICONS.reports },
   { href: '/prospects',      label: 'Prospects', icon: ICONS.prospects },
   { href: '/admin/topics',   label: 'Topics',    icon: ICONS.topics },
-  { href: '/admin/segments', label: 'Segments',  icon: ICONS.segments },
+  { href: '/admin/segments', label: 'Prospect segments', icon: ICONS.segments },
 ]
 
 export default function Navbar() {

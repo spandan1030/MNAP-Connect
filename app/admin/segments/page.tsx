@@ -75,7 +75,8 @@ export default function SegmentsAdminPage() {
     <div className="min-h-screen flex flex-col">
       <Navbar />
       <main className="flex-1 max-w-lg mx-auto w-full px-4 py-4 space-y-3">
-        <h1 className="text-lg font-bold text-gray-900">Segment Overview</h1>
+        <h1 className="text-lg font-bold text-gray-900">Prospect segments</h1>
+        <p className="text-xs text-gray-500 -mt-2">Auto-computed segments from the prospect questionnaire (Bridal, Hot Buyer, VIP…). Separate from Reach cohorts / Campaigns.</p>
 
         {totalIncomplete > 0 && (
           <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
