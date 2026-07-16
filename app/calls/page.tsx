@@ -492,7 +492,7 @@ export default function CallsPage() {
                 byInterest.get(s.interest)!.add(s.source)
               }
               const SRC_DOT: Record<SignalSource, string> = {
-                sales: 'bg-amber-500', whatsapp: 'bg-green-500', call: 'bg-blue-500', billing: 'bg-purple-500',
+                sales: 'bg-amber-500', whatsapp: 'bg-green-500', call: 'bg-blue-500', billing: 'bg-purple-500', walkin: 'bg-pink-500',
               }
               const usedSources = [...new Set(signals.map(s => s.source))]
               return (

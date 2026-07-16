@@ -3,11 +3,11 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
-// Campaign detail: the funnel summary PLUS a per-recipient breakdown —
-// for every number in the campaign, what happened to its message
-// (sent → delivered → read → replied → converted), and the failure reason if
-// it never sent. Works for a Reach run (wa_campaigns + wa_send_ledger.campaign_id)
-// and a legacy broadcast (wa_messages.broadcast_id).
+// Campaign detail: the funnel summary PLUS a per-recipient breakdown — for every
+// number in the campaign, what happened to its message (sent → delivered → read
+// → replied → converted), with the sent/delivered/read timestamps and, for
+// anything that didn't deliver, the Meta error code + reason. Matches (and
+// extends, with replied/converted) the old broadcast report.
 //   GET /api/campaigns/detail?id=<uuid>&source=reach|broadcast
 
 const CONV_DAYS = 90
@@ -22,11 +22,12 @@ function addDays(iso: string, days: number): string {
 
 interface Recip {
   phone: string; name: string | null; status: string   // 'sent' | 'failed'
-  wamid: string | null; error: string | null
+  wamid: string | null; error: string | null; errorCode: number | null
+  sentAt: string | null; deliveredAt: string | null; readAt: string | null
   delivered: boolean; read: boolean; replied: boolean; converted: boolean
 }
 
-// The furthest stage a recipient reached — drives the row's status label.
+// Furthest stage a recipient reached — drives the row's status label + ordering.
 function stage(r: Recip): string {
   if (r.status === 'failed') return 'failed'
   if (r.converted) return 'converted'
@@ -51,11 +52,17 @@ export async function GET(req: NextRequest) {
   if (!id) return Response.json({ error: 'id required' }, { status: 400 })
 
   // phone -> recipient row (one per number). wamid -> phone lets us attribute
-  // delivered/read receipts (which are keyed by message id) back to a person.
+  // delivery receipts (keyed by message id) back to a person.
   const byPhone = new Map<string, Recip>()
   const wamidToPhone = new Map<string, string>()
   let sinceISO = new Date().toISOString()
   let label = 'Campaign', template: string | null = null
+
+  const blank = (p: string): Recip => ({
+    phone: p, name: null, status: 'sent', wamid: null, error: null, errorCode: null,
+    sentAt: null, deliveredAt: null, readAt: null,
+    delivered: false, read: false, replied: false, converted: false,
+  })
 
   if (source === 'reach') {
     const { data: camp } = await supabaseAdmin.from('wa_campaigns')
@@ -66,16 +73,18 @@ export async function GET(req: NextRequest) {
     sinceISO = camp.created_at as string
     for (let from = 0; ; from += 1000) {
       const { data } = await supabaseAdmin.from('wa_send_ledger')
-        .select('phone, wa_message_id, status, error').eq('campaign_id', id).range(from, from + 999)
-      const rows = (data ?? []) as { phone: string; wa_message_id: string | null; status: string; error: string | null }[]
+        .select('phone, wa_message_id, status, error, sent_at').eq('campaign_id', id).range(from, from + 999)
+      const rows = (data ?? []) as { phone: string; wa_message_id: string | null; status: string; error: string | null; sent_at: string | null }[]
       for (const r of rows) {
         const p = tenDigit(r.phone)
-        // Prefer a 'sent' row over a 'failed' one if a phone somehow has both.
         const prev = byPhone.get(p)
-        if (prev && prev.status === 'sent') { /* keep */ } else {
-          byPhone.set(p, { phone: p, name: null, status: r.status === 'sent' ? 'sent' : 'failed',
-            wamid: r.wa_message_id ?? null, error: r.error ?? null,
-            delivered: false, read: false, replied: false, converted: false })
+        if (!(prev && prev.status === 'sent')) {
+          const rec = blank(p)
+          rec.status = r.status === 'sent' ? 'sent' : 'failed'
+          rec.wamid = r.wa_message_id ?? null
+          rec.error = r.error ?? null
+          rec.sentAt = r.sent_at ?? null
+          byPhone.set(p, rec)
         }
         if (r.wa_message_id) wamidToPhone.set(r.wa_message_id, p)
       }
@@ -89,11 +98,12 @@ export async function GET(req: NextRequest) {
     template = (bc.template_name as string) ?? null
     sinceISO = bc.created_at as string
     const threadToPhone = new Map<string, string>()
-    const rowsByThread: Array<{ wa_message_id: string | null; thread_id: string | null; status: string; failed_reason: string | null }> = []
+    const rowsByThread: Array<{ wa_message_id: string | null; thread_id: string | null; status: string; error_code: number | null; error_title: string | null; failed_reason: string | null; sent_at: string | null }> = []
     for (let from = 0; ; from += 1000) {
       const { data } = await supabaseAdmin.from('wa_messages')
-        .select('wa_message_id, thread_id, status, failed_reason').eq('broadcast_id', id).eq('direction', 'outbound').range(from, from + 999)
-      const rows = (data ?? []) as { wa_message_id: string | null; thread_id: string | null; status: string; failed_reason: string | null }[]
+        .select('wa_message_id, thread_id, status, error_code, error_title, failed_reason, sent_at')
+        .eq('broadcast_id', id).eq('direction', 'outbound').range(from, from + 999)
+      const rows = (data ?? []) as typeof rowsByThread
       rowsByThread.push(...rows)
       if (rows.length < 1000) break
     }
@@ -105,9 +115,13 @@ export async function GET(req: NextRequest) {
     for (const r of rowsByThread) {
       const p = r.thread_id ? threadToPhone.get(r.thread_id) : undefined
       if (!p) continue
-      const failed = r.status === 'failed'
-      byPhone.set(p, { phone: p, name: null, status: failed ? 'failed' : 'sent', wamid: r.wa_message_id ?? null,
-        error: r.failed_reason ?? null, delivered: false, read: false, replied: false, converted: false })
+      const rec = blank(p)
+      rec.status = r.status === 'failed' ? 'failed' : 'sent'
+      rec.wamid = r.wa_message_id ?? null
+      rec.error = r.error_title ?? r.failed_reason ?? null
+      rec.errorCode = r.error_code ?? null
+      rec.sentAt = r.sent_at ?? null
+      byPhone.set(p, rec)
       if (r.wa_message_id) wamidToPhone.set(r.wa_message_id, p)
     }
   }
@@ -115,20 +129,29 @@ export async function GET(req: NextRequest) {
   const wamids = [...wamidToPhone.keys()]
   const phoneList = [...byPhone.keys()]
 
-  // ── delivered / read from wa_message_events (attribute to phone) ────────────
+  // ── delivered / read / failed from the event timeline (with timestamps + Meta
+  //    error codes). Latest event per status wins. ────────────────────────────
   for (let i = 0; i < wamids.length; i += 300) {
     const { data } = await supabaseAdmin.from('wa_message_events')
-      .select('wa_message_id, status').in('wa_message_id', wamids.slice(i, i + 300))
-      .in('status', ['delivered', 'read'])
-    for (const e of (data ?? []) as { wa_message_id: string; status: string }[]) {
+      .select('wa_message_id, status, event_at, error_code, error_title')
+      .in('wa_message_id', wamids.slice(i, i + 300))
+      .in('status', ['delivered', 'read', 'failed'])
+    for (const e of (data ?? []) as { wa_message_id: string; status: string; event_at: string; error_code: number | null; error_title: string | null }[]) {
       const p = wamidToPhone.get(e.wa_message_id); if (!p) continue
       const rec = byPhone.get(p); if (!rec) continue
-      rec.delivered = true                       // read implies delivered
-      if (e.status === 'read') rec.read = true
+      if (e.status === 'delivered' || e.status === 'read') {
+        rec.delivered = true
+        if (!rec.deliveredAt || e.event_at > rec.deliveredAt) rec.deliveredAt = e.event_at
+        if (e.status === 'read') { rec.read = true; if (!rec.readAt || e.event_at > rec.readAt) rec.readAt = e.event_at }
+      } else if (e.status === 'failed') {
+        rec.status = 'failed'
+        if (e.error_code != null) rec.errorCode = e.error_code
+        if (e.error_title) rec.error = e.error_title
+      }
     }
   }
 
-  // ── names + display from contacts ───────────────────────────────────────────
+  // ── names from contacts (+ map to wa_b_customer for conversion) ─────────────
   const bIdToPhone = new Map<string, string>()
   for (let i = 0; i < phoneList.length; i += 300) {
     const { data } = await supabaseAdmin.from('contacts')
@@ -171,7 +194,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ── assemble funnel + per-recipient list ────────────────────────────────────
+  // ── assemble funnel + failure breakdown + per-recipient list ────────────────
   const recips = [...byPhone.values()]
   const sentRecs = recips.filter(r => r.status === 'sent')
   const funnel = {
@@ -183,14 +206,31 @@ export async function GET(req: NextRequest) {
     failed: recips.filter(r => r.status === 'failed').length,
   }
 
-  // Order: failed first (need attention), then by furthest stage reached (best last).
+  // Failures grouped by Meta error code (or the raw reason when there's no code).
+  const failBreak = new Map<string, number>()
+  for (const r of recips.filter(r => r.status === 'failed')) {
+    const key = r.errorCode != null ? String(r.errorCode) : (r.error ? `t:${r.error}` : 'unknown')
+    failBreak.set(key, (failBreak.get(key) ?? 0) + 1)
+  }
+  const failureBreakdown = [...failBreak.entries()]
+    .map(([key, count]) => ({
+      code: key.startsWith('t:') ? null : (key === 'unknown' ? null : Number(key)),
+      reason: key.startsWith('t:') ? key.slice(2) : null,
+      count,
+    }))
+    .sort((a, b) => b.count - a.count)
+
   const RANK: Record<string, number> = { failed: 0, sent: 1, delivered: 2, read: 3, replied: 4, converted: 5 }
   const recipients = recips
-    .map(r => ({ phone: r.phone, name: r.name, stage: stage(r), error: r.error }))
+    .map(r => ({
+      phone: r.phone, name: r.name, stage: stage(r),
+      error: r.error, errorCode: r.errorCode,
+      sentAt: r.sentAt, deliveredAt: r.deliveredAt, readAt: r.readAt,
+    }))
     .sort((a, b) => (a.stage === 'failed' ? -1 : b.stage === 'failed' ? 1 : RANK[b.stage] - RANK[a.stage]))
 
   return Response.json({
     id, source, label, template, sentAt: sinceISO, convWindowDays: CONV_DAYS,
-    funnel, recipients,
+    funnel, failureBreakdown, recipients,
   })
 }

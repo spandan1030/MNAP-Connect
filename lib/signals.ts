@@ -4,13 +4,13 @@
 // Stored phone-keyed in `wa_signals` so all four sources converge without
 // touching the Type A / Type B customer split.
 
-export type SignalSource = 'sales' | 'whatsapp' | 'call' | 'billing'
+export type SignalSource = 'sales' | 'whatsapp' | 'call' | 'billing' | 'walkin'
 
 export const SIGNAL_SOURCE_LABEL: Record<SignalSource, string> = {
-  sales: 'Sales', whatsapp: 'WhatsApp', call: 'Call', billing: 'Billing',
+  sales: 'Sales', whatsapp: 'WhatsApp', call: 'Call', billing: 'Billing', walkin: 'Walk-in',
 }
 
-export type InterestGroup = 'engagement' | 'product' | 'metal'
+export type InterestGroup = 'engagement' | 'product' | 'metal' | 'occasion'
 
 export interface InterestDef { key: string; label: string; group: InterestGroup }
 
@@ -39,6 +39,11 @@ export const INTERESTS: InterestDef[] = [
   { key: 'gold',        label: 'Gold',    group: 'metal' },
   { key: 'silver',      label: 'Silver',  group: 'metal' },
   { key: 'diamond',     label: 'Diamond', group: 'metal' },
+  // occasion — a first-class signal (mainly captured at walk-in). Targetable in
+  // Reach like any interest, e.g. "walk-ins interested in wedding jewellery".
+  { key: 'wedding',     label: 'Wedding',  group: 'occasion' },
+  { key: 'gift',        label: 'Gift',     group: 'occasion' },
+  { key: 'festival',    label: 'Festival', group: 'occasion' },
 ]
 
 export const INTEREST_KEYS = INTERESTS.map(i => i.key)

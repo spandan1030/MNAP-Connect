@@ -15,6 +15,7 @@ const REACH_INTENTS = [
   { value: 'wont_come', label: 'No come' },
 ]
 const ENGAGEMENT_INTERESTS = INTERESTS.filter(i => i.group === 'engagement')
+const OCCASION_INTERESTS = INTERESTS.filter(i => i.group === 'occasion')
 
 function ago(iso: string): string {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)
@@ -281,12 +282,18 @@ export default function ReachPage() {
                 {!!filter.interests?.length && (
                   <div className="w-full flex items-center gap-1.5 mt-1.5 pt-1.5 border-t border-gray-100">
                     <span className="text-[10px] text-gray-400 mr-0.5">from</span>
-                    {([['whatsapp', 'Chat'], ['call', 'Call'], ['sales', 'Sales']] as const).map(([v, label]) => (
+                    {([['whatsapp', 'Chat'], ['call', 'Call'], ['walkin', 'Walk-in'], ['sales', 'Sales']] as const).map(([v, label]) => (
                       <Chip key={v} on={has('interestSources', v)} onClick={() => toggleArr('interestSources', v)}>{label}</Chip>
                     ))}
                     <span className="text-[10px] text-gray-400 ml-0.5">{filter.interestSources?.length ? '' : '(any source)'}</span>
                   </div>
                 )}
+              </FilterGroup>
+
+              <FilterGroup label="Occasion (walk-in)">
+                {OCCASION_INTERESTS.map(i => (
+                  <Chip key={i.key} on={has('interests', i.key)} onClick={() => toggleArr('interests', i.key)}>{i.label}</Chip>
+                ))}
               </FilterGroup>
 
               {topics.length > 0 && (

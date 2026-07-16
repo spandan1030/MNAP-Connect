@@ -75,6 +75,7 @@ const PRIMARY = [
 ]
 
 const MORE = [
+  { href: '/walkin',         label: 'Walk-in',      icon: ICONS.customers },
   { href: '/campaigns',      label: 'Campaigns',    icon: ICONS.reports },
   { href: '/send',           label: 'Send (1:1)',   icon: ICONS.messages },
   { href: '/admin/templates', label: 'Templates',   icon: ICONS.templates },

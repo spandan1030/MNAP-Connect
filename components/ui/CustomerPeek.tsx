@@ -28,7 +28,7 @@ interface PeekData {
 }
 
 const SOURCE_DOT: Record<string, string> = {
-  sales: 'bg-amber-400', whatsapp: 'bg-green-500', call: 'bg-blue-500', billing: 'bg-purple-500',
+  sales: 'bg-amber-400', whatsapp: 'bg-green-500', call: 'bg-blue-500', billing: 'bg-purple-500', walkin: 'bg-pink-500',
 }
 
 // Message-type labels for the "Messages sent" history.
@@ -127,6 +127,7 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                   interest signals; sales are things already bought (not interest). */}
               <InterestSection title="Interested in — from WhatsApp chat" dot="bg-green-500" keys={data.interests.whatsapp} />
               <InterestSection title="Interested in — from calls" dot="bg-blue-500" keys={data.interests.call} />
+              <InterestSection title="Interested in — from walk-in" dot="bg-pink-500" keys={data.interests.walkin} />
               <InterestSection title="Bought before — from sales" dot="bg-amber-400" keys={data.interests.sales} />
               <InterestSection title="Tagged at billing" dot="bg-purple-500" keys={data.interests.billing} />
 
