@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { applyPlaceholders } from '@/lib/utils'
 import { describeError, shortError } from '@/lib/whatsapp/errors'
 import { compressImage } from '@/lib/image'
+import CustomerPeek from '@/components/ui/CustomerPeek'
 import type { WaMessage, WaThread, MessageTemplate, InterestTopic } from '@/lib/types'
 
 interface TodayRates {
@@ -137,6 +138,7 @@ export default function ConversationPage({
   const [loading,       setLoading]       = useState(true)
   const [pendingImages, setPendingImages] = useState<File[]>([])
   const [imagePreviews, setImagePreviews] = useState<string[]>([])
+  const [peekOpen, setPeekOpen] = useState(false)  // full customer profile
 
   // Templates + interests (in-chat tools)
   const [sheet,            setSheet]            = useState<'none' | 'templates' | 'template-preview' | 'interests'>('none')
@@ -526,16 +528,18 @@ export default function ConversationPage({
           </svg>
         </button>
 
-        <div className="w-9 h-9 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
-          <span className="text-green-700 font-bold text-sm">
-            {displayName.charAt(0).toUpperCase()}
-          </span>
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold text-gray-900 text-sm truncate">{displayName}</p>
-          <p className="text-xs text-gray-400">{formatPhone(phone)}</p>
-        </div>
+        {/* Tap the name/avatar → full customer profile (peek). */}
+        <button onClick={() => setPeekOpen(true)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
+          <div className="w-9 h-9 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+            <span className="text-green-700 font-bold text-sm">
+              {displayName.charAt(0).toUpperCase()}
+            </span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-gray-900 text-sm truncate">{displayName}</p>
+            <p className="text-xs text-gray-400">{formatPhone(phone)} · view profile</p>
+          </div>
+        </button>
 
         {/* Bot on/off — staff can pause auto-replies and take over */}
         {thread && (
@@ -853,6 +857,8 @@ export default function ConversationPage({
           </div>
         </div>
       )}
+
+      <CustomerPeek phone={peekOpen ? phone : null} onClose={() => setPeekOpen(false)} />
     </div>
   )
 }

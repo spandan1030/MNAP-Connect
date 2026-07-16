@@ -45,6 +45,7 @@ export default function ReachPage() {
   const [recipients, setRecipients] = useState<ReachRecipient[]>([])
   const [total, setTotal] = useState(0)
   const [capped, setCapped] = useState(false)
+  const [dailyCap, setDailyCap] = useState<number | ''>('')  // send at most N today (WhatsApp daily limit)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [resolving, setResolving] = useState(false)
   const [resolved, setResolved] = useState(false)
@@ -104,6 +105,22 @@ export default function ReachPage() {
   }
   const has = (key: keyof ReachFilter, val: string) => ((filter[key] as string[] | undefined) ?? []).includes(val)
 
+  // Selection = first N eligible (not suppressed / opted out). N = daily cap, or
+  // everyone eligible when the cap is blank. Re-run whenever the cap changes.
+  function eligiblePhones(recs: ReachRecipient[]): string[] {
+    return recs.filter(r => !r.suppressedUntil && !r.is_do_not_call && !r.dnd).map(r => r.phone)
+  }
+  function selectWithCap(recs: ReachRecipient[], capVal: number | '') {
+    const elig = eligiblePhones(recs)
+    const n = capVal === '' ? elig.length : Math.max(0, capVal)
+    setSelected(new Set(elig.slice(0, n)))
+  }
+  function changeCap(v: string) {
+    const n = v === '' ? '' : Math.max(1, parseInt(v) || 0)
+    setDailyCap(n)
+    if (resolved) selectWithCap(recipients, n)
+  }
+
   async function findRecipients() {
     setError(null); setResult(null)
     if (!templateId) { setError('Pick a template first — it decides the suppression window.'); return }
@@ -125,8 +142,8 @@ export default function ReachPage() {
       setRecipients(recs)
       setTotal(data.total ?? recs.length)
       setCapped(!!data.capped)
-      // Pre-select everyone eligible (not suppressed, not opted out).
-      setSelected(new Set(recs.filter(r => !r.suppressedUntil && !r.is_do_not_call && !r.dnd).map(r => r.phone)))
+      // Pre-select first N eligible (N = daily cap, or all eligible if blank).
+      selectWithCap(recs, dailyCap)
       setResolved(true)
     } catch { setError('Network error — try again') }
     finally { setResolving(false) }
@@ -303,6 +320,19 @@ export default function ReachPage() {
             </div>
           )}
 
+          {/* Daily cap — send to only the first N eligible today (WhatsApp limits). */}
+          <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
+            <label className="text-[11px] font-medium text-gray-500 flex-1">
+              Send at most (per batch)
+              <input type="number" min={1} inputMode="numeric" placeholder="all eligible"
+                value={dailyCap} onChange={e => changeCap(e.target.value)}
+                className="input text-sm mt-0.5" />
+            </label>
+          </div>
+          <p className="text-[10px] text-gray-400">
+            Leave blank to message everyone eligible. Set e.g. 20 to send 20 now — run again later and the next 20 go out (already-messaged numbers auto-skip).
+          </p>
+
           <button onClick={findRecipients} disabled={resolving} className="btn-primary w-full disabled:opacity-60">
             {resolving ? 'Finding…' : 'Find recipients'}
           </button>
@@ -314,10 +344,13 @@ export default function ReachPage() {
           <div className="card p-3 space-y-3">
             <p className="text-xs font-semibold text-gray-700">3 · Review — {total.toLocaleString('en-IN')} in cohort</p>
             <div className="grid grid-cols-3 gap-2 text-center">
-              <Stat label="Will send" value={eligibleCount} accent="text-green-700" />
+              <Stat label="Will send" value={selected.size} accent="text-green-700" />
               <Stat label="Suppressed" value={suppressedCount} accent="text-amber-600" />
               <Stat label="Opted out" value={blockedCount} accent="text-gray-400" />
             </div>
+            {dailyCap !== '' && eligibleCount > selected.size && (
+              <p className="text-[10px] text-gray-500">Batch cap {dailyCap}: sending {selected.size} of {eligibleCount.toLocaleString('en-IN')} eligible now — the rest stay in the cohort for the next batch.</p>
+            )}
             {capped && <p className="text-[10px] text-amber-600">Showing first {recipients.length} of {total.toLocaleString('en-IN')} — narrow the cohort to review all.</p>}
 
             {result && (

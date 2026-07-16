@@ -67,17 +67,17 @@ const ICONS = {
 }
 
 const PRIMARY = [
-  { href: '/messages',        label: 'Messages',  icon: ICONS.messages },
-  { href: '/send',            label: 'Send',      icon: ICONS.send },
-  { href: '/contacts',        label: 'Customers', icon: ICONS.customers },
-  { href: '/catalogue',       label: 'Catalogue', icon: ICONS.catalogue },
-  { href: '/admin/templates', label: 'Templates', icon: ICONS.templates },
+  { href: '/messages',  label: 'Messages',  icon: ICONS.messages },
+  { href: '/reach',     label: 'Reach',     icon: ICONS.send },
+  { href: '/contacts',  label: 'Customers', icon: ICONS.customers },
+  { href: '/calls',     label: 'Calls',     icon: ICONS.phone },
+  { href: '/catalogue', label: 'Catalogue', icon: ICONS.catalogue },
 ]
 
 const MORE = [
-  { href: '/reach',          label: 'Reach',        icon: ICONS.send },
   { href: '/campaigns',      label: 'Campaigns',    icon: ICONS.reports },
-  { href: '/calls',          label: 'Calls',        icon: ICONS.phone },
+  { href: '/send',           label: 'Send (1:1)',   icon: ICONS.messages },
+  { href: '/admin/templates', label: 'Templates',   icon: ICONS.templates },
   { href: '/admin/calls',    label: 'Call Control', icon: ICONS.phone },
   { href: '/purchase',       label: 'Purchase',  icon: ICONS.purchase },
   { href: '/reports',        label: 'Reports',   icon: ICONS.reports },

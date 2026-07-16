@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { INTEREST_LABEL, SIGNAL_SOURCE_LABEL } from '@/lib/signals'
+import { INTEREST_LABEL } from '@/lib/signals'
 import { INTENT_LABEL, TOPIC_LABEL } from '@/lib/calls'
 
 // Universal customer peek: tap any phone number anywhere → who is this?
@@ -31,6 +31,11 @@ const SOURCE_DOT: Record<string, string> = {
   sales: 'bg-amber-400', whatsapp: 'bg-green-500', call: 'bg-blue-500', billing: 'bg-purple-500',
 }
 
+// Message-type labels for the "Messages sent" history.
+const CATEGORY_LABEL: Record<string, string> = {
+  daily: 'Daily rate', oneoff: 'One-off', thankyou: 'Thank-you', custom: 'Custom',
+}
+
 function fmtDate(s: string | null): string {
   if (!s) return '—'
   const d = new Date(s)
@@ -45,6 +50,9 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
   const [data, setData] = useState<PeekData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showCalls, setShowCalls] = useState(false)  // call log is opt-in (collapsed by default)
+
+  useEffect(() => { setShowCalls(false) }, [phone])
 
   useEffect(() => {
     if (!phone) { setData(null); setError(null); return }
@@ -115,42 +123,37 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                 </Section>
               )}
 
-              {/* Interests by source */}
-              {Object.keys(data.interests).length > 0 && (
-                <Section title="Interested in">
-                  <div className="space-y-1">
-                    {Object.entries(data.interests).map(([src, keys]) => (
-                      <div key={src} className="flex items-center gap-1.5 flex-wrap">
-                        <span className={`w-1.5 h-1.5 rounded-full ${SOURCE_DOT[src] ?? 'bg-gray-400'}`} />
-                        <span className="text-[10px] text-gray-400 w-16">{SIGNAL_SOURCE_LABEL[src as keyof typeof SIGNAL_SOURCE_LABEL] ?? src}</span>
-                        {[...new Set(keys)].map(k => <Tag key={k}>{INTEREST_LABEL[k] ?? k}</Tag>)}
-                      </div>
-                    ))}
-                  </div>
-                </Section>
-              )}
+              {/* Signals — separated by where they came from. Chat & calls are
+                  interest signals; sales are things already bought (not interest). */}
+              <InterestSection title="Interested in — from WhatsApp chat" dot="bg-green-500" keys={data.interests.whatsapp} />
+              <InterestSection title="Interested in — from calls" dot="bg-blue-500" keys={data.interests.call} />
+              <InterestSection title="Bought before — from sales" dot="bg-amber-400" keys={data.interests.sales} />
+              <InterestSection title="Tagged at billing" dot="bg-purple-500" keys={data.interests.billing} />
 
-              {/* Call history */}
+              {/* Call log — outcome + signals of each call. Opt-in (collapsed). */}
               {data.calls.length > 0 && (
-                <Section title={`Calls (${data.calls.length})`}>
-                  <div className="space-y-1">
-                    {data.calls.map((c, i) => (
-                      <div key={i} className="flex items-center gap-2 text-xs">
-                        <span className={c.success === true ? 'text-green-600' : c.success === false ? 'text-red-500' : 'text-gray-300'}>
-                          {c.success === true ? '✓' : c.success === false ? '✗' : '•'}
-                        </span>
-                        <span className="text-gray-400 w-20 flex-shrink-0">{fmtDateTime(c.called_at)}</span>
-                        <span className="text-gray-700 truncate">
-                          {c.intent ? INTENT_LABEL[c.intent] : ''}
-                          {c.topics?.length ? ` · ${c.topics.map(t => TOPIC_LABEL[t] ?? t).join(', ')}` : ''}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                <Section title={`Call log (${data.calls.length})`}
+                  action={<button onClick={() => setShowCalls(s => !s)} className="text-[11px] font-medium text-green-700">{showCalls ? 'Hide' : 'View'}</button>}>
+                  {showCalls && (
+                    <div className="space-y-1">
+                      {data.calls.map((c, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs">
+                          <span className={c.success === true ? 'text-green-600' : c.success === false ? 'text-red-500' : 'text-gray-300'}>
+                            {c.success === true ? '✓' : c.success === false ? '✗' : '•'}
+                          </span>
+                          <span className="text-gray-400 w-20 flex-shrink-0">{fmtDateTime(c.called_at)}</span>
+                          <span className="text-gray-700 truncate">
+                            {c.intent ? INTENT_LABEL[c.intent] : ''}
+                            {c.topics?.length ? ` · ${c.topics.map(t => TOPIC_LABEL[t] ?? t).join(', ')}` : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </Section>
               )}
 
-              {/* Message history */}
+              {/* Message history — which category messages went out, in what campaign. */}
               <Section title={`Messages sent (${data.sends.length})`}>
                 {data.sends.length === 0 ? (
                   <p className="text-xs text-gray-400">No WhatsApp messages sent yet.</p>
@@ -162,7 +165,10 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                           {s.status === 'sent' ? '✓' : s.status === 'failed' ? '✗' : '•'}
                         </span>
                         <span className="text-gray-400 w-20 flex-shrink-0">{fmtDateTime(s.sentAt)}</span>
-                        <span className="text-gray-700 truncate">{s.label}{s.cohort ? ` · ${s.cohort}` : ''}</span>
+                        <span className="text-gray-700 truncate flex items-center gap-1">
+                          {s.category && <Tag>{CATEGORY_LABEL[s.category] ?? s.category}</Tag>}
+                          <span className="truncate">{s.label}{s.cohort ? ` · ${s.cohort}` : ''}</span>
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -180,12 +186,28 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
-      <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">{title}</p>
+      <div className="flex items-center justify-between mb-1.5">
+        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">{title}</p>
+        {action}
+      </div>
       {children}
     </div>
+  )
+}
+// One interest section, source-scoped. Renders nothing if there are no signals.
+function InterestSection({ title, dot, keys }: { title: string; dot: string; keys?: string[] }) {
+  const uniq = [...new Set(keys ?? [])]
+  if (uniq.length === 0) return null
+  return (
+    <Section title={title}>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className={`w-1.5 h-1.5 rounded-full ${dot} flex-shrink-0`} />
+        {uniq.map(k => <Tag key={k}>{INTEREST_LABEL[k] ?? k}</Tag>)}
+      </div>
+    </Section>
   )
 }
 function KV({ k, v }: { k: string; v: string }) {

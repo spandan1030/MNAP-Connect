@@ -102,6 +102,7 @@ interface RecentRecipient { phone: string; name: string | null; lastPurchase: st
 function RecentBuyersTab({ templates, setError }: { templates: MessageTemplate[]; setError: (s: string | null) => void }) {
   const [templateId, setTemplateId] = useState('')
   const [days, setDays] = useState(14)
+  const [cap, setCap] = useState<number | ''>('')  // send at most N today (WhatsApp daily limit)
   const [recipients, setRecipients] = useState<RecentRecipient[]>([])
   const [loaded, setLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -111,6 +112,9 @@ function RecentBuyersTab({ templates, setError }: { templates: MessageTemplate[]
 
   const template = templates.find(t => t.id === templateId) ?? null
   const eligible = recipients.filter(r => !r.suppressed && !r.dnd)
+  // Only the first N eligible go out this batch; the rest roll to the next run
+  // (already-thanked buyers are auto-suppressed, so no one is thanked twice).
+  const toSend = cap === '' ? eligible : eligible.slice(0, Math.max(0, cap))
 
   async function load() {
     setError(null); setResult(null)
@@ -126,13 +130,13 @@ function RecentBuyersTab({ templates, setError }: { templates: MessageTemplate[]
   }
 
   async function send() {
-    if (!template || eligible.length === 0) return
+    if (!template || toSend.length === 0) return
     setSending(true); setError(null)
     try {
       const res = await fetch('/api/reach/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          recipients: eligible.map(r => ({ phone: r.phone, name: r.name })),
+          recipients: toSend.map(r => ({ phone: r.phone, name: r.name })),
           templateId, cohortLabel: `Thank-you (bought ≤${days}d)`,
         }),
       })
@@ -156,6 +160,13 @@ function RecentBuyersTab({ templates, setError }: { templates: MessageTemplate[]
           <span className="text-xs text-gray-500 pb-2.5">days</span>
           <button onClick={load} disabled={loading} className="btn-primary ml-auto disabled:opacity-60">{loading ? 'Loading…' : 'Load buyers'}</button>
         </div>
+        <label className="text-xs font-medium text-gray-600 block">
+          Send at most (per batch)
+          <input type="number" min={1} inputMode="numeric" placeholder="all eligible"
+            value={cap} onChange={e => setCap(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value) || 0))}
+            className="input mt-1 text-sm w-32" />
+        </label>
+        <p className="text-[10px] text-gray-400">Blank = thank everyone eligible. Set e.g. 30 to send 30 now — run again later and the next 30 go out (already-thanked auto-skip).</p>
         {template && template.suppression_days > 0 && (
           <p className="text-[11px] text-gray-500">Skips anyone already thanked with this template in the last {template.suppression_days} days.</p>
         )}
@@ -170,7 +181,8 @@ function RecentBuyersTab({ templates, setError }: { templates: MessageTemplate[]
       {loaded && (
         <div className="card p-3 space-y-2">
           <p className="text-xs font-semibold text-gray-700">
-            {recipients.length} buyer{recipients.length !== 1 ? 's' : ''} · {eligible.length} to thank
+            {recipients.length} buyer{recipients.length !== 1 ? 's' : ''} · {eligible.length} eligible
+            {cap !== '' && eligible.length > toSend.length && <span className="text-gray-500 font-normal"> · sending {toSend.length} this batch</span>}
           </p>
           {recipients.length === 0 && (
             <p className="text-[11px] text-gray-500">No purchases in this window. Try widening the days.</p>
@@ -188,8 +200,8 @@ function RecentBuyersTab({ templates, setError }: { templates: MessageTemplate[]
               </div>
             ))}
           </div>
-          <button onClick={send} disabled={sending || eligible.length === 0} className="btn-primary w-full disabled:opacity-60">
-            {sending ? 'Sending…' : `Send thank-you to ${eligible.length}`}
+          <button onClick={send} disabled={sending || toSend.length === 0} className="btn-primary w-full disabled:opacity-60">
+            {sending ? 'Sending…' : `Send thank-you to ${toSend.length}`}
           </button>
         </div>
       )}
