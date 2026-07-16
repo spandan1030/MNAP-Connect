@@ -33,9 +33,11 @@ const SOURCE_DOT: Record<string, string> = {
   sales: 'bg-amber-400', whatsapp: 'bg-green-500', call: 'bg-blue-500', billing: 'bg-purple-500', walkin: 'bg-pink-500',
 }
 
-// Message-type labels for the "Messages sent" history.
+// Message-type labels for the "Messages sent" history. Keys must match the
+// template category slugs (see admin/templates) — daily_rate/rate/offer/…,
+// not daily/oneoff, or the chip falls back to printing the raw slug.
 const CATEGORY_LABEL: Record<string, string> = {
-  daily: 'Daily rate', oneoff: 'One-off', thankyou: 'Thank-you', custom: 'Custom',
+  daily_rate: 'Daily rate', rate: 'Rate alert', offer: 'Offer', thankyou: 'Thank-you', custom: 'Custom',
 }
 
 function fmtDate(s: string | null): string {
