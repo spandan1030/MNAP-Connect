@@ -384,12 +384,19 @@ function SalesmenRoster({ supabase }: { supabase: ReturnType<typeof createClient
     await supabase.from('salesmen').update({ is_active: next }).eq('id', id)
     loadSalesmen()
   }
+  async function deleteSalesman(s: Salesman) {
+    // Past calls/walk-ins keep their history — the FK is ON DELETE SET NULL, so
+    // those rows just fall back to "-" (same as any pre-roster call).
+    if (!confirm(`Remove ${s.alias} · ${s.name}? Their past calls & walk-ins stay in history but will no longer show this name. If they've just left, use Inactive instead.`)) return
+    await supabase.from('salesmen').delete().eq('id', s.id)
+    loadSalesmen()
+  }
 
   return (
     <section className="card p-4 space-y-3">
       <div>
         <p className="text-sm font-semibold text-gray-700">Salesmen</p>
-        <p className="text-xs text-gray-500">The roster the calling screen picks from. Each call &amp; walk-in is tagged with the active salesman&apos;s alias.</p>
+        <p className="text-xs text-gray-500">The roster the calling screen picks from. Each call &amp; walk-in is tagged with the active salesman&apos;s alias. Set someone <b>Inactive</b> when they leave (keeps history); <b>Delete</b> only removes them from the roster.</p>
       </div>
       <div className="flex gap-2">
         <input
@@ -405,11 +412,15 @@ function SalesmenRoster({ supabase }: { supabase: ReturnType<typeof createClient
       {salesmen.map(s => (
         <div key={s.id} className="flex items-center justify-between border-b border-gray-100 last:border-0 py-1.5">
           <p className="text-xs text-gray-800"><b>{s.alias}</b> · {s.name}</p>
-          <button onClick={() => toggleSalesman(s.id, !s.is_active)}
-            className={cn('text-[10px] px-2 py-0.5 rounded-full border font-medium',
-              s.is_active ? 'text-green-700 bg-green-50 border-green-200' : 'text-gray-400 border-gray-200')}>
-            {s.is_active ? 'Active' : 'Inactive'}
-          </button>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button onClick={() => toggleSalesman(s.id, !s.is_active)}
+              className={cn('text-[10px] px-2 py-0.5 rounded-full border font-medium',
+                s.is_active ? 'text-green-700 bg-green-50 border-green-200' : 'text-gray-400 border-gray-200')}>
+              {s.is_active ? 'Active' : 'Inactive'}
+            </button>
+            <button onClick={() => deleteSalesman(s)} title="Remove from roster"
+              className="text-[11px] text-red-500 px-1.5 py-0.5 rounded-md hover:bg-red-50">Delete</button>
+          </div>
         </div>
       ))}
     </section>

@@ -14,9 +14,12 @@ interface LogRow {
   topics: string[] | null
   intent: string | null
   called_at: string
+  salesman_id: string | null
+  salesmanAlias: string | null
   customer: { name: string; phone: string; is_hot_lead: boolean }
 }
 type DrillKey = { kind: 'topic' | 'intent'; value: string } | null
+type Salesman = { id: string; name: string; alias: string }
 
 const todayStr = () => new Date().toLocaleDateString('en-CA')
 
@@ -29,6 +32,8 @@ export default function CallReportPage() {
   const [drill, setDrill] = useState<DrillKey>(null)
   const [activeCampaign, setActiveCampaign] = useState<WaBCallCampaign | null>(null)
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
+  const [salesmen, setSalesmen] = useState<Salesman[]>([])
+  const [salesmanFilter, setSalesmanFilter] = useState<string | null>(null)  // null = all salesmen
 
   const load = useCallback(async () => {
     setLoading(true); setDrill(null)
@@ -36,11 +41,13 @@ export default function CallReportPage() {
     const toD = new Date(`${to}T00:00:00`); toD.setDate(toD.getDate() + 1)
     const { data } = await supabase
       .from('wa_b_call_logs')
-      .select('id,success,topics,intent,called_at,customer:wa_b_customers!inner(name,phone,is_hot_lead)')
+      .select('id,success,topics,intent,called_at,salesman_id,customer:wa_b_customers!inner(name,phone,is_hot_lead),salesman:salesmen(alias)')
       .gte('called_at', fromD.toISOString())
       .lt('called_at', toD.toISOString())
       .order('called_at', { ascending: false })
-    setLogs((data as unknown as LogRow[]) ?? [])
+    const rows = ((data ?? []) as unknown as Array<LogRow & { salesman: { alias: string } | { alias: string }[] | null }>)
+      .map(r => ({ ...r, salesmanAlias: (Array.isArray(r.salesman) ? r.salesman[0]?.alias : r.salesman?.alias) ?? null }))
+    setLogs(rows)
     setLoading(false)
   }, [from, to, supabase])
 
@@ -49,17 +56,36 @@ export default function CallReportPage() {
     supabase.from('wa_b_call_campaigns').select('*').eq('is_active', true)
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
       .then(({ data }) => setActiveCampaign(data as WaBCallCampaign | null))
+    supabase.from('salesmen').select('id, name, alias').order('created_at')
+      .then(({ data }) => setSalesmen((data ?? []) as Salesman[]))
   }, [supabase])
 
+  // Per-salesman breakdown is always over ALL calls in range (so you can see and
+  // pick anyone); everything else below reflects the selected salesman.
+  const salesmanRows = (() => {
+    const by = new Map<string, { alias: string; attempts: number; connected: number }>()
+    for (const l of logs) {
+      const id = l.salesman_id ?? '—'
+      let a = by.get(id)
+      if (!a) { a = { alias: l.salesmanAlias ?? '—', attempts: 0, connected: 0 }; by.set(id, a) }
+      a.attempts++
+      if (l.success === true) a.connected++
+    }
+    return [...by.entries()].map(([id, v]) => ({ id, ...v })).sort((a, b) => b.attempts - a.attempts)
+  })()
+
+  // View = logs scoped to the selected salesman ('—' = unattributed / past calls).
+  const view = salesmanFilter == null ? logs : logs.filter(l => (l.salesman_id ?? '—') === salesmanFilter)
+
   // ── aggregates ──
-  const attempts = logs.length
-  const connected = logs.filter(l => l.success === true).length
-  const notConnected = logs.filter(l => l.success === false).length
-  const topicCount = (t: string) => logs.filter(l => l.success && (l.topics ?? []).includes(t)).length
-  const intentCount = (v: string) => logs.filter(l => l.intent === v).length
+  const attempts = view.length
+  const connected = view.filter(l => l.success === true).length
+  const notConnected = view.filter(l => l.success === false).length
+  const topicCount = (t: string) => view.filter(l => l.success && (l.topics ?? []).includes(t)).length
+  const intentCount = (v: string) => view.filter(l => l.intent === v).length
 
   const drillRows = drill
-    ? logs.filter(l => drill.kind === 'topic'
+    ? view.filter(l => drill.kind === 'topic'
         ? l.success && (l.topics ?? []).includes(drill.value)
         : l.intent === drill.value)
     : []
@@ -67,7 +93,7 @@ export default function CallReportPage() {
   // Hot leads = distinct starred customers called in this range (star is a
   // current per-customer flag, so we dedupe by phone across their calls).
   const hotRows = Array.from(
-    new Map(logs.filter(l => l.customer.is_hot_lead).map(l => [l.customer.phone, l.customer])).values()
+    new Map(view.filter(l => l.customer.is_hot_lead).map(l => [l.customer.phone, l.customer])).values()
   )
 
   const exportHref = activeCampaign ? `/api/calls/export?campaign=${activeCampaign.id}` : '/api/calls/export'
@@ -102,6 +128,34 @@ export default function CallReportPage() {
           <Tile label="No answer" value={notConnected} accent="text-gray-500" />
           <Tile label="★ Hot leads" value={hotRows.length} accent="text-amber-500" />
         </div>
+
+        {/* by salesman — tap to scope the whole report to one person */}
+        {salesmanRows.length > 0 && (
+          <div className="card p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] text-gray-400 font-medium">By salesman — tap to filter</p>
+              {salesmanFilter != null && (
+                <button onClick={() => setSalesmanFilter(null)} className="text-[11px] font-medium text-green-700">Show all</button>
+              )}
+            </div>
+            <div className="space-y-1">
+              {salesmanRows.map(s => {
+                const active = salesmanFilter === s.id
+                const rate = s.attempts ? Math.round((s.connected / s.attempts) * 100) : 0
+                return (
+                  <button key={s.id} onClick={() => setSalesmanFilter(active ? null : s.id)}
+                    className={cn('w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 border text-xs',
+                      active ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-700 border-gray-200')}>
+                    <span className="font-medium truncate">{s.id === '—' ? 'Unattributed / past calls' : s.alias}</span>
+                    <span className={cn('flex-shrink-0 tabular-nums', active ? 'text-green-50' : 'text-gray-500')}>
+                      {s.connected}/{s.attempts} connected · {rate}%
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* hot leads — starred customers in range */}
         {hotRows.length > 0 && (
@@ -161,8 +215,8 @@ export default function CallReportPage() {
         {/* logs */}
         <div className="card p-3 space-y-2">
           <p className="text-sm font-semibold text-gray-700">Call log {loading && <span className="text-xs text-gray-400">· loading…</span>}</p>
-          {!loading && logs.length === 0 && <p className="text-xs text-gray-400">No calls in this range.</p>}
-          {logs.map(l => (
+          {!loading && view.length === 0 && <p className="text-xs text-gray-400">No calls in this range.</p>}
+          {view.map(l => (
             <div key={l.id} className="flex items-start gap-2 border-b border-gray-50 last:border-0 py-1.5">
               <span className={cn('mt-0.5 text-sm', l.success === true ? 'text-green-600' : l.success === false ? 'text-red-500' : 'text-gray-300')}>
                 {l.success === true ? '✓' : l.success === false ? '✗' : '•'}
@@ -173,7 +227,7 @@ export default function CallReportPage() {
                     {l.customer.is_hot_lead && <span className="text-amber-400" title="Hot lead">★ </span>}
                     {l.customer.name}
                   </button>
-                  <span className="text-[10px] text-gray-400 flex-shrink-0">{formatDateTime(l.called_at)}</span>
+                  <span className="text-[10px] text-gray-400 flex-shrink-0">{formatDateTime(l.called_at)} · {l.salesmanAlias ?? '-'}</span>
                 </div>
                 <p className="text-[11px] text-gray-500">
                   +91 {l.customer.phone}
