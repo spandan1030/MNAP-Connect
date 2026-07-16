@@ -402,9 +402,13 @@ export interface ReachFilter {
   min_lifetime_value?: number
   min_total_bills?: number
   max_days_since_last_purchase?: number
+  purchaseFrom?: string         // YYYY-MM-DD (last_purchase_date lower bound)
+  purchaseTo?: string           // YYYY-MM-DD (last_purchase_date upper bound, inclusive)
   // interest signals (wa_signals, any-match, joined by phone)
   interests?: string[]
-  interestSources?: string[]    // wa_signals.source facet: 'whatsapp'|'call'|'sales' (empty = any source)
+  interestSources?: string[]    // wa_signals.source facet: 'whatsapp'|'call'|'walkin'|'sales' (empty = any source)
+  interestFrom?: string         // YYYY-MM-DD — signal last_seen lower bound (e.g. "walked in / chatted since")
+  interestTo?: string           // YYYY-MM-DD — signal last_seen upper bound, inclusive
   subscribedTopics?: string[]   // opt-in consent: wa_customer_interests.topic_id (reproduces topic broadcast)
   // call signals
   campaignIds?: string[]        // membership via wa_b_call_tasks
@@ -413,6 +417,9 @@ export interface ReachFilter {
   hotLead?: boolean             // wa_b_customers.is_hot_lead
   calledFrom?: string           // YYYY-MM-DD (call date lower bound)
   calledTo?: string             // YYYY-MM-DD (call date upper bound, inclusive)
+  // chat activity (wa_messages inbound)
+  messagedFrom?: string         // YYYY-MM-DD — customer messaged us on/after this date
+  messagedTo?: string           // YYYY-MM-DD — customer messaged us on/before this date (inclusive)
   // manual list — used alone (paste numbers)
   phones?: string[]
 }

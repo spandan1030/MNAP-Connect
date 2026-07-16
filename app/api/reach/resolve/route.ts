@@ -27,7 +27,8 @@ function markerActive(f: ReachFilter): boolean {
   return !!(f.recency_tier?.length || f.value_tier?.length || f.rfm_segment?.length ||
     f.frequency_tier?.length || f.primary_metal?.length || f.is_high_value ||
     f.is_likely_wedding || f.is_lookalike_seed || f.min_lifetime_value != null ||
-    f.min_total_bills != null || f.max_days_since_last_purchase != null)
+    f.min_total_bills != null || f.max_days_since_last_purchase != null ||
+    f.purchaseFrom || f.purchaseTo)
 }
 
 async function markerPhones(sb: Sb, f: ReachFilter): Promise<Set<string>> {
@@ -49,6 +50,8 @@ async function markerPhones(sb: Sb, f: ReachFilter): Promise<Set<string>> {
     if (f.min_total_bills != null)    q = q.gte('wa_b_markers.total_bills', f.min_total_bills)
     if (f.max_days_since_last_purchase != null)
       q = q.lte('wa_b_markers.days_since_last_purchase', f.max_days_since_last_purchase)
+    if (f.purchaseFrom) q = q.gte('wa_b_markers.last_purchase_date', f.purchaseFrom)
+    if (f.purchaseTo)   q = q.lte('wa_b_markers.last_purchase_date', f.purchaseTo)
     const { data } = await q.range(from, from + PAGE - 1)
     const rows = (data ?? []) as { phone: string }[]
     for (const r of rows) set.add(tenDigit(r.phone))
@@ -160,17 +163,43 @@ export async function POST(req: NextRequest) {
       families.push(set)
     }
 
-    if (f.interests?.length) {
+    // Signals family (wa_signals). Activates on interests, a source facet, or a
+    // "tagged since/until" date range — so "walked in this week" (source=walkin +
+    // date range, no specific interest) and "chatted about rate last month"
+    // (interest=rate + source=whatsapp + date range) are both expressible.
+    const signalsActive = !!(f.interests?.length || f.interestSources?.length || f.interestFrom || f.interestTo)
+    if (signalsActive) {
       const set = new Set<string>()
       const PAGE = 1000
       for (let from = 0; ; from += PAGE) {
-        let q = supabaseAdmin.from('wa_signals').select('phone').in('interest', f.interests)
-        // Source facet: 'whatsapp' (chat) | 'call' | 'sales'. Empty = any source.
+        let q = supabaseAdmin.from('wa_signals').select('phone')
+        if (f.interests?.length) q = q.in('interest', f.interests)
+        // Source facet: 'whatsapp' (chat) | 'call' | 'walkin' | 'sales'. Empty = any.
         if (f.interestSources?.length) q = q.in('source', f.interestSources)
+        if (f.interestFrom) q = q.gte('last_seen', `${f.interestFrom}T00:00:00`)
+        if (f.interestTo) { const d = new Date(`${f.interestTo}T00:00:00`); d.setDate(d.getDate() + 1); q = q.lt('last_seen', d.toISOString()) }
         const { data } = await q.range(from, from + PAGE - 1)
         const rows = (data ?? []) as { phone: string }[]
         for (const r of rows) set.add(tenDigit(r.phone))
         if (rows.length < PAGE) break
+      }
+      families.push(set)
+    }
+
+    // Chat-activity family: customers who messaged us (inbound) in a date window.
+    if (f.messagedFrom || f.messagedTo) {
+      const threadIds = await pagedIds<{ customer_id: string }>((from, to) => {
+        let q = supabaseAdmin.from('wa_messages').select('thread_id').eq('direction', 'inbound')
+        if (f.messagedFrom) q = q.gte('created_at', `${f.messagedFrom}T00:00:00`)
+        if (f.messagedTo) { const d = new Date(`${f.messagedTo}T00:00:00`); d.setDate(d.getDate() + 1); q = q.lt('created_at', d.toISOString()) }
+        // reuse pagedIds by aliasing thread_id -> customer_id shape
+        return q.range(from, to).then(r => ({ data: (r.data ?? []).map((x: { thread_id: string }) => ({ customer_id: x.thread_id })) }))
+      })
+      const set = new Set<string>()
+      const uniq = [...new Set(threadIds)]
+      for (let i = 0; i < uniq.length; i += 300) {
+        const { data } = await supabaseAdmin.from('wa_threads').select('phone').in('id', uniq.slice(i, i + 300))
+        for (const r of (data ?? []) as { phone: string }[]) set.add(tenDigit(r.phone))
       }
       families.push(set)
     }
