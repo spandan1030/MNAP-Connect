@@ -7,7 +7,8 @@ import { shortError } from '@/lib/whatsapp/errors'
 
 interface Campaign {
   id: string; source: 'reach' | 'broadcast'; label: string; template: string | null
-  total: number; sent: number; failed: number; skippedSuppressed: number; skippedDnc: number; sentAt: string
+  total: number; sent: number; failed: number; skippedSuppressed: number; skippedDnc: number
+  isDynamic: boolean; sentAt: string
 }
 interface Funnel { sent: number; delivered: number; read: number; replied: number; converted: number; failed: number }
 interface FailRow { code: number | null; reason: string | null; count: number }
@@ -16,7 +17,10 @@ interface Recipient {
   error: string | null; errorCode: number | null
   sentAt: string | null; deliveredAt: string | null; readAt: string | null
 }
-interface Detail { funnel: Funnel; failureBreakdown: FailRow[]; recipients: Recipient[]; label: string }
+interface Detail {
+  funnel: Funnel; failureBreakdown: FailRow[]; recipients: Recipient[]; label: string
+  isDynamic: boolean; memberCount: number; pending: number
+}
 
 function fmtTime(iso: string | null): string {
   if (!iso) return '—'
@@ -31,6 +35,7 @@ function failLabel(f: FailRow): string {
 
 // Row status → label + colour. Furthest stage a recipient reached.
 const STAGE: Record<string, { label: string; cls: string }> = {
+  pending:   { label: 'Pending',   cls: 'bg-white text-gray-500 border-gray-300' },
   failed:    { label: 'Failed',    cls: 'bg-red-100 text-red-700 border-red-200' },
   sent:      { label: 'Sent',      cls: 'bg-gray-100 text-gray-600 border-gray-200' },
   delivered: { label: 'Delivered', cls: 'bg-blue-100 text-blue-700 border-blue-200' },
@@ -46,20 +51,47 @@ export default function CampaignsPage() {
   const [detail, setDetail] = useState<Detail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
+  const [sendN, setSendN] = useState<number | ''>('')
+  const [sendingMore, setSendingMore] = useState(false)
+  const [sendMsg, setSendMsg] = useState<string | null>(null)
 
-  useEffect(() => {
-    fetch('/api/campaigns').then(r => r.json()).then(d => { setRows(d.campaigns ?? []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [])
+  useEffect(() => { refreshList() }, [])
 
-  async function toggle(c: Campaign) {
-    if (openId === c.id) { setOpenId(null); setDetail(null); return }
-    setOpenId(c.id); setDetail(null); setDetailLoading(true)
+  async function refreshList() {
+    const d = await fetch('/api/campaigns').then(r => r.json()).catch(() => ({}))
+    setRows(d.campaigns ?? []); setLoading(false)
+  }
+
+  async function loadDetail(c: Campaign) {
+    setDetail(null); setDetailLoading(true); setSendMsg(null)
     try {
       const r = await fetch(`/api/campaigns/detail?id=${c.id}&source=${c.source}`)
       const d = await r.json()
-      setDetail({ funnel: d.funnel ?? null, failureBreakdown: d.failureBreakdown ?? [], recipients: d.recipients ?? [], label: c.label })
+      setDetail({
+        funnel: d.funnel ?? null, failureBreakdown: d.failureBreakdown ?? [], recipients: d.recipients ?? [],
+        label: c.label, isDynamic: !!d.isDynamic, memberCount: d.memberCount ?? 0, pending: d.pending ?? 0,
+      })
     } finally { setDetailLoading(false) }
+  }
+
+  async function toggle(c: Campaign) {
+    if (openId === c.id) { setOpenId(null); setDetail(null); return }
+    setOpenId(c.id); setSendN(''); await loadDetail(c)
+  }
+
+  // Send the next batch to this campaign's pending members, in-place.
+  async function sendMore(c: Campaign) {
+    setSendingMore(true); setSendMsg(null)
+    try {
+      const res = await fetch('/api/campaigns/send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId: c.id, limit: sendN === '' ? undefined : sendN }),
+      })
+      const d = await res.json()
+      if (!res.ok) { setSendMsg(d.error ?? 'Send failed'); setSendingMore(false); return }
+      setSendMsg(`Sent ${d.sent}${d.skippedDnc ? ` · ${d.skippedDnc} opted-out` : ''}${d.added ? ` · ${d.added} new pulled in` : ''}${d.eligibleRemaining ? ` · ${d.eligibleRemaining} still pending` : ''}.`)
+      await Promise.all([loadDetail(c), refreshList()])
+    } catch { setSendMsg('Network error') } finally { setSendingMore(false) }
   }
 
   return (
@@ -80,6 +112,7 @@ export default function CampaignsPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       <p className="font-semibold text-gray-900 text-sm truncate">{c.label}</p>
+                      {c.isDynamic && <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full flex-shrink-0">live</span>}
                       {c.source === 'broadcast' && <span className="text-[10px] text-gray-500 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full flex-shrink-0">legacy</span>}
                     </div>
                     {c.template && <p className="text-[11px] text-gray-400 mt-0.5 truncate">{c.template}</p>}
@@ -100,6 +133,31 @@ export default function CampaignsPage() {
               {openId === c.id && (
                 <div className="border-t border-gray-100 p-4 bg-gray-50 space-y-4">
                   {detailLoading && <div className="flex justify-center py-3"><div className="w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full animate-spin" /></div>}
+
+                  {/* Finish the campaign: send the next batch to pending members. */}
+                  {detail && c.source === 'reach' && detail.memberCount > 0 && (
+                    <div className="rounded-xl border border-green-200 bg-green-50/60 p-3 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-gray-700">{detail.memberCount.toLocaleString('en-IN')} members</span>
+                        <span className="text-gray-500">{detail.pending.toLocaleString('en-IN')} pending{detail.isDynamic ? ' · auto-updating' : ''}</span>
+                      </div>
+                      {detail.pending > 0 ? (
+                        <div className="flex items-center gap-2">
+                          <input type="number" min={1} inputMode="numeric" placeholder="all pending"
+                            value={sendN} onChange={e => setSendN(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value) || 0))}
+                            className="input text-sm flex-1" />
+                          <button onClick={() => sendMore(c)} disabled={sendingMore}
+                            className="btn-primary text-sm px-3 disabled:opacity-60 whitespace-nowrap">
+                            {sendingMore ? 'Sending…' : `Send ${sendN === '' ? 'all' : sendN} more`}
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-gray-500">Everyone messaged{detail.isDynamic ? ' — new matches will appear here as they come in.' : '.'}</p>
+                      )}
+                      {sendMsg && <p className="text-[11px] text-green-800">{sendMsg}</p>}
+                    </div>
+                  )}
+
                   {detail?.funnel && <FunnelBars f={detail.funnel} />}
                   {detail && detail.failureBreakdown.length > 0 && (
                     <div className="space-y-1">
@@ -164,7 +222,7 @@ function RecipientList({ recipients, label, onPeek }: { recipients: Recipient[];
 
   const chips: Array<{ key: string; label: string }> = [
     { key: 'all', label: `All ${recipients.length}` },
-    ...['converted', 'replied', 'read', 'delivered', 'sent', 'failed']
+    ...['converted', 'replied', 'read', 'delivered', 'sent', 'failed', 'pending']
       .filter(k => counts[k]).map(k => ({ key: k, label: `${STAGE[k].label} ${counts[k]}` })),
   ]
 

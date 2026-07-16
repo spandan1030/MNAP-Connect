@@ -10,7 +10,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 interface CampaignRow {
   id: string; source: 'reach' | 'broadcast'; label: string; template: string | null
   total: number; sent: number; failed: number; skippedSuppressed: number; skippedDnc: number
-  sentAt: string
+  isDynamic: boolean; sentAt: string
 }
 
 export async function GET(req: NextRequest) {
@@ -28,15 +28,15 @@ export async function GET(req: NextRequest) {
 
   // New unified campaigns (defensive: table may not exist pre-migration).
   const { data: camps } = await supabaseAdmin.from('wa_campaigns')
-    .select('id, cohort_label, template_name, total, sent, failed, skipped_suppressed, skipped_dnc, created_at')
+    .select('id, name, cohort_label, template_name, total, sent, failed, skipped_suppressed, skipped_dnc, is_dynamic, created_at')
     .order('created_at', { ascending: false }).limit(limit)
   for (const c of (camps ?? []) as Array<Record<string, unknown>>) {
     out.push({
       id: c.id as string, source: 'reach',
-      label: (c.cohort_label as string) || 'Reach send', template: (c.template_name as string) ?? null,
+      label: (c.name as string) || (c.cohort_label as string) || 'Reach send', template: (c.template_name as string) ?? null,
       total: (c.total as number) ?? 0, sent: (c.sent as number) ?? 0, failed: (c.failed as number) ?? 0,
       skippedSuppressed: (c.skipped_suppressed as number) ?? 0, skippedDnc: (c.skipped_dnc as number) ?? 0,
-      sentAt: c.created_at as string,
+      isDynamic: !!c.is_dynamic, sentAt: c.created_at as string,
     })
   }
 
@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
       label: (b.topic_name as string) ? `Broadcast · ${b.topic_name as string}` : 'Broadcast (legacy)',
       template: (b.template_name as string) ?? null,
       total: (b.total as number) ?? 0, sent: (b.sent as number) ?? 0, failed: (b.failed as number) ?? 0,
-      skippedSuppressed: 0, skippedDnc: 0, sentAt: b.created_at as string,
+      skippedSuppressed: 0, skippedDnc: 0, isDynamic: false, sentAt: b.created_at as string,
     })
   }
 

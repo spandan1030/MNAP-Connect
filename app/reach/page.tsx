@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import Navbar from '@/components/ui/Navbar'
 import CustomerPeek from '@/components/ui/CustomerPeek'
 import { createClient } from '@/lib/supabase/client'
@@ -37,7 +38,7 @@ export default function ReachPage() {
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [campaigns, setCampaigns] = useState<WaBCallCampaign[]>([])
   const [topics, setTopics] = useState<InterestTopic[]>([])
-  const [segments, setSegments] = useState<Array<{ id: string; name: string; filter: ReachFilter }>>([])
+  const [isDynamic, setIsDynamic] = useState(false)   // campaign auto-updates from live data
   const [templateId, setTemplateId] = useState<string>('')
   const template = templates.find(t => t.id === templateId) ?? null
 
@@ -55,8 +56,9 @@ export default function ReachPage() {
   const [error, setError] = useState<string | null>(null)
 
   const [sending, setSending] = useState(false)
-  const [result, setResult] = useState<{ sent: number; failed: number; skippedSuppressed: number; skippedDnc: number } | null>(null)
+  const [created, setCreated] = useState<{ campaignId: string; members: number; sent: number } | null>(null)
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
+  const router = useRouter()
 
   useEffect(() => {
     supabase.from('wa_message_templates').select('*').eq('is_active', true)
@@ -68,30 +70,7 @@ export default function ReachPage() {
     supabase.from('wa_interest_topics').select('*').eq('is_active', true).is('parent_id', null)
       .order('sort_order')
       .then(({ data }) => setTopics(((data ?? []) as InterestTopic[]).filter(t => t.topic_group !== 'system')))
-    loadSegments()
   }, [supabase])
-
-  // Saved segments (wa_035). Defensive: if the table isn't there yet, just none.
-  async function loadSegments() {
-    const { data, error } = await supabase.from('wa_reach_segments').select('id, name, filter').order('created_at', { ascending: false })
-    if (!error) setSegments((data ?? []) as Array<{ id: string; name: string; filter: ReachFilter }>)
-  }
-  async function saveSegment() {
-    if (Object.keys(filter).length === 0) { setError('Build a cohort first, then save it.'); return }
-    const name = window.prompt('Name this segment (e.g. "Daily rate chat cohort")')?.trim()
-    if (!name) return
-    const { data: { user } } = await supabase.auth.getUser()
-    const { error } = await supabase.from('wa_reach_segments').insert({ name, filter, created_by: user?.id ?? null })
-    if (error) { setError('Could not save segment.'); return }
-    loadSegments()
-  }
-  async function deleteSegment(id: string) {
-    await supabase.from('wa_reach_segments').delete().eq('id', id)
-    loadSegments()
-  }
-  function loadSegment(f: ReachFilter) {
-    setMode('build'); setFilter(f); setResolved(false)
-  }
 
   // ── filter helpers ──
   function toggleArr(key: keyof ReachFilter, val: string) {
@@ -129,7 +108,7 @@ export default function ReachPage() {
   }
 
   async function findRecipients() {
-    setError(null); setResult(null)
+    setError(null); setCreated(null)
     if (!templateId) { setError('Pick a template first — it decides the suppression window.'); return }
     const built: ReachFilter = mode === 'paste'
       ? { phones: phonesText.split(/[\s,;]+/).map(p => p.trim()).filter(Boolean) }
@@ -177,25 +156,27 @@ export default function ReachPage() {
     setSelected(s => { const n = new Set(s); n.has(phone) ? n.delete(phone) : n.add(phone); return n })
   }
 
-  async function send() {
-    if (!template || selected.size === 0) return
-    setSending(true); setError(null)
+  // Create a campaign from this cohort (all eligible become members) and blast the
+  // reviewed selection now. The rest are finished later from the Campaigns page.
+  async function createCampaign() {
+    if (!template) return
+    const built: ReachFilter = mode === 'paste'
+      ? { phones: phonesText.split(/[\s,;]+/).map(p => p.trim()).filter(Boolean) }
+      : filter
+    const defaultName = cohortLabel === 'Cohort' || cohortLabel === 'Manual list' ? `${template.name} — ${cohortLabel}` : cohortLabel
+    const name = window.prompt('Name this campaign', defaultName)?.trim()
+    if (!name) return
+    setSending(true); setError(null); setCreated(null)
     try {
-      const recs = recipients.filter(r => selected.has(r.phone)).map(r => ({ phone: r.phone, name: r.name }))
-      const res = await fetch('/api/reach/send', {
+      const sendPhones = [...selected]
+      const res = await fetch('/api/campaigns/create', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          recipients: recs, templateId,
-          cohortLabel, campaignRef: filter.campaignIds?.[0] ?? null,
-          filter: mode === 'build' ? filter : undefined,
-        }),
+        body: JSON.stringify({ name, filter: built, templateId, isDynamic: mode === 'build' && isDynamic, sendPhones }),
       })
       const data = await res.json()
-      if (!res.ok) { setError(data.error ?? 'Send failed'); setSending(false); return }
-      setResult(data)
-      // Refresh so freshly-sent rows now show as suppressed.
-      await findRecipients()
-    } catch { setError('Network error during send') }
+      if (!res.ok) { setError(data.error ?? 'Could not create campaign'); setSending(false); return }
+      setCreated({ campaignId: data.campaignId, members: data.members ?? 0, sent: data.send?.sent ?? 0 })
+    } catch { setError('Network error creating campaign') }
     finally { setSending(false) }
   }
 
@@ -244,21 +225,6 @@ export default function ReachPage() {
               className="input resize-none text-sm" placeholder="9876543210, 9123456780, …" />
           ) : (
             <div className="space-y-3">
-              {(segments.length > 0 || Object.keys(filter).length > 0) && (
-                <div className="flex flex-wrap items-center gap-1.5 pb-2 border-b border-gray-100">
-                  <span className="text-[10px] font-semibold text-gray-400 mr-0.5">Saved</span>
-                  {segments.map(s => (
-                    <span key={s.id} className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full border border-gray-200 bg-white text-xs">
-                      <button onClick={() => loadSegment(s.filter)} className="font-medium text-gray-700">{s.name}</button>
-                      <button onClick={() => deleteSegment(s.id)} className="text-gray-300 hover:text-red-500 text-sm leading-none">×</button>
-                    </span>
-                  ))}
-                  {Object.keys(filter).length > 0 && (
-                    <button onClick={saveSegment} className="text-[11px] font-medium text-green-700 border border-green-200 bg-green-50 px-2 py-1 rounded-full">+ Save current</button>
-                  )}
-                </div>
-              )}
-
               {/* ── CALL ──────────────────────────────────────────── */}
               <FilterSection title="Call" hint="From the cold-call / campaign module">
                 <FilterGroup label="Campaigns">
@@ -361,8 +327,15 @@ export default function ReachPage() {
             </label>
           </div>
           <p className="text-[10px] text-gray-400">
-            Leave blank to message everyone eligible. Set e.g. 20 to send 20 now — run again later and the next 20 go out (already-messaged numbers auto-skip).
+            Leave blank to message everyone eligible. Set e.g. 20 to send 20 now — the rest stay in the campaign to finish later (already-messaged numbers auto-skip).
           </p>
+
+          {mode === 'build' && (
+            <label className="flex items-start gap-2 text-[11px] text-gray-600">
+              <input type="checkbox" className="mt-0.5" checked={isDynamic} onChange={e => setIsDynamic(e.target.checked)} />
+              <span><b>Auto-update cohort</b> — new people who match these filters later are pulled into the campaign automatically. Off = fixed snapshot of who matches now.</span>
+            </label>
+          )}
 
           <button onClick={findRecipients} disabled={resolving} className="btn-primary w-full disabled:opacity-60">
             {resolving ? 'Finding…' : 'Find recipients'}
@@ -384,9 +357,12 @@ export default function ReachPage() {
             )}
             {capped && <p className="text-[10px] text-amber-600">Showing first {recipients.length} of {total.toLocaleString('en-IN')} — narrow the cohort to review all.</p>}
 
-            {result && (
-              <div className="text-xs bg-green-50 border border-green-100 rounded-lg px-3 py-2 text-green-800">
-                Sent {result.sent} · skipped {result.skippedSuppressed} (already messaged) · {result.skippedDnc} opted-out · {result.failed} failed.
+            {created && (
+              <div className="text-xs bg-green-50 border border-green-100 rounded-lg px-3 py-2 text-green-800 space-y-1">
+                <p>Campaign created with {created.members.toLocaleString('en-IN')} members · sent to {created.sent} now.</p>
+                <button onClick={() => router.push('/campaigns')} className="font-semibold text-green-700 underline">
+                  Open campaign → finish sending the rest
+                </button>
               </div>
             )}
 
@@ -426,12 +402,12 @@ export default function ReachPage() {
       </main>
 
       {/* Send bar */}
-      {resolved && template && (
+      {resolved && template && !created && (
         <div className="fixed bottom-14 inset-x-0 z-30 px-4">
           <div className="max-w-lg mx-auto">
-            <button onClick={send} disabled={sending || selected.size === 0}
+            <button onClick={createCampaign} disabled={sending}
               className="btn-primary w-full shadow-lg disabled:opacity-60">
-              {sending ? 'Sending…' : `Send "${template.name}" to ${selected.size}`}
+              {sending ? 'Creating…' : selected.size > 0 ? `Create campaign & send ${selected.size}` : 'Create campaign (send later)'}
             </button>
           </div>
         </div>

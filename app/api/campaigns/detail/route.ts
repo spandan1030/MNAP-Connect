@@ -29,6 +29,7 @@ interface Recip {
 
 // Furthest stage a recipient reached — drives the row's status label + ordering.
 function stage(r: Recip): string {
+  if (r.status === 'pending') return 'pending'
   if (r.status === 'failed') return 'failed'
   if (r.converted) return 'converted'
   if (r.replied) return 'replied'
@@ -64,13 +65,31 @@ export async function GET(req: NextRequest) {
     delivered: false, read: false, replied: false, converted: false,
   })
 
+  let isDynamic = false, memberCount = 0
+
   if (source === 'reach') {
     const { data: camp } = await supabaseAdmin.from('wa_campaigns')
-      .select('cohort_label, template_name, created_at').eq('id', id).maybeSingle()
+      .select('name, cohort_label, template_name, created_at, is_dynamic').eq('id', id).maybeSingle()
     if (!camp) return Response.json({ error: 'Campaign not found' }, { status: 404 })
-    label = (camp.cohort_label as string) || 'Reach send'
+    label = (camp.name as string) || (camp.cohort_label as string) || 'Reach send'
     template = (camp.template_name as string) ?? null
     sinceISO = camp.created_at as string
+    isDynamic = !!camp.is_dynamic
+
+    // Seed with members (the full cohort). Anyone with no send yet = pending.
+    for (let from = 0; ; from += 1000) {
+      const { data } = await supabaseAdmin.from('wa_campaign_members')
+        .select('phone, name').eq('campaign_id', id).range(from, from + 999)
+      const rows = (data ?? []) as { phone: string; name: string | null }[]
+      for (const m of rows) {
+        const p = tenDigit(m.phone)
+        const rec = blank(p); rec.status = 'pending'; rec.name = m.name
+        byPhone.set(p, rec)
+      }
+      if (rows.length < 1000) break
+    }
+    memberCount = byPhone.size
+
     for (let from = 0; ; from += 1000) {
       const { data } = await supabaseAdmin.from('wa_send_ledger')
         .select('phone, wa_message_id, status, error, sent_at').eq('campaign_id', id).range(from, from + 999)
@@ -197,6 +216,7 @@ export async function GET(req: NextRequest) {
   // ── assemble funnel + failure breakdown + per-recipient list ────────────────
   const recips = [...byPhone.values()]
   const sentRecs = recips.filter(r => r.status === 'sent')
+  const pending = recips.filter(r => r.status === 'pending').length
   const funnel = {
     sent: sentRecs.length,
     delivered: sentRecs.filter(r => r.delivered).length,
@@ -220,7 +240,7 @@ export async function GET(req: NextRequest) {
     }))
     .sort((a, b) => b.count - a.count)
 
-  const RANK: Record<string, number> = { failed: 0, sent: 1, delivered: 2, read: 3, replied: 4, converted: 5 }
+  const RANK: Record<string, number> = { failed: 0, pending: 1, sent: 2, delivered: 3, read: 4, replied: 5, converted: 6 }
   const recipients = recips
     .map(r => ({
       phone: r.phone, name: r.name, stage: stage(r),
@@ -231,6 +251,7 @@ export async function GET(req: NextRequest) {
 
   return Response.json({
     id, source, label, template, sentAt: sinceISO, convWindowDays: CONV_DAYS,
+    isDynamic, memberCount, pending,
     funnel, failureBreakdown, recipients,
   })
 }
