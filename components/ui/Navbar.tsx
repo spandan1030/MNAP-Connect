@@ -76,6 +76,7 @@ const PRIMARY = [
 
 const MORE = [
   { href: '/reach',          label: 'Reach',        icon: ICONS.send },
+  { href: '/campaigns',      label: 'Campaigns',    icon: ICONS.reports },
   { href: '/calls',          label: 'Calls',        icon: ICONS.phone },
   { href: '/admin/calls',    label: 'Call Control', icon: ICONS.phone },
   { href: '/purchase',       label: 'Purchase',  icon: ICONS.purchase },

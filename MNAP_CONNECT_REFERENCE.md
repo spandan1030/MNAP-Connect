@@ -802,6 +802,11 @@ Message **any cohort** assembled from call signals, chat signals, markers, or a 
 
 **Scope split (feature audit):** `/send` = fast **daily-rate** tool (no suppression, correct). `/reach` = everything else, 14-day guarded. Respects all opt-outs; first-party only.
 
+**Phase 5 — Campaign funnel (2026-07-16, `wa_036`):**
+- **`wa_campaigns`** = one row per Reach/thank-you send run (`cohort_label`, template snapshot, `filter` JSON, and `total`/`sent`/`failed`/`skipped_*` counts). `wa_send_ledger` gains `campaign_id`. `reach/send` creates the run, stamps every ledger row, finalises counts — all **defensive** (if the table isn't there, `campaign_id` is simply omitted, so it deploys before the migration).
+- **Funnel** `GET /api/campaigns/detail?id=&source=reach|broadcast`: **sent → delivered → read → replied → converted**. delivered/read from `wa_message_events` (by `wa_message_id`); replied = inbound `wa_messages` after the send; converted = `wa_b_markers.last_purchase_date` within **90 days** after the send. Works for legacy `wa_broadcasts` too (via `broadcast_id`).
+- **`GET /api/campaigns`** unifies new runs + legacy broadcasts, newest first. **`/campaigns` page** (Navbar → More): list with sent/failed/suppressed, tap to expand the funnel bars. This folds the old broadcast report into one place.
+
 **Phase 4 increment 1 (2026-07-16, no migration):**
 - **Interest source facet (chat-only cohorts):** `ReachFilter.interestSources?: ('whatsapp'|'call'|'sales')[]` (empty = any). Resolve applies `.in('source', …)` to the `wa_signals` interests family. UI: source chips (Chat/Call/Sales) appear under the interests once any interest is picked. e.g. "interested in offers **from Chat**" = 4 vs 13 from Call.
 - **Unified consent via the contact spine:** `/api/reach/resolve` + `/api/reach/send` now read opt-out from `contacts` (STOP ∪ DNC) instead of separate `wa_customers.dnd` / `wa_b_customers.is_do_not_call` lookups, and fall back to the contact's display name — so chat-only leads (no Type B row) are first-class in Reach and correctly gated.

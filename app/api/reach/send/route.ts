@@ -29,8 +29,8 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { recipients, templateId, cohortLabel, campaignRef, ignoreSuppression } = (await req.json()) as {
-    recipients?: Recipient[]; templateId?: string; cohortLabel?: string; campaignRef?: string; ignoreSuppression?: boolean
+  const { recipients, templateId, cohortLabel, campaignRef, ignoreSuppression, filter } = (await req.json()) as {
+    recipients?: Recipient[]; templateId?: string; cohortLabel?: string; campaignRef?: string; ignoreSuppression?: boolean; filter?: unknown
   }
   if (!templateId) return Response.json({ error: 'templateId required' }, { status: 400 })
   if (!Array.isArray(recipients) || recipients.length === 0) {
@@ -106,6 +106,19 @@ export async function POST(req: NextRequest) {
     return comps
   }
 
+  // Campaign run (wa_036) — anchors this send for the funnel report. Defensive:
+  // if the table isn't there yet, campaignId stays null and ledger rows omit it.
+  let campaignId: string | null = null
+  {
+    const { data: camp, error } = await supabaseAdmin.from('wa_campaigns').insert({
+      cohort_label: cohortLabel ?? null, template_id: template.id, template_name: template.name,
+      meta_template_name: template.meta_template_name, category: template.category ?? 'custom',
+      filter: filter ?? null, sent_by: user.id,
+    }).select('id').single()
+    if (!error) campaignId = camp?.id ?? null
+  }
+  const campaignField = campaignId ? { campaign_id: campaignId } : {}
+
   const now = new Date().toISOString()
   let sent = 0, failed = 0, skippedSuppressed = 0, skippedDnc = 0
   const results: Array<{ phone: string; status: string; error?: string }> = []
@@ -140,6 +153,7 @@ export async function POST(req: NextRequest) {
         phone: p, template_id: template.id, meta_template_name: template.meta_template_name,
         suppression_key: suppKey, category: template.category ?? 'custom', status: 'sent',
         wa_message_id: wamid, campaign_ref: campaignRef ?? null, cohort_label: cohortLabel ?? null, sent_by: user.id,
+        ...campaignField,
       })
       sent++; results.push({ phone: p, status: 'sent' })
     } catch (err) {
@@ -148,6 +162,7 @@ export async function POST(req: NextRequest) {
         phone: p, template_id: template.id, meta_template_name: template.meta_template_name,
         suppression_key: suppKey, category: template.category ?? 'custom', status: 'failed',
         campaign_ref: campaignRef ?? null, cohort_label: cohortLabel ?? null, error: msg, sent_by: user.id,
+        ...campaignField,
       })
       failed++; results.push({ phone: p, status: 'failed', error: msg })
     }
@@ -155,7 +170,14 @@ export async function POST(req: NextRequest) {
 
   if (ledgerRows.length) await supabaseAdmin.from('wa_send_ledger').insert(ledgerRows)
 
+  // Finalise campaign counts.
+  if (campaignId) {
+    await supabaseAdmin.from('wa_campaigns').update({
+      total: phones.length, sent, failed, skipped_suppressed: skippedSuppressed, skipped_dnc: skippedDnc,
+    }).eq('id', campaignId)
+  }
+
   return Response.json({
-    sent, failed, skippedSuppressed, skippedDnc, total: phones.length, results,
+    sent, failed, skippedSuppressed, skippedDnc, total: phones.length, results, campaignId,
   })
 }

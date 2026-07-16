@@ -1,0 +1,113 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import Navbar from '@/components/ui/Navbar'
+
+interface Campaign {
+  id: string; source: 'reach' | 'broadcast'; label: string; template: string | null
+  total: number; sent: number; failed: number; skippedSuppressed: number; skippedDnc: number; sentAt: string
+}
+interface Funnel { sent: number; delivered: number; read: number; replied: number; converted: number; failed: number }
+
+export default function CampaignsPage() {
+  const [rows, setRows] = useState<Campaign[]>([])
+  const [loading, setLoading] = useState(true)
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [funnel, setFunnel] = useState<Funnel | null>(null)
+  const [funnelLoading, setFunnelLoading] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/campaigns').then(r => r.json()).then(d => { setRows(d.campaigns ?? []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [])
+
+  async function toggle(c: Campaign) {
+    if (openId === c.id) { setOpenId(null); setFunnel(null); return }
+    setOpenId(c.id); setFunnel(null); setFunnelLoading(true)
+    try {
+      const r = await fetch(`/api/campaigns/detail?id=${c.id}&source=${c.source}`)
+      const d = await r.json()
+      setFunnel(d.funnel ?? null)
+    } finally { setFunnelLoading(false) }
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      <Navbar />
+      <main className="flex-1 max-w-lg mx-auto w-full px-4 pt-4 pb-24">
+        <h1 className="text-lg font-bold text-gray-900 mb-1">Campaigns</h1>
+        <p className="text-xs text-gray-500 mb-4">Every send, with its funnel: delivered → read → replied → converted (purchase ≤90 days).</p>
+
+        {loading && <div className="flex justify-center pt-10"><div className="w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full animate-spin" /></div>}
+        {!loading && rows.length === 0 && <p className="text-sm text-gray-400 text-center py-10">No campaigns yet. Send from Reach and they show here.</p>}
+
+        <div className="space-y-2">
+          {rows.map(c => (
+            <div key={c.id} className="card overflow-hidden">
+              <button onClick={() => toggle(c)} className="w-full text-left p-4 active:bg-gray-50">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <p className="font-semibold text-gray-900 text-sm truncate">{c.label}</p>
+                      {c.source === 'broadcast' && <span className="text-[10px] text-gray-500 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full flex-shrink-0">legacy</span>}
+                    </div>
+                    {c.template && <p className="text-[11px] text-gray-400 mt-0.5 truncate">{c.template}</p>}
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-sm font-bold text-green-700">{c.sent.toLocaleString('en-IN')}</p>
+                    <p className="text-[10px] text-gray-400">sent</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 mt-1.5 text-[11px] text-gray-400">
+                  <span>{new Date(c.sentAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</span>
+                  {c.failed > 0 && <span className="text-red-500">· {c.failed} failed</span>}
+                  {c.skippedSuppressed > 0 && <span>· {c.skippedSuppressed} suppressed</span>}
+                  {c.skippedDnc > 0 && <span>· {c.skippedDnc} opted-out</span>}
+                </div>
+              </button>
+
+              {openId === c.id && (
+                <div className="border-t border-gray-100 p-4 bg-gray-50">
+                  {funnelLoading && <div className="flex justify-center py-3"><div className="w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full animate-spin" /></div>}
+                  {funnel && <FunnelBars f={funnel} />}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </main>
+    </div>
+  )
+}
+
+function FunnelBars({ f }: { f: Funnel }) {
+  const base = Math.max(f.sent, 1)
+  const stages: Array<{ label: string; value: number; cls: string }> = [
+    { label: 'Sent',      value: f.sent,      cls: 'bg-gray-400' },
+    { label: 'Delivered', value: f.delivered, cls: 'bg-blue-400' },
+    { label: 'Read',      value: f.read,      cls: 'bg-indigo-500' },
+    { label: 'Replied',   value: f.replied,   cls: 'bg-amber-500' },
+    { label: 'Converted', value: f.converted, cls: 'bg-green-600' },
+  ]
+  return (
+    <div className="space-y-1.5">
+      {stages.map(s => (
+        <div key={s.label} className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 w-16 flex-shrink-0">{s.label}</span>
+          <div className="flex-1 h-4 bg-gray-100 rounded-full overflow-hidden">
+            <div className={`h-full ${s.cls} rounded-full transition-all`} style={{ width: `${Math.round((s.value / base) * 100)}%` }} />
+          </div>
+          <span className="text-[11px] font-semibold text-gray-700 w-16 text-right flex-shrink-0">
+            {s.value.toLocaleString('en-IN')}
+            <span className="text-gray-400 font-normal"> · {Math.round((s.value / base) * 100)}%</span>
+          </span>
+        </div>
+      ))}
+      {f.converted > 0 && (
+        <p className="text-[11px] text-green-700 pt-1">
+          {f.converted} purchased within 90 days of this campaign.
+        </p>
+      )}
+    </div>
+  )
+}

@@ -163,6 +163,7 @@ export default function ReachPage() {
         body: JSON.stringify({
           recipients: recs, templateId,
           cohortLabel, campaignRef: filter.campaignIds?.[0] ?? null,
+          filter: mode === 'build' ? filter : undefined,
         }),
       })
       const data = await res.json()
