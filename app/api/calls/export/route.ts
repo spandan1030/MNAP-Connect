@@ -7,6 +7,15 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 // Feeds back into the customer-signals pipeline to compute call-level markers.
 //   GET /api/calls/export            -> all sales-imported customers
 //   GET /api/calls/export?campaign=  -> only that campaign's customers
+//
+// The `is_do_not_call` column reflects the UNIFIED opt-out (contacts.is_opted_out
+// = chat STOP ∪ call DNC ∪ manual), OR'd with the customer's own call-DNC flag as
+// a fallback — so a manual or chat opt-out is never under-reported here.
+
+function tenDigit(raw: string | null | undefined): string {
+  const d = (raw ?? '').replace(/\D/g, '')
+  return d.length > 10 && d.startsWith('91') ? d.slice(-10) : d
+}
 
 const MARKER_COLS = [
   'recency_tier', 'value_tier', 'rfm_segment', 'frequency_tier',
@@ -58,6 +67,15 @@ export async function GET(req: NextRequest) {
   const custList = restrictIds ? customers.filter(c => restrictIds!.has(c.id)) : customers
   const idSet = new Set(custList.map(c => c.id))
 
+  // Unified opt-out from the contact spine (chat STOP ∪ call DNC ∪ manual),
+  // keyed by 10-digit phone. Falls back to the customer's own DNC flag below.
+  const optedOut = new Set<string>()
+  {
+    const contacts = await fetchAll<{ phone: string; is_opted_out: boolean }>((f, t) =>
+      supabaseAdmin.from('contacts').select('phone,is_opted_out').eq('is_opted_out', true).range(f, t))
+    for (const c of contacts) optedOut.add(tenDigit(c.phone))
+  }
+
   // Markers.
   const markers = await fetchAll<Record<string, unknown>>((f, t) =>
     supabaseAdmin.from('wa_b_markers').select('*').range(f, t) as unknown as PromiseLike<{ data: Record<string, unknown>[] | null }>)
@@ -104,7 +122,7 @@ export async function GET(req: NextRequest) {
       a?.topics.has('designs') ? 'true' : 'false',
       a?.topics.has('offers') ? 'true' : 'false',
       a?.topics.has('booking') ? 'true' : 'false',
-      c.is_do_not_call ? 'true' : 'false',
+      (optedOut.has(tenDigit(c.phone)) || c.is_do_not_call) ? 'true' : 'false',
       c.is_hot_lead ? 'true' : 'false',
     ].map(csvCell)
     lines.push(row.join(','))
