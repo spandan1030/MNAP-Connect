@@ -42,7 +42,9 @@ interface HistoryEntry {
   topics: string[]
   intent: string | null
   hot: boolean
+  salesmanAlias: string | null
 }
+interface Salesman { id: string; name: string; alias: string }
 
 type Phase = 'idle' | 'outcome' | 'success'
 
@@ -88,6 +90,16 @@ export default function CallsPage() {
   const [searchMsg, setSearchMsg] = useState('')
   const [hiddenOpen, setHiddenOpen] = useState(false)
   const [hidden, setHidden] = useState<Card[]>([])
+
+  // ── salesman (who's calling) — a roster picked on the device ──
+  const [salesmen, setSalesmen] = useState<Salesman[]>([])
+  const [salesmanId, setSalesmanId] = useState<string | null>(null)
+  const [salesmanPicker, setSalesmanPicker] = useState(false)
+  const activeSalesman = salesmen.find(s => s.id === salesmanId) ?? null
+
+  // ── per-customer call log (tap the summary) ──
+  const [custLogs, setCustLogs] = useState<HistoryEntry[] | null>(null)
+  const [custLogsName, setCustLogsName] = useState('')
   const [cardMenu, setCardMenu] = useState(false)
 
   // ── history (recent calls, editable) ──
@@ -106,6 +118,22 @@ export default function CallsPage() {
 
   // ── initial load ──
   useEffect(() => { loadDeck() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load the salesman roster; restore the last-used one for this device.
+  useEffect(() => {
+    supabase.from('salesmen').select('id, name, alias').eq('is_active', true).order('created_at')
+      .then(({ data }) => {
+        const list = (data ?? []) as Salesman[]
+        setSalesmen(list)
+        const saved = typeof window !== 'undefined' ? localStorage.getItem('mc_salesman') : null
+        setSalesmanId(list.find(s => s.id === saved)?.id ?? list[0]?.id ?? null)
+      })
+  }, [supabase])
+
+  function pickSalesman(id: string) {
+    setSalesmanId(id); setSalesmanPicker(false)
+    if (typeof window !== 'undefined') localStorage.setItem('mc_salesman', id)
+  }
 
   async function loadDeck() {
     setLoading(true)
@@ -241,7 +269,7 @@ export default function CallsPage() {
     if (!user) return
     const { data } = await supabase
       .from('wa_b_call_logs')
-      .insert({ task_id: current.taskId, customer_id: current.customerId, called_by: user.id, success: null })
+      .insert({ task_id: current.taskId, customer_id: current.customerId, called_by: user.id, salesman_id: salesmanId, success: null })
       .select('id').single()
     if (data) setLogId(data.id)
     setPhase('outcome')
@@ -285,17 +313,19 @@ export default function CallsPage() {
     setHistoryLoading(true)
     const { data } = await supabase
       .from('wa_b_call_logs')
-      .select('id, customer_id, called_at, success, topics, intent, customer:wa_b_customers!inner(name,phone,is_hot_lead)')
+      .select('id, customer_id, called_at, success, topics, intent, customer:wa_b_customers!inner(name,phone,is_hot_lead), salesman:salesmen(alias)')
       .order('called_at', { ascending: false })
       .limit(100)
     const rows = (data ?? []) as unknown as Array<{
       id: string; customer_id: string; called_at: string; success: boolean | null
       topics: string[] | null; intent: string | null; customer: { name: string; phone: string; is_hot_lead: boolean }
+      salesman: { alias: string } | { alias: string }[] | null
     }>
     setHistory(rows.map(r => ({
       logId: r.id, customerId: r.customer_id, name: r.customer.name, phone: r.customer.phone,
       calledAt: r.called_at, success: r.success, topics: r.topics ?? [], intent: r.intent,
       hot: r.customer.is_hot_lead,
+      salesmanAlias: (Array.isArray(r.salesman) ? r.salesman[0]?.alias : r.salesman?.alias) ?? null,
     })))
     setHistoryLoading(false)
   }
@@ -304,6 +334,21 @@ export default function CallsPage() {
     const next = !historyOpen
     setHistoryOpen(next)
     if (next) loadHistory()
+  }
+
+  // Tap the summary → this customer's own call log (date, outcome, signals, salesman).
+  async function openCustLogs(customerId: string, name: string) {
+    setCustLogsName(name); setCustLogs([])
+    const { data } = await supabase
+      .from('wa_b_call_logs')
+      .select('id, customer_id, called_at, success, topics, intent, salesman:salesmen(alias)')
+      .eq('customer_id', customerId).order('called_at', { ascending: false })
+    const rows = (data ?? []) as unknown as Array<{ id: string; customer_id: string; called_at: string; success: boolean | null; topics: string[] | null; intent: string | null; salesman: { alias: string } | { alias: string }[] | null }>
+    setCustLogs(rows.map(r => ({
+      logId: r.id, customerId: r.customer_id, name, phone: '', calledAt: r.called_at,
+      success: r.success, topics: r.topics ?? [], intent: r.intent, hot: false,
+      salesmanAlias: (Array.isArray(r.salesman) ? r.salesman[0]?.alias : r.salesman?.alias) ?? null,
+    })))
   }
 
   function openEdit(e: HistoryEntry) {
@@ -393,6 +438,32 @@ export default function CallsPage() {
   return (
     <Shell>
       <div className="max-w-lg mx-auto w-full px-4 py-3 space-y-3">
+        {/* who's calling — the active salesman (tap to switch) */}
+        <div className="relative">
+          <button onClick={() => setSalesmanPicker(o => !o)}
+            className="w-full flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2">
+            <span className="text-xs text-gray-500">Calling as</span>
+            <span className="flex items-center gap-1.5">
+              <span className="text-sm font-bold text-gray-900">{activeSalesman ? `${activeSalesman.alias} · ${activeSalesman.name}` : (salesmen.length ? 'Pick salesman' : 'No salesmen — add in Call Control')}</span>
+              <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+            </span>
+          </button>
+          {salesmanPicker && salesmen.length > 0 && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setSalesmanPicker(false)} />
+              <div className="absolute right-0 left-0 top-11 z-40 bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden">
+                {salesmen.map(s => (
+                  <button key={s.id} onClick={() => pickSalesman(s.id)}
+                    className={cn('w-full text-left px-4 py-2.5 text-sm border-b border-gray-50 last:border-0',
+                      s.id === salesmanId ? 'bg-green-50 text-green-700 font-semibold' : 'text-gray-700')}>
+                    <b>{s.alias}</b> · {s.name}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
         {/* header: campaign + search + hidden menu */}
         <div className="flex items-center gap-2">
           <div className="flex-1 min-w-0">
@@ -539,14 +610,18 @@ export default function CallsPage() {
               return null
             })()}
 
-            {/* summary */}
+            {/* summary — tap to see this customer's full call log */}
             {summary && (
-              <div className="text-[11px] text-gray-500 border-t border-gray-100 pt-2">
+              <button
+                onClick={() => summary.attempts > 0 && openCustLogs(current.customerId, current.name)}
+                disabled={summary.attempts === 0}
+                className="w-full text-left text-[11px] text-gray-500 border-t border-gray-100 pt-2 disabled:cursor-default">
                 {summary.attempts === 0
                   ? 'No calls yet.'
                   : <>Calls: <b className="text-gray-700">{summary.attempts}</b> · Connected: <b className="text-gray-700">{summary.successes}</b>
-                     {summary.topics.length > 0 && <> · Interested in: {summary.topics.map(t => TOPIC_LABEL[t] ?? t).join(', ')}</>}</>}
-              </div>
+                     {summary.topics.length > 0 && <> · Interested in: {summary.topics.map(t => TOPIC_LABEL[t] ?? t).join(', ')}</>}
+                     <span className="text-green-700 font-medium"> · view log ›</span></>}
+              </button>
             )}
 
             {/* action zone */}
@@ -627,7 +702,7 @@ export default function CallsPage() {
                           {h.hot && <span className="text-amber-400" title="Hot lead">★ </span>}
                           {h.name} <span className="text-gray-400 font-normal">+91 {h.phone}</span>
                         </p>
-                        <p className="text-[10px] text-gray-400">{fmtDateTime(h.calledAt)}</p>
+                        <p className="text-[10px] text-gray-400">{fmtDateTime(h.calledAt)} · {h.salesmanAlias ?? '-'}</p>
                       </div>
                       <OutcomeBadge success={h.success} intent={h.intent} />
                     </div>
@@ -671,10 +746,10 @@ export default function CallsPage() {
           <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setEditEntry(null)} />
           <div className="fixed inset-x-4 top-14 z-50 bg-white rounded-xl border border-gray-200 shadow-lg max-w-lg mx-auto p-4 space-y-3 max-h-[80vh] overflow-y-auto">
             <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm font-bold text-gray-900">{editEntry.name}</p>
-                <p className="text-xs text-gray-500">+91 {editEntry.phone} · {fmtDateTime(editEntry.calledAt)}</p>
-              </div>
+              <button onClick={() => { const ph = editEntry.phone; setEditEntry(null); setPeekPhone(ph) }} className="text-left">
+                <p className="text-sm font-bold text-gray-900 underline decoration-dotted underline-offset-2">{editEntry.name}</p>
+                <p className="text-xs text-gray-500">+91 {editEntry.phone} · {fmtDateTime(editEntry.calledAt)}{editEntry.salesmanAlias ? ` · ${editEntry.salesmanAlias}` : ''}</p>
+              </button>
               <div className="flex items-center gap-1 shrink-0">
                 {/* star — only for connected calls */}
                 {editSuccess === true && (
@@ -730,6 +805,29 @@ export default function CallsPage() {
               className="btn-primary w-full py-2.5">
               {editSaving ? 'Saving…' : 'Save details'}
             </button>
+          </div>
+        </>
+      )}
+
+      {/* per-customer call log (from tapping the summary) */}
+      {custLogs && (
+        <>
+          <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setCustLogs(null)} />
+          <div className="fixed inset-x-4 top-16 z-50 bg-white rounded-xl border border-gray-200 shadow-lg max-w-lg mx-auto max-h-[70vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 sticky top-0 bg-white">
+              <p className="text-sm font-semibold text-gray-700 truncate">Call log — {custLogsName}</p>
+              <button onClick={() => setCustLogs(null)} className="text-gray-400 text-lg leading-none">×</button>
+            </div>
+            {custLogs.length === 0 && <p className="text-xs text-gray-400 p-4">No calls logged.</p>}
+            {custLogs.map(l => (
+              <div key={l.logId} className="px-4 py-2.5 border-b border-gray-50 last:border-0 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-700">{fmtDateTime(l.calledAt)} <span className="text-gray-400">· {l.salesmanAlias ?? '-'}</span></p>
+                  {l.success && l.topics.length > 0 && <p className="text-[10px] text-gray-400 truncate">{l.topics.map(t => TOPIC_LABEL[t] ?? t).join(', ')}</p>}
+                </div>
+                <OutcomeBadge success={l.success} intent={l.intent} />
+              </div>
+            ))}
           </div>
         </>
       )}

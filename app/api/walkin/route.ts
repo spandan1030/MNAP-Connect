@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = (await req.json().catch(() => ({}))) as {
-    name?: string; phone?: string; interests?: string[]; timing?: string; notes?: string; isVip?: boolean
+    name?: string; phone?: string; interests?: string[]; timing?: string; notes?: string; isVip?: boolean; salesmanId?: string
   }
   const name = (body.name ?? '').trim()
   const phone = tenDigit(body.phone ?? '')
@@ -54,18 +54,22 @@ export async function POST(req: NextRequest) {
   const { data: existing } = await supabaseAdmin.from('wa_b_customers')
     .select('id, notes, is_hot_lead').eq('phone', phone).maybeSingle()
 
+  const salesmanId = body.salesmanId || null
+
   let customerId: string
   let created = false
   if (existing) {
     customerId = existing.id as string
     const patch: Record<string, unknown> = {
       notes: existing.notes ? `${existing.notes}\n${visitNote}` : visitNote,
+      walkin_salesman_id: salesmanId, walkin_at: now,
     }
     if (body.isVip && !existing.is_hot_lead) { patch.is_hot_lead = true; patch.hot_lead_at = now }
     await supabaseAdmin.from('wa_b_customers').update(patch).eq('id', customerId)
   } else {
     const { data: cust, error } = await supabaseAdmin.from('wa_b_customers').insert({
       name, phone, enrolled_by: user.id, source: 'walkin', notes: visitNote,
+      walkin_salesman_id: salesmanId, walkin_at: now,
       is_hot_lead: !!body.isVip, hot_lead_at: body.isVip ? now : null,
     }).select('id').single()
     if (error || !cust) return Response.json({ error: error?.message ?? 'Could not save walk-in.' }, { status: 500 })

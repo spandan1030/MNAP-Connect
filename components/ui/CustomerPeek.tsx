@@ -23,6 +23,7 @@ interface PeekData {
     first_purchase_date: string | null; last_purchase_date: string | null
     audience_labels: string[] | null; is_high_value: boolean | null; is_likely_wedding: boolean | null
   } | null
+  walkin: { salesman: string | null; at: string | null; converted: boolean } | null
   interests: Record<string, string[]>
   calls: Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string }>
   sends: Array<{ label: string; category: string | null; status: string; cohort: string | null; sentAt: string }>
@@ -130,6 +131,15 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
               <InterestSection title="Interested in — from WhatsApp chat" dot="bg-green-500" keys={data.interests.whatsapp} />
               <InterestSection title="Interested in — from calls" dot="bg-blue-500" keys={data.interests.call} />
               <InterestSection title="Interested in — from walk-in" dot="bg-pink-500" keys={data.interests.walkin} />
+              {data.walkin && (data.walkin.salesman || data.walkin.at) && (
+                <div className="flex items-center gap-1.5 flex-wrap -mt-1">
+                  {data.walkin.salesman && <span className="text-[10px] bg-pink-50 text-pink-700 border border-pink-200 px-1.5 py-0.5 rounded-full">Enrolled by {data.walkin.salesman}</span>}
+                  {data.walkin.at && <span className="text-[10px] text-gray-400">{fmtDate(data.walkin.at)}</span>}
+                  {data.walkin.converted
+                    ? <span className="text-[10px] font-semibold bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded-full">Converted ✓</span>
+                    : <span className="text-[10px] text-gray-400">not yet converted</span>}
+                </div>
+              )}
               <InterestSection title="Bought before — from sales" dot="bg-amber-400" keys={data.interests.sales} />
               <InterestSection title="Tagged at billing" dot="bg-purple-500" keys={data.interests.billing} />
 

@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Navbar from '@/components/ui/Navbar'
 import CustomerPeek from '@/components/ui/CustomerPeek'
+import { createClient } from '@/lib/supabase/client'
 import { INTERESTS } from '@/lib/signals'
 
 // Walk-in registration — lean, counter-speed capture. Everything the salesman
@@ -26,12 +27,25 @@ const TIMING = [
 ] as const
 
 export default function WalkInPage() {
+  const supabase = createClient()
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [timing, setTiming] = useState('')
   const [isVip, setIsVip] = useState(false)
   const [notes, setNotes] = useState('')
+  const [salesmen, setSalesmen] = useState<Array<{ id: string; name: string; alias: string }>>([])
+  const [salesmanId, setSalesmanId] = useState<string>('')
+
+  useEffect(() => {
+    supabase.from('salesmen').select('id, name, alias').eq('is_active', true).order('created_at')
+      .then(({ data }) => {
+        const list = (data ?? []) as Array<{ id: string; name: string; alias: string }>
+        setSalesmen(list)
+        const saved = typeof window !== 'undefined' ? localStorage.getItem('mc_salesman') : null
+        setSalesmanId(list.find(s => s.id === saved)?.id ?? list[0]?.id ?? '')
+      })
+  }, [supabase])
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -60,6 +74,7 @@ export default function WalkInPage() {
         body: JSON.stringify({
           name: name.trim(), phone: cleaned, interests: [...selected],
           timing: timing || undefined, notes: notes.trim() || undefined, isVip,
+          salesmanId: salesmanId || undefined,
         }),
       })
       const data = await res.json()
@@ -107,6 +122,14 @@ export default function WalkInPage() {
                   <input value={phone} onChange={e => setPhone(e.target.value)} className="input flex-1" placeholder="10-digit number" inputMode="numeric" maxLength={13} />
                 </div>
               </div>
+              {salesmen.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Enrolled by</label>
+                  <select value={salesmanId} onChange={e => { setSalesmanId(e.target.value); if (typeof window !== 'undefined' && e.target.value) localStorage.setItem('mc_salesman', e.target.value) }} className="input text-sm">
+                    {salesmen.map(s => <option key={s.id} value={s.id}>{s.alias} · {s.name}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
 
             {/* Signals */}

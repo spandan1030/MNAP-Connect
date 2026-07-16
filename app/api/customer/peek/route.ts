@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   // Type B customer (the sales-import / call universe) — anchor for markers + calls.
   const { data: bCust } = await supabaseAdmin
     .from('wa_b_customers')
-    .select('id, name, source, is_hot_lead, hot_lead_at, is_do_not_call')
+    .select('id, name, source, is_hot_lead, hot_lead_at, is_do_not_call, walkin_salesman_id, walkin_at')
     .eq('phone', phone).maybeSingle()
 
   // Everything else in parallel.
@@ -57,6 +57,21 @@ export async function GET(req: NextRequest) {
   const aCust = aCustRes.data as { id: string; name: string | null; dnd: boolean; is_opted_out: boolean } | null
   // Unified opt-out from the contact spine (chat STOP ∪ call DNC ∪ manual).
   const contact = contactRes.data as { is_opted_out: boolean } | null
+
+  // Walk-in enrollment: which salesman, and did they convert (buy) after it?
+  let walkin: { salesman: string | null; at: string | null; converted: boolean } | null = null
+  const bWalkAt = (bCust as { walkin_at?: string | null } | null)?.walkin_at ?? null
+  const bWalkSm = (bCust as { walkin_salesman_id?: string | null } | null)?.walkin_salesman_id ?? null
+  if (bWalkAt || bWalkSm) {
+    let alias: string | null = null
+    if (bWalkSm) {
+      const { data: sm } = await supabaseAdmin.from('salesmen').select('alias').eq('id', bWalkSm).maybeSingle()
+      alias = (sm?.alias as string) ?? null
+    }
+    const lastPurchase = (markerRes.data as { last_purchase_date?: string | null } | null)?.last_purchase_date ?? null
+    const converted = !!(lastPurchase && bWalkAt && lastPurchase >= bWalkAt.slice(0, 10))
+    walkin = { salesman: alias, at: bWalkAt, converted }
+  }
 
   // Group interests by source.
   const interests: Record<string, string[]> = {}
@@ -84,6 +99,7 @@ export async function GET(req: NextRequest) {
       is_opted_out: contact?.is_opted_out ?? aCust?.is_opted_out ?? false,
     },
     markers: markerRes.data ?? null,
+    walkin,
     interests,
     calls: (callsRes.data ?? []) as Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string }>,
     sends,
