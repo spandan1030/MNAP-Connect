@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Navbar from '@/components/ui/Navbar'
 import CustomerPeek from '@/components/ui/CustomerPeek'
+import { createClient } from '@/lib/supabase/client'
 
 // Customer Book — the unified contact spine (all customers: chat + sales + calls).
 // Search by name or number; tap anyone for their full biography (CustomerPeek).
@@ -24,13 +25,37 @@ type Filter = 'all' | 'active' | 'opted_out'
 const PAGE = 30
 
 export default function ContactsPage() {
+  const supabase = createClient()
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [rows, setRows] = useState<ContactRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
+  const [menuPhone, setMenuPhone] = useState<string | null>(null)  // 3-dot menu open for this row
+  const [busyPhone, setBusyPhone] = useState<string | null>(null)
   const reqId = useRef(0)
+
+  // Manual opt-out — the third consent signal, alongside chat STOP and call DNC.
+  // Sets contacts.manual_opted_out; is_opted_out (chat OR call OR manual) is the
+  // single source Reach honours. We re-read it so the badge is always accurate
+  // (undoing a manual opt-out shouldn't "un-opt" someone still on STOP/DNC).
+  async function toggleOptOut(c: ContactRow) {
+    const next = !c.isOptedOut
+    setBusyPhone(c.phone); setMenuPhone(null)
+    const { data: { user } } = await supabase.auth.getUser()
+    const { error } = await supabase.from('contacts').update({
+      manual_opted_out: next,
+      manual_opted_out_at: next ? new Date().toISOString() : null,
+      manual_opted_out_by: next ? (user?.id ?? null) : null,
+    }).eq('phone', c.phone)
+    if (!error) {
+      const { data } = await supabase.from('contacts').select('is_opted_out').eq('phone', c.phone).maybeSingle()
+      const now = (data?.is_opted_out as boolean | undefined) ?? next
+      setRows(rs => rs.map(r => r.phone === c.phone ? { ...r, isOptedOut: now } : r))
+    }
+    setBusyPhone(null)
+  }
 
   const load = useCallback(async (query: string, f: Filter, offset: number) => {
     const my = ++reqId.current
@@ -95,31 +120,58 @@ export default function ContactsPage() {
 
         <div className="card divide-y divide-gray-100 overflow-hidden">
           {rows.map(c => (
-            <button
-              key={c.id}
-              onClick={() => setPeekPhone(c.phone)}
-              className="w-full flex items-center gap-3 px-3 py-2.5 text-left active:bg-gray-50"
-            >
-              <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
-                <span className="text-gray-600 font-bold text-sm">{c.name.charAt(0).toUpperCase()}</span>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <p className="font-semibold text-gray-900 text-sm truncate">{c.name}</p>
-                  {c.valueTier && <Badge cls="bg-amber-50 text-amber-700 border-amber-200">{c.valueTier}</Badge>}
-                  {c.isOptedOut && <Badge cls="bg-red-50 text-red-600 border-red-200">Opted out</Badge>}
+            <div key={c.id} className="relative flex items-center">
+              <button
+                onClick={() => setPeekPhone(c.phone)}
+                className="flex-1 min-w-0 flex items-center gap-3 px-3 py-2.5 text-left active:bg-gray-50"
+              >
+                <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
+                  <span className="text-gray-600 font-bold text-sm">{c.name.charAt(0).toUpperCase()}</span>
                 </div>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="text-xs text-gray-500">+91 {c.phone}</span>
-                  {c.fromChat && <Dot cls="bg-green-500" title="Chat" />}
-                  {c.fromSales && <Dot cls="bg-blue-500" title="Sales" />}
-                  {c.lastPurchase && <span className="text-[11px] text-gray-400">· last {new Date(c.lastPurchase).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })}</span>}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <p className="font-semibold text-gray-900 text-sm truncate">{c.name}</p>
+                    {c.valueTier && <Badge cls="bg-amber-50 text-amber-700 border-amber-200">{c.valueTier}</Badge>}
+                    {c.isOptedOut && <Badge cls="bg-red-50 text-red-600 border-red-200">Opted out</Badge>}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="text-xs text-gray-500">+91 {c.phone}</span>
+                    {c.fromChat && <Dot cls="bg-green-500" title="Chat" />}
+                    {c.fromSales && <Dot cls="bg-blue-500" title="Sales" />}
+                    {c.lastPurchase && <span className="text-[11px] text-gray-400">· last {new Date(c.lastPurchase).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })}</span>}
+                  </div>
                 </div>
-              </div>
-              <svg className="w-4 h-4 text-gray-300 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
+              </button>
+
+              {/* 3-dot: manual opt-out from all comms */}
+              <button
+                onClick={() => setMenuPhone(m => m === c.phone ? null : c.phone)}
+                disabled={busyPhone === c.phone}
+                aria-label="More"
+                className="flex-shrink-0 w-9 h-9 mr-1 rounded-full flex items-center justify-center text-gray-400 active:bg-gray-100 disabled:opacity-40"
+              >
+                {busyPhone === c.phone
+                  ? <span className="w-3.5 h-3.5 border-2 border-gray-300 border-t-transparent rounded-full animate-spin" />
+                  : <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" /></svg>}
+              </button>
+
+              {menuPhone === c.phone && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setMenuPhone(null)} />
+                  <div className="absolute right-2 top-11 z-40 bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden w-52">
+                    <button onClick={() => toggleOptOut(c)}
+                      className="w-full text-left px-4 py-3 text-sm font-medium active:bg-gray-50">
+                      {c.isOptedOut
+                        ? <span className="text-gray-700">Undo opt-out</span>
+                        : <span className="text-red-600">Opt out of all comms</span>}
+                      <span className="block text-[11px] text-gray-400 font-normal mt-0.5">
+                        {c.isOptedOut ? 'Clears the manual opt-out flag' : 'Stops every message — same as chat STOP / call DNC'}
+                      </span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           ))}
         </div>
 

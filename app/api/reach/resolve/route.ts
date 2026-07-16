@@ -203,12 +203,12 @@ export async function POST(req: NextRequest) {
 
   // Unified consent + display name from the contact spine (covers chat-only
   // leads that have no wa_b_customers row). chat_opted_out = STOP, call_opted_out = DNC.
-  const contactByPhone = new Map<string, { name: string | null; chat: boolean; call: boolean }>()
+  const contactByPhone = new Map<string, { name: string | null; chat: boolean; call: boolean; optedOut: boolean }>()
   for (let i = 0; i < phones.length; i += 300) {
     const { data } = await supabaseAdmin.from('contacts')
-      .select('phone, name, name_override, chat_opted_out, call_opted_out').in('phone', phones.slice(i, i + 300))
-    for (const r of (data ?? []) as Array<{ phone: string; name: string | null; name_override: string | null; chat_opted_out: boolean; call_opted_out: boolean }>) {
-      contactByPhone.set(tenDigit(r.phone), { name: r.name_override || r.name, chat: r.chat_opted_out, call: r.call_opted_out })
+      .select('phone, name, name_override, chat_opted_out, call_opted_out, is_opted_out').in('phone', phones.slice(i, i + 300))
+    for (const r of (data ?? []) as Array<{ phone: string; name: string | null; name_override: string | null; chat_opted_out: boolean; call_opted_out: boolean; is_opted_out: boolean }>) {
+      contactByPhone.set(tenDigit(r.phone), { name: r.name_override || r.name, chat: r.chat_opted_out, call: r.call_opted_out, optedOut: r.is_opted_out })
     }
   }
 
@@ -262,7 +262,8 @@ export async function POST(req: NextRequest) {
       lifetime_value: (m.lifetime_value as number) ?? null,
       is_hot_lead: c?.is_hot_lead ?? false,
       is_do_not_call: ct?.call ?? c?.is_do_not_call ?? false,   // call DNC (unified)
-      dnd: ct?.chat ?? false,                                    // chat STOP (unified)
+      // chat STOP, or a manual opt-out (is_opted_out true but neither chat nor call).
+      dnd: (ct?.chat || (!!ct?.optedOut && !ct?.chat && !ct?.call)) ?? false,
       pastSends: sends.map(s => ({ label: s.label, category: s.category, sentAt: s.sentAt })),
       suppressedUntil,
     }

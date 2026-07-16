@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { INTEREST_LABEL } from '@/lib/signals'
 import { INTENT_LABEL, TOPIC_LABEL } from '@/lib/calls'
 
@@ -47,6 +48,7 @@ function fmtDateTime(s: string): string {
 }
 
 export default function CustomerPeek({ phone, onClose }: { phone: string | null; onClose: () => void }) {
+  const router = useRouter()
   const [data, setData] = useState<PeekData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -79,7 +81,7 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                 {data?.flags.is_hot_lead && <span className="text-amber-400" title="Hot lead">★</span>}
                 {data?.isNew && <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full">NEW — not in DB</span>}
                 {data?.flags.is_do_not_call && <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full">Don&apos;t call</span>}
-                {data?.flags.dnd && <span className="text-[10px] font-bold text-gray-600 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full">Opted out</span>}
+                {data?.flags.is_opted_out && <span className="text-[10px] font-bold text-gray-600 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full">Opted out (all comms)</span>}
               </div>
               <a href={`tel:+91${phone}`} className="text-xs text-gray-500">+91 {phone}</a>
             </div>
@@ -179,8 +181,8 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
           )}
         </div>
         <div className="flex-shrink-0 px-5 py-3 border-t border-gray-100">
-          <a href={`https://wa.me/91${phone}`} target="_blank" rel="noreferrer"
-            className="btn-secondary w-full text-center block">Open WhatsApp chat</a>
+          <button onClick={() => { onClose(); router.push(`/messages/${phone}`) }}
+            className="btn-secondary w-full text-center block">Open chat — see messages shared</button>
         </div>
       </div>
     </div>

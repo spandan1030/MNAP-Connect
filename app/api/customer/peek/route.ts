@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     .eq('phone', phone).maybeSingle()
 
   // Everything else in parallel.
-  const [markerRes, aCustRes, signalsRes, ledgerRes, callsRes] = await Promise.all([
+  const [markerRes, aCustRes, signalsRes, ledgerRes, callsRes, contactRes] = await Promise.all([
     bCust
       ? supabaseAdmin.from('wa_b_markers')
           .select('recency_tier,value_tier,rfm_segment,frequency_tier,primary_metal,lifetime_value,total_bills,days_since_last_purchase,first_purchase_date,last_purchase_date,audience_labels,is_high_value,is_likely_wedding,outreach_bucket')
@@ -51,9 +51,12 @@ export async function GET(req: NextRequest) {
           .select('success, topics, intent, called_at')
           .eq('customer_id', bCust.id).order('called_at', { ascending: false }).limit(10)
       : Promise.resolve({ data: null }),
+    supabaseAdmin.from('contacts').select('is_opted_out').eq('phone', phone).maybeSingle(),
   ])
 
   const aCust = aCustRes.data as { id: string; name: string | null; dnd: boolean; is_opted_out: boolean } | null
+  // Unified opt-out from the contact spine (chat STOP ∪ call DNC ∪ manual).
+  const contact = contactRes.data as { is_opted_out: boolean } | null
 
   // Group interests by source.
   const interests: Record<string, string[]> = {}
@@ -78,7 +81,7 @@ export async function GET(req: NextRequest) {
       is_hot_lead: bCust?.is_hot_lead ?? false,
       is_do_not_call: bCust?.is_do_not_call ?? false,
       dnd: aCust?.dnd ?? false,
-      is_opted_out: aCust?.is_opted_out ?? false,
+      is_opted_out: contact?.is_opted_out ?? aCust?.is_opted_out ?? false,
     },
     markers: markerRes.data ?? null,
     interests,

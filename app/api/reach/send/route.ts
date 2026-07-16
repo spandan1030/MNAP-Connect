@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendTemplateMessage } from '@/lib/whatsapp/api'
+import { applyPlaceholders } from '@/lib/utils'
 
 // Reach — send an approved template to a reviewed cohort.
 //   POST { recipients:[{phone,name?}], templateId, cohortLabel?, campaignRef? }
@@ -137,15 +138,20 @@ export async function POST(req: NextRequest) {
     try {
       const wamid = await sendTemplateMessage(p, template.meta_template_name, template.meta_template_lang ?? 'en', components(name))
 
+      // Render the actual text that went out so it shows in the chat thread
+      // (a template send with body=null renders an empty bubble).
+      const renderedBody = (applyPlaceholders(template.body_text ?? '', name || 'there', rates ?? null).trim())
+        || (template.name || 'Template message')
+
       // Thread it so a reply shows in the inbox with this context.
       const { data: thread } = await supabaseAdmin.from('wa_threads')
         .upsert({ phone: p, customer_name: name || null, last_message_at: now,
-          last_message_preview: (template.name || 'Template message').slice(0, 60) }, { onConflict: 'phone' })
+          last_message_preview: renderedBody.slice(0, 60) }, { onConflict: 'phone' })
         .select('id').single()
       if (thread) {
         await supabaseAdmin.from('wa_messages').insert({
-          thread_id: thread.id, direction: 'outbound', wa_message_id: wamid,
-          body: null, template_name: template.name, status: 'sent', sent_at: now, sent_by: user.id,
+          thread_id: thread.id, direction: 'outbound', message_type: 'text', wa_message_id: wamid,
+          body: renderedBody, template_name: template.name, status: 'sent', sent_at: now, sent_by: user.id,
         })
       }
 
