@@ -27,17 +27,6 @@ type Step =
   | 'pick-template'
   | 'preview'
   | 'confirm-resend'
-  | 'broadcast-pick-template'
-  | 'broadcast-preview'
-  | 'broadcast-sending'
-  | 'broadcast-result'
-
-interface BroadcastResult {
-  sent: number
-  failed: number
-  total: number
-  results: Array<{ name: string; status: 'sent' | 'failed'; error?: string }>
-}
 
 export default function SendPage() {
   const supabase = createClient()
@@ -62,10 +51,6 @@ export default function SendPage() {
   const [editMode, setEditMode] = useState(false)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
-
-  // Broadcast state
-  const [broadcastTemplate, setBroadcastTemplate] = useState<MessageTemplate | null>(null)
-  const [broadcastResult, setBroadcastResult] = useState<BroadcastResult | null>(null)
 
   useEffect(() => { loadData() }, [])
 
@@ -153,15 +138,10 @@ export default function SendPage() {
   }
 
   function openSendFlow(customer: CustomerWithInterests) {
-    let candidates: MessageTemplate[] = []
-    if (activeFilter === 'all') {
-      candidates = templates.filter(t => t.topic_id === null || customer.interests.includes(t.topic_id))
-    } else {
-      candidates = templates.filter(t => t.topic_id === activeFilter)
-    }
-
+    // Templates are no longer topic-scoped — offer all active templates.
+    const candidates = templates
     if (candidates.length === 0) {
-      alert('No templates available for this selection. Add templates in Templates tab.')
+      alert('No templates available. Add templates in the Templates tab.')
       resetFlow()
       return
     }
@@ -189,7 +169,7 @@ export default function SendPage() {
     setSending(true)
     setSendError(null)
 
-    const loggedTopicId = activeFilter !== 'all' ? activeFilter : selectedTemplate.topic_id
+    const loggedTopicId = activeFilter !== 'all' ? activeFilter : null
 
     try {
       const res = await fetch('/api/whatsapp/send', {
@@ -229,69 +209,11 @@ export default function SendPage() {
     setEditMode(false)
     setSending(false)
     setSendError(null)
-    setBroadcastTemplate(null)
-    setBroadcastResult(null)
-  }
-
-  // ── Broadcast flow ──────────────────────────────────────────────────────────
-
-  function handleBroadcastClick() {
-    const candidates = templates.filter(t => t.topic_id === activeFilter)
-    if (candidates.length === 0) {
-      alert('No templates for this topic. Add templates in the Templates tab.')
-      return
-    }
-    if (candidates.length === 1) {
-      setBroadcastTemplate(candidates[0])
-      setStep('broadcast-preview')
-    } else {
-      setCandidateTemplates(candidates)
-      setStep('broadcast-pick-template')
-    }
-  }
-
-  function handleBroadcastPickTemplate(template: MessageTemplate) {
-    setBroadcastTemplate(template)
-    setStep('broadcast-preview')
-  }
-
-  async function handleBroadcastSend() {
-    if (!broadcastTemplate) return
-    setStep('broadcast-sending')
-
-    try {
-      const res = await fetch('/api/whatsapp/broadcast', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topicId: activeFilter, templateId: broadcastTemplate.id }),
-      })
-      const data: BroadcastResult = await res.json()
-      setBroadcastResult(data)
-
-      // Update today's logs so sent customers grey out in the list
-      if (data.results) {
-        const sentCustomerPhones = new Set(
-          data.results.filter(r => r.status === 'sent').map(r => r.name)
-        )
-        const newLogs = customers
-          .filter(c => sentCustomerPhones.has(c.name))
-          .map(c => ({ customer_id: c.id, topic_id: activeFilter }))
-        setTodayLogs(prev => [...prev, ...newLogs])
-      }
-
-      setStep('broadcast-result')
-    } catch {
-      setBroadcastResult({ sent: 0, failed: 0, total: 0, results: [] })
-      setStep('broadcast-result')
-    }
   }
 
   function topicName(id: string) {
     return allTopics.find(t => t.id === id)?.name ?? id
   }
-
-  // Recipient count for broadcast (customers in filter not yet sent today)
-  const broadcastRecipients = filteredCustomers.filter(c => !alreadySentToday.has(c.id))
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -353,22 +275,14 @@ export default function SendPage() {
           className="input"
         />
 
-        {/* Count row + Broadcast button */}
+        {/* Count row */}
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs text-gray-400">
             {loading ? 'Loading…' : `${filteredCustomers.length} customer${filteredCustomers.length !== 1 ? 's' : ''}`}
           </p>
-          {!loading && activeFilter !== 'all' && broadcastRecipients.length > 0 && (
-            <button
-              onClick={handleBroadcastClick}
-              className="flex items-center gap-1.5 text-xs font-semibold bg-green-600 hover:bg-green-700 active:bg-green-800 text-white px-3 py-1.5 rounded-lg transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-              </svg>
-              Broadcast to {broadcastRecipients.length}
-            </button>
-          )}
+          <a href="/reach" className="text-xs font-medium text-green-700 hover:underline">
+            Send to a cohort → Reach
+          </a>
         </div>
 
         {!loading && filteredCustomers.length === 0 && (
@@ -457,9 +371,6 @@ export default function SendPage() {
                   className="w-full text-left card p-4 hover:border-green-300 hover:bg-green-50 transition-colors"
                 >
                   <p className="font-medium text-sm text-gray-900">{t.name}</p>
-                  {t.topic_id && (
-                    <p className="text-xs text-green-600 mt-0.5">{topicName(t.topic_id)}</p>
-                  )}
                   <p className="text-xs text-gray-500 mt-1 line-clamp-2">
                     {applyPlaceholders(t.body_text, selectedCustomer.name, todayRates)}
                   </p>
@@ -544,129 +455,6 @@ export default function SendPage() {
               >
                 ← Change Message
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Broadcast sheets ───────────────────────────────────────────────── */}
-
-      {/* Broadcast template picker */}
-      {step === 'broadcast-pick-template' && (
-        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={resetFlow}>
-          <div className="bg-white rounded-t-2xl flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>
-            <div className="flex-shrink-0 px-5 pt-5 pb-3">
-              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
-              <p className="font-semibold text-gray-900">Choose broadcast message</p>
-              <p className="text-xs text-gray-500 mt-0.5">Sending to {broadcastRecipients.length} recipients</p>
-            </div>
-            <div className="flex-1 overflow-y-auto px-5 space-y-2 pb-2">
-              {candidateTemplates.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => handleBroadcastPickTemplate(t)}
-                  className="w-full text-left card p-4 hover:border-green-300 hover:bg-green-50 transition-colors"
-                >
-                  <p className="font-medium text-sm text-gray-900">{t.name}</p>
-                  <p className="text-xs text-gray-500 mt-1 line-clamp-2">
-                    {applyPlaceholders(t.body_text, 'Customer Name', todayRates)}
-                  </p>
-                </button>
-              ))}
-            </div>
-            <div className="flex-shrink-0 px-5 pt-3 pb-8">
-              <button onClick={resetFlow} className="btn-secondary w-full">Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Broadcast preview + confirm */}
-      {step === 'broadcast-preview' && broadcastTemplate && (
-        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={resetFlow}>
-          <div className="bg-white rounded-t-2xl flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
-            <div className="flex-shrink-0 px-5 pt-5 pb-3">
-              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
-              <div className="flex items-center justify-between gap-2">
-                <p className="font-semibold text-gray-900">Broadcast preview</p>
-                <span className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded-full border border-green-100 font-medium">
-                  {broadcastTemplate.name}
-                </span>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">
-                Will be sent to <span className="font-medium text-gray-700">{broadcastRecipients.length} recipient{broadcastRecipients.length !== 1 ? 's' : ''}</span> · name filled in per customer
-              </p>
-            </div>
-            <div className="flex-1 overflow-y-auto px-5 pb-2">
-              <div className="bg-[#dcf8c6] rounded-2xl rounded-tl-sm p-4 text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
-                {applyPlaceholders(broadcastTemplate.body_text, 'Customer Name', todayRates)}
-              </div>
-            </div>
-            <div className="flex-shrink-0 px-5 pt-3 pb-8 space-y-2">
-              <button
-                onClick={handleBroadcastSend}
-                className="btn-primary w-full flex items-center justify-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-                </svg>
-                Send to {broadcastRecipients.length}
-              </button>
-              <button onClick={resetFlow} className="btn-secondary w-full">Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Broadcast sending — spinner, no close */}
-      {step === 'broadcast-sending' && (
-        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40">
-          <div className="bg-white rounded-t-2xl px-5 pt-5 pb-10 flex flex-col items-center gap-4">
-            <div className="w-10 h-1 bg-gray-300 rounded-full" />
-            <div className="w-10 h-10 border-4 border-green-200 border-t-green-600 rounded-full animate-spin" />
-            <p className="font-semibold text-gray-900">Sending broadcast…</p>
-            <p className="text-xs text-gray-500 text-center">Please wait while messages are being sent.</p>
-          </div>
-        </div>
-      )}
-
-      {/* Broadcast result */}
-      {step === 'broadcast-result' && broadcastResult && (
-        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={resetFlow}>
-          <div className="bg-white rounded-t-2xl flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>
-            <div className="flex-shrink-0 px-5 pt-5 pb-3">
-              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
-              <p className="font-semibold text-gray-900">Broadcast complete</p>
-              <div className="flex gap-3 mt-3">
-                <div className="flex-1 bg-green-50 border border-green-100 rounded-xl p-3 text-center">
-                  <p className="text-2xl font-bold text-green-700">{broadcastResult.sent}</p>
-                  <p className="text-xs text-green-600 mt-0.5">Sent</p>
-                </div>
-                {broadcastResult.failed > 0 && (
-                  <div className="flex-1 bg-red-50 border border-red-100 rounded-xl p-3 text-center">
-                    <p className="text-2xl font-bold text-red-600">{broadcastResult.failed}</p>
-                    <p className="text-xs text-red-500 mt-0.5">Failed</p>
-                  </div>
-                )}
-              </div>
-            </div>
-            {broadcastResult.failed > 0 && (
-              <div className="flex-1 overflow-y-auto px-5 pb-2">
-                <p className="text-xs font-medium text-gray-500 mb-2">Failed deliveries</p>
-                <div className="space-y-1.5">
-                  {broadcastResult.results
-                    .filter(r => r.status === 'failed')
-                    .map((r, i) => (
-                      <div key={i} className="bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-                        <p className="text-xs font-medium text-gray-800">{r.name}</p>
-                        {r.error && <p className="text-xs text-red-500 mt-0.5 truncate">{r.error}</p>}
-                      </div>
-                    ))}
-                </div>
-              </div>
-            )}
-            <div className="flex-shrink-0 px-5 pt-3 pb-8">
-              <button onClick={resetFlow} className="btn-primary w-full">Done</button>
             </div>
           </div>
         </div>

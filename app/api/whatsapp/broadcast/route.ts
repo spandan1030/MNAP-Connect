@@ -1,3 +1,8 @@
+// ⚠️ DEPRECATED (Phase 4, 2026-07-16). The topic broadcast has been replaced by
+// the unified Reach pipeline: "Subscribed to <topic>" (or interest + source) ×
+// message → /api/reach/send, which adds ledger logging, frequency suppression,
+// and unified consent that this route lacks. No UI calls this anymore. Kept
+// temporarily in case an external caller exists; safe to delete once confirmed.
 import { NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'

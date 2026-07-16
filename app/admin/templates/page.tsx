@@ -4,7 +4,12 @@ import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Navbar from '@/components/ui/Navbar'
 import { applyPlaceholders } from '@/lib/utils'
-import type { InterestTopic, MessageTemplate } from '@/lib/types'
+import type { MessageTemplate } from '@/lib/types'
+
+const CATEGORY_LABEL = {
+  all: 'All', daily_rate: 'Daily rate', rate: 'Rate alert',
+  offer: 'Offer', thankyou: 'Thank-you', custom: 'Custom',
+} as const
 
 const PLACEHOLDER_NAME = 'Priya Sharma'
 
@@ -20,13 +25,11 @@ export default function TemplatesPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
-  const [topics, setTopics] = useState<InterestTopic[]>([])
-  const [filterTopic, setFilterTopic] = useState<string>('all')
+  const [categoryFilter, setCategoryFilter] = useState<'all' | 'daily_rate' | 'rate' | 'offer' | 'thankyou' | 'custom'>('all')
   const [loading, setLoading] = useState(true)
 
   // Form state
   const [formName, setFormName] = useState('')
-  const [formTopic, setFormTopic] = useState<string>('none')
   const [formBody, setFormBody] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -47,12 +50,8 @@ export default function TemplatesPage() {
 
   async function loadData() {
     setLoading(true)
-    const [tmplRes, topicsRes] = await Promise.all([
-      supabase.from('wa_message_templates').select('*').order('created_at', { ascending: false }),
-      supabase.from('wa_interest_topics').select('*').eq('is_active', true).order('sort_order'),
-    ])
-    setTemplates(tmplRes.data ?? [])
-    setTopics(topicsRes.data ?? [])
+    const { data } = await supabase.from('wa_message_templates').select('*').order('created_at', { ascending: false })
+    setTemplates(data ?? [])
     setLoading(false)
   }
 
@@ -75,7 +74,6 @@ export default function TemplatesPage() {
   function startEdit(t: MessageTemplate) {
     setEditingId(t.id)
     setFormName(t.name)
-    setFormTopic(t.topic_id ?? 'none')
     setFormBody(t.body_text)
     setMetaName(t.meta_template_name ?? '')
     setMetaLang(t.meta_template_lang ?? 'en')
@@ -91,7 +89,7 @@ export default function TemplatesPage() {
   }
 
   function resetForm() {
-    setEditingId(null); setFormName(''); setFormTopic('none'); setFormBody('')
+    setEditingId(null); setFormName(''); setFormBody('')
     setMetaName(''); setMetaLang('en'); setMetaVars(''); setHeaderType('none'); setHeaderImageUrl(''); setShowMetaSection(false)
     setCategory('custom'); setSuppressionDays(14)
     setError(''); setShowPreview(false)
@@ -108,7 +106,7 @@ export default function TemplatesPage() {
 
     const payload = {
       name:               formName.trim(),
-      topic_id:           formTopic === 'none' ? null : formTopic,
+      topic_id:           null,   // templates are no longer topic-scoped; classified by Message type
       body_text:          formBody.trim(),
       created_by:         user!.id,
       meta_template_name: metaName.trim() || null,
@@ -134,13 +132,8 @@ export default function TemplatesPage() {
     loadData()
   }
 
-  function topicName(id: string | null) {
-    if (!id) return 'General'
-    return topics.find(t => t.id === id)?.name ?? '—'
-  }
-
   const filtered = templates.filter(t =>
-    filterTopic === 'all' ? true : filterTopic === 'general' ? !t.topic_id : t.topic_id === filterTopic
+    categoryFilter === 'all' ? true : (t.category ?? 'custom') === categoryFilter
   )
 
   return (
@@ -161,13 +154,6 @@ export default function TemplatesPage() {
             placeholder="Template name (internal label)"
             required
           />
-
-          <select value={formTopic} onChange={e => setFormTopic(e.target.value)} className="input">
-            <option value="none">General (no specific topic)</option>
-            {topics.map(t => (
-              <option key={t.id} value={t.id}>{t.parent_id ? `  ↳ ${t.name}` : t.name}</option>
-            ))}
-          </select>
 
           {/* Message type — the single control that decides where a template is
               usable (thank-you broadcast, reach cohorts) and its resend guard.
@@ -421,22 +407,19 @@ export default function TemplatesPage() {
           </div>
         </form>
 
-        {/* Filter */}
+        {/* Filter by Message type */}
         <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-          {['all', 'general', ...topics.filter(t => !t.parent_id).map(t => t.id)].map(f => {
-            const label = f === 'all' ? 'All' : f === 'general' ? 'General' : topics.find(t => t.id === f)?.name ?? f
-            return (
-              <button
-                key={f}
-                onClick={() => setFilterTopic(f)}
-                className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                  filterTopic === f ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
-                }`}
-              >
-                {label}
-              </button>
-            )
-          })}
+          {(['all', 'daily_rate', 'rate', 'offer', 'thankyou', 'custom'] as const).map(f => (
+            <button
+              key={f}
+              onClick={() => setCategoryFilter(f)}
+              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                categoryFilter === f ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
+              }`}
+            >
+              {CATEGORY_LABEL[f]}
+            </button>
+          ))}
         </div>
 
         {/* Template list */}
@@ -456,7 +439,7 @@ export default function TemplatesPage() {
                         <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium flex-shrink-0">✓ WA approved</span>
                       )}
                     </div>
-                    <p className="text-xs text-green-600 mt-0.5">{topicName(t.topic_id)}</p>
+                    <p className="text-xs text-green-600 mt-0.5">{CATEGORY_LABEL[(t.category ?? 'custom') as keyof typeof CATEGORY_LABEL] ?? t.category}</p>
                     {t.meta_template_name && (
                       <p className="text-[10px] font-mono text-gray-400 mt-0.5">{t.meta_template_name}</p>
                     )}
