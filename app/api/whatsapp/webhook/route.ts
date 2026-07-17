@@ -149,6 +149,20 @@ async function handleInboundMessage(
 
   const displayName = customer?.name ?? contactName ?? 'there'
 
+  // --- Ad-lead capture: a Click-to-WhatsApp lead's first inbound carries a
+  // `referral` (ad id / ctwa_clid). Record it so an AD1 follow-up audience can
+  // target them. Defensive: no-op if the ad tables aren't there yet (pre-wa_042)
+  // or ads aren't running. ---
+  const referral = (msg as { referral?: { source_id?: string; headline?: string; ctwa_clid?: string } }).referral
+  if (referral && (referral.source_id || referral.ctwa_clid)) {
+    try {
+      await supabaseAdmin.from('wa_ad_leads').upsert({
+        phone, ad_campaign: referral.source_id ?? null, source_id: referral.source_id ?? null,
+        ctwa_clid: referral.ctwa_clid ?? null, headline: referral.headline ?? null,
+      }, { onConflict: 'phone,ad_campaign', ignoreDuplicates: true })
+    } catch { /* ad tables not present / ads not live — ignore */ }
+  }
+
   let threadId: string
   const now = new Date().toISOString()
 
