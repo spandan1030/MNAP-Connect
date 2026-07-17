@@ -5,7 +5,7 @@ import Navbar from '@/components/ui/Navbar'
 import FilterBuilder from '@/components/reach/FilterBuilder'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import type { InterestTopic, ReachFilter, WaBCallCampaign } from '@/lib/types'
+import type { InterestTopic, MessageTemplate, ReachFilter, WaBCallCampaign } from '@/lib/types'
 
 // Audience Library — the modular core of Lead-Gen Phase 1. Save a named filter
 // (fixed snapshot or auto-updating), see its materialised size, edit/refresh it.
@@ -47,13 +47,54 @@ export default function AudiencesPage() {
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState<string | null>(null)
 
+  // activation sheet
+  const [templates, setTemplates] = useState<MessageTemplate[]>([])
+  const [activate, setActivate] = useState<Audience | null>(null)
+  const [channel, setChannel] = useState<'chat' | 'call'>('chat')
+  const [actTemplateId, setActTemplateId] = useState('')
+  const [actLimit, setActLimit] = useState<number | ''>('')
+  const [subOpen, setSubOpen] = useState(false)
+  const [subFilter, setSubFilter] = useState<ReachFilter>({})
+  const [actBusy, setActBusy] = useState(false)
+  const [actError, setActError] = useState<string | null>(null)
+  const [actResult, setActResult] = useState<string | null>(null)
+
   useEffect(() => { load() }, [])
   useEffect(() => {
     supabase.from('wa_b_call_campaigns').select('*').order('created_at', { ascending: false }).limit(30)
       .then(({ data }) => setCampaigns((data ?? []) as WaBCallCampaign[]))
     supabase.from('wa_interest_topics').select('*').eq('is_active', true).is('parent_id', null).order('sort_order')
       .then(({ data }) => setTopics(((data ?? []) as InterestTopic[]).filter(t => t.topic_group !== 'system')))
+    supabase.from('wa_message_templates').select('*').eq('is_active', true)
+      .not('meta_template_name', 'is', null).order('created_at', { ascending: false })
+      .then(({ data }) => setTemplates((data ?? []) as MessageTemplate[]))
   }, [supabase])
+
+  function openActivate(a: Audience) {
+    setActivate(a); setChannel('chat'); setActTemplateId(''); setActLimit('')
+    setSubOpen(false); setSubFilter({}); setActError(null); setActResult(null)
+  }
+  async function runActivation() {
+    if (!activate) return
+    setActBusy(true); setActError(null); setActResult(null)
+    try {
+      const res = await fetch('/api/audiences/activate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audienceId: activate.id, channel,
+          templateId: channel === 'chat' ? actTemplateId : undefined,
+          subFilter: Object.keys(subFilter).length ? subFilter : undefined,
+          limit: channel === 'chat' && actLimit !== '' ? actLimit : undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setActError(data.error ?? 'Activation failed.'); setActBusy(false); return }
+      setActResult(channel === 'chat'
+        ? `Sent ${data.sent} · ${data.skippedSuppressed} skipped (already got it) · ${data.eligibleRemaining} left to send.`
+        : `Calling cohort set — ${data.callable} callable card(s) now on the calling deck.`)
+      load()
+    } catch { setActError('Network error.') } finally { setActBusy(false) }
+  }
 
   async function load() {
     setLoading(true)
@@ -153,7 +194,9 @@ export default function AudiencesPage() {
                 className="text-[11px] font-medium text-gray-700 border border-gray-200 px-2.5 py-1 rounded-lg disabled:opacity-50">
                 {refreshing === a.id ? 'Refreshing…' : 'Refresh'}
               </button>
-              <span className="text-[10px] text-gray-300 flex-1 text-right">Activation (send / call) — next</span>
+              <button onClick={() => openActivate(a)} disabled={a.member_count === 0}
+                className="text-[11px] font-semibold text-white bg-green-600 px-2.5 py-1 rounded-lg disabled:opacity-40">Activate</button>
+              <span className="flex-1" />
               <button onClick={() => remove(a)} className="text-[11px] text-red-500 px-2 py-1 rounded-lg hover:bg-red-50">Delete</button>
             </div>
           </div>
@@ -185,6 +228,77 @@ export default function AudiencesPage() {
             <div className="flex-shrink-0 px-5 py-3 border-t border-gray-100">
               <button onClick={save} disabled={busy} className="btn-primary w-full disabled:opacity-60">
                 {busy ? 'Saving…' : editing === 'new' ? 'Create audience' : 'Save changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Activation sheet */}
+      {activate && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={() => setActivate(null)}>
+          <div className="bg-white rounded-t-2xl flex flex-col max-h-[92vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-4 pb-3 border-b border-gray-100 flex items-center justify-between">
+              <div className="min-w-0">
+                <p className="font-bold text-gray-900 truncate">Activate — {activate.name}</p>
+                <p className="text-[11px] text-gray-500">{activate.member_count.toLocaleString('en-IN')} members</p>
+              </div>
+              <button onClick={() => setActivate(null)} className="text-gray-400 text-xl leading-none">×</button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">
+              {/* channel */}
+              <div className="flex gap-2">
+                {(['chat', 'call'] as const).map(c => (
+                  <button key={c} onClick={() => { setChannel(c); setActResult(null) }}
+                    className={cn('flex-1 py-2 rounded-lg text-sm font-semibold border',
+                      channel === c ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200')}>
+                    {c === 'chat' ? '💬 Chat' : '📞 Calling'}
+                  </button>
+                ))}
+              </div>
+
+              {channel === 'chat' ? (
+                <>
+                  <div>
+                    <p className="text-[11px] font-medium text-gray-500 mb-1">Template</p>
+                    <select value={actTemplateId} onChange={e => setActTemplateId(e.target.value)} className="input text-sm">
+                      <option value="">Choose a WhatsApp-approved template…</option>
+                      {templates.map(t => <option key={t.id} value={t.id}>{t.name}{t.category ? ` · ${t.category}` : ''}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium text-gray-500 mb-1">Send at most (this batch)</p>
+                    <input type="number" min={1} inputMode="numeric" placeholder="all eligible"
+                      value={actLimit} onChange={e => setActLimit(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value) || 0))}
+                      className="input text-sm" />
+                    <p className="text-[10px] text-gray-400 mt-1">Already-messaged numbers auto-skip. Send N daily — the rest wait for the next batch.</p>
+                  </div>
+                </>
+              ) : (
+                <p className="text-[11px] text-gray-500">Pushing to calling <b>replaces</b> the current calling deck with this cohort. Non-callable / do-not-call members are skipped.</p>
+              )}
+
+              {/* optional sub-filter */}
+              <div className="border-t border-gray-100 pt-2">
+                <button onClick={() => setSubOpen(o => !o)} className="text-[11px] font-medium text-gray-600 flex items-center gap-1">
+                  {subOpen ? '▾' : '▸'} Narrow further (optional)
+                  {Object.keys(subFilter).length > 0 && <span className="text-green-600">· active</span>}
+                </button>
+                {subOpen && (
+                  <div className="mt-2">
+                    <p className="text-[10px] text-gray-400 mb-2">Send only to the slice of this audience that also matches — e.g. occasion = wedding, or walk-in timing. Doesn&apos;t change the saved audience.</p>
+                    <FilterBuilder filter={subFilter} campaigns={campaigns} topics={topics} onChange={setSubFilter} />
+                  </div>
+                )}
+              </div>
+
+              {actError && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{actError}</p>}
+              {actResult && <p className="text-xs text-green-800 bg-green-50 border border-green-100 rounded-lg px-3 py-2">{actResult}</p>}
+            </div>
+            <div className="flex-shrink-0 px-5 py-3 border-t border-gray-100">
+              <button onClick={runActivation} disabled={actBusy || (channel === 'chat' && !actTemplateId)}
+                className="btn-primary w-full disabled:opacity-60">
+                {actBusy ? 'Working…' : channel === 'chat' ? 'Send now' : 'Set calling cohort'}
               </button>
             </div>
           </div>
