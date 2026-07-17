@@ -44,7 +44,7 @@ L4 ACTIVATION  — ONE shared machine per channel, same resolved audience
 | D-timing | **Walk-in "planning to buy" is a button** on the walk-in form (customer-stated): `within_7d` / `within_1m` / `1_3m`. Stored as a real field, not a note. |
 | D-gov | **Frequency governance:** one channel per person per week; priority **call > walk-in follow-up > chat > ad**; calls have a hard cooldown (below). |
 | D-callsupp | **Call suppression:** (a) one no-connect → next attempt **≥ 2 days** later; (b) **3 no-response attempts → stop calling**, set `call_unresponsive` feature, route to chat/ad. |
-| D-1 *(open)* | Ad-upload lists **app-owned** (app exports each audience's phones) vs pipeline-owned. Proposed: app-owned for modularity. |
+| D-1 ✅ | **Audience resolution + activation = app-owned.** The app is the superset of features and the home of all 3 activations; one resolver = one definition = true modularity. **Marker *computation* stays in the pipeline** (billing access) and feeds the app. Ad activation = the app exports the resolved audience's phones (+LTV) as an upload CSV. |
 
 ---
 
@@ -224,6 +224,26 @@ Every row is one `wa_audiences` record. **Ch:** 📞 call · 💬 chat · 📣 a
 **P6 — Seed the audience catalog (§5) as data + creatives tracker.**
 
 ---
+
+## 9b. Current-state gap analysis (how far are we)
+
+The engine parts mostly exist — the work is **unify + generalize + add**, not build-from-scratch.
+
+| Vision capability | Today | Gap |
+|---|---|---|
+| Audience = filters on features | ✅ `lib/reach/resolve.ts` intersects feature families | add new features (journey, walkin_no_purchase, call_unresponsive) |
+| Pick criteria → name → save as reusable audience | 🟡 Reach builds filters but spawns a *campaign*; saved-segments retired | `wa_audiences` library + pick-list |
+| Pre-made audiences | ❌ | seed catalogue (§5) as data |
+| Send N / whole (chat) | ✅ Reach cap + campaigns "Send N more" | — |
+| Same audience → a call campaign | ❌ calls built from a separate filter UI (`CallFilter`, sales-only) | unify: one audience → chat + call + ad |
+| Chat funnel + drill-down | ✅ `campaigns/detail` + `/campaigns` | reuse per audience |
+| Call insights | 🟡 separate `admin/calls/report` (has salesman breakdown) | fold into shared per-audience report |
+| Pull leads → re-activate | 🟡 `call_is_hot` + replied/converted exist | "make audience from campaign results" step |
+| Ad activation (export) | ❌ pipeline builds sales-only lists | app export per audience (+LTV) |
+| Ad-lead capture + follow-up | ❌ | webhook referral + `ad_campaigns`/`wa_ad_leads` + AD1 |
+| Daily resolve + suppression + governance | 🟡 ledger suppression + dynamic members exist | daily job + governance |
+
+**Verdict:** chat ~70–80% there (missing: name/save as a library, not one-off campaigns); calls exist but as a **parallel silo** (real work = merge so one audience feeds calls + chat + one report); ads + lead-loop + new features are net-new but well-scoped. Three moves: (1) promote Reach's builder into a named `wa_audiences` library, (2) unify activation across chat/call/ad off one audience with one funnel, (3) add ad-lead loop + missing features.
 
 ## 10. Open questions
 1. **Ad lists app-owned?** (D-1) — app exports each audience's phones as an upload CSV, pipeline stops owning audience-building (keeps computing markers). Confirm.
