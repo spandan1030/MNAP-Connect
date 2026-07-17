@@ -420,6 +420,17 @@ export interface ReachFilter {
   // chat activity (wa_messages inbound)
   messagedFrom?: string         // YYYY-MM-DD — customer messaged us on/after this date
   messagedTo?: string           // YYYY-MM-DD — customer messaged us on/before this date (inclusive)
+  // walk-in visit (wa_b_customers.walkin_at / walkin_timing)
+  walkedIn?: boolean            // has an in-store walk-in on record
+  walkinNoPurchase?: boolean    // walked in AND no purchase since the visit
+  walkinTiming?: string[]       // planning-to-buy button: within_7d|within_1m|1_3m
+  // behavioural / cross-source features (computed at resolve time)
+  callUnresponsive?: boolean    // >=3 call attempts, never connected (route off calls)
+  multiSource?: boolean         // interest signals from >=2 distinct sources
+  chatNonBuyer?: boolean        // has a chat interest signal but no sales markers on this number
+  // ad leads (wa_ad_leads — inert until ads are wired)
+  adLead?: boolean              // arrived via a click-to-WhatsApp / tracked ad
+  adCampaign?: string[]         // specific ad campaign code(s)
   // manual list — used alone (paste numbers)
   phones?: string[]
 }

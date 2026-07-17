@@ -18,6 +18,7 @@ const ENGAGEMENT_INTERESTS = INTERESTS.filter(i => i.group === 'engagement')
 const OCCASION_INTERESTS = INTERESTS.filter(i => i.group === 'occasion')
 const PRODUCT_INTERESTS = INTERESTS.filter(i => i.group === 'product')
 const INTEREST_SOURCES = [['whatsapp', 'Chat'], ['call', 'Call'], ['walkin', 'Walk-in'], ['sales', 'Sales']] as const
+const WALKIN_TIMING = [['within_7d', 'Within 7 days'], ['within_1m', 'Within 1 month'], ['1_3m', '1–3 months']] as const
 
 export default function FilterBuilder({ filter, onChange, campaigns, topics }: {
   filter: ReachFilter
@@ -89,6 +90,15 @@ export default function FilterBuilder({ filter, onChange, campaigns, topics }: {
 
       {/* ── WALK-IN ───────────────────────────────────────── */}
       <FilterSection title="Walk-in" hint="Signals captured in-store">
+        <FilterGroup label="Visit">
+          <Chip on={!!filter.walkedIn} onClick={() => toggleBool('walkedIn')}>Walked in</Chip>
+          <Chip on={!!filter.walkinNoPurchase} onClick={() => toggleBool('walkinNoPurchase')}>No purchase since</Chip>
+        </FilterGroup>
+        <FilterGroup label="Planning to buy">
+          {WALKIN_TIMING.map(([v, label]) => (
+            <Chip key={v} on={has('walkinTiming', v)} onClick={() => toggleArr('walkinTiming', v)}>{label}</Chip>
+          ))}
+        </FilterGroup>
         <FilterGroup label="Occasion">
           {OCCASION_INTERESTS.map(i => (
             <Chip key={i.key} on={has('interests', i.key)} onClick={() => toggleArr('interests', i.key)}>{i.label}</Chip>
@@ -98,6 +108,16 @@ export default function FilterBuilder({ filter, onChange, campaigns, topics }: {
           {PRODUCT_INTERESTS.map(i => (
             <Chip key={i.key} on={has('interests', i.key)} onClick={() => toggleArr('interests', i.key)}>{i.label}</Chip>
           ))}
+        </FilterGroup>
+      </FilterSection>
+
+      {/* ── BEHAVIOUR (cross-source, computed) ────────────── */}
+      <FilterSection title="Behaviour" hint="Cross-source / calling signals">
+        <FilterGroup label="Signals">
+          <Chip on={!!filter.multiSource} onClick={() => toggleBool('multiSource')}>Multi-source intent</Chip>
+          <Chip on={!!filter.chatNonBuyer} onClick={() => toggleBool('chatNonBuyer')}>Chat non-buyer</Chip>
+          <Chip on={!!filter.callUnresponsive} onClick={() => toggleBool('callUnresponsive')}>Call-unresponsive</Chip>
+          <Chip on={!!filter.adLead} onClick={() => toggleBool('adLead')}>Ad lead</Chip>
         </FilterGroup>
       </FilterSection>
 

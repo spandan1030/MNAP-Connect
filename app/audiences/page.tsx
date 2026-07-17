@@ -46,6 +46,8 @@ export default function AudiencesPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState<string | null>(null)
+  const [seeding, setSeeding] = useState(false)
+  const [seedMsg, setSeedMsg] = useState<string | null>(null)
 
   // activation sheet
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
@@ -102,6 +104,17 @@ export default function AudiencesPage() {
     const data = await res.json()
     setAudiences(data.audiences ?? [])
     setLoading(false)
+  }
+
+  async function seedPresets() {
+    setSeeding(true); setSeedMsg(null)
+    try {
+      const res = await fetch('/api/audiences/seed', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) { setSeedMsg(data.error ?? 'Seeding failed.'); return }
+      setSeedMsg(`Seeded ${data.created} preset audience(s)${data.skipped ? `, ${data.skipped} already existed` : ''}.${data.errors?.length ? ` (${data.errors.length} warning(s))` : ''}`)
+      load()
+    } catch { setSeedMsg('Network error.') } finally { setSeeding(false) }
   }
 
   function openNew() {
@@ -161,8 +174,15 @@ export default function AudiencesPage() {
             <h1 className="text-lg font-bold text-gray-900">Audiences</h1>
             <p className="text-xs text-gray-500">Saved, reusable cohorts. Pick one to message or call — no re-filtering.</p>
           </div>
-          <button onClick={openNew} className="btn-primary text-sm px-3 py-1.5">+ New</button>
+          <div className="flex items-center gap-1.5">
+            <button onClick={seedPresets} disabled={seeding}
+              className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 font-medium disabled:opacity-50">
+              {seeding ? 'Seeding…' : 'Seed presets'}
+            </button>
+            <button onClick={openNew} className="btn-primary text-sm px-3 py-1.5">+ New</button>
+          </div>
         </div>
+        {seedMsg && <p className="text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">{seedMsg}</p>}
 
         {loading && <p className="text-sm text-gray-400 text-center py-8">Loading…</p>}
         {!loading && audiences.length === 0 && (

@@ -176,6 +176,101 @@ export async function resolveCohortPhones(f: ReachFilter): Promise<{ phones: Set
     families.push(set)
   }
 
+  // Walk-in visit family (wa_b_customers.walkin_at / walkin_timing). walkedIn +
+  // walkinNoPurchase need only walkin_at (pre-wa_041 safe); walkinTiming needs wa_041.
+  const walkinActive = !!(f.walkedIn || f.walkinNoPurchase || f.walkinTiming?.length)
+  if (walkinActive) {
+    const set = new Set<string>()
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      let q = sb.from('wa_b_customers')
+        .select('phone, walkin_at, wa_b_markers(last_purchase_date)')
+        .not('walkin_at', 'is', null)
+      if (f.walkinTiming?.length) q = q.in('walkin_timing', f.walkinTiming)
+      const { data } = await q.range(from, from + PAGE - 1)
+      const rows = (data ?? []) as Array<{ phone: string; walkin_at: string; wa_b_markers: { last_purchase_date: string | null } | { last_purchase_date: string | null }[] | null }>
+      for (const r of rows) {
+        if (f.walkinNoPurchase) {
+          const m = Array.isArray(r.wa_b_markers) ? r.wa_b_markers[0] : r.wa_b_markers
+          const last = m?.last_purchase_date ?? null
+          if (last && r.walkin_at && last >= r.walkin_at.slice(0, 10)) continue  // converted → exclude
+        }
+        set.add(tenDigit(r.phone))
+      }
+      if (rows.length < PAGE) break
+    }
+    families.push(set)
+  }
+
+  // Call-unresponsive: >=3 attempts, never connected (route off calls).
+  if (f.callUnresponsive) {
+    const agg = new Map<string, { total: number; succ: number }>()
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data } = await sb.from('wa_b_call_logs').select('customer_id, success').range(from, from + PAGE - 1)
+      const rows = (data ?? []) as Array<{ customer_id: string; success: boolean | null }>
+      for (const r of rows) {
+        const a = agg.get(r.customer_id) ?? { total: 0, succ: 0 }
+        a.total++; if (r.success === true) a.succ++
+        agg.set(r.customer_id, a)
+      }
+      if (rows.length < PAGE) break
+    }
+    const cids = [...agg.entries()].filter(([, v]) => v.total >= 3 && v.succ === 0).map(([cid]) => cid)
+    families.push(await phonesForIds(sb, cids))
+  }
+
+  // Multi-source intent: interest signals from >=2 distinct sources.
+  if (f.multiSource) {
+    const bySrc = new Map<string, Set<string>>()
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data } = await sb.from('wa_signals').select('phone, source').range(from, from + PAGE - 1)
+      const rows = (data ?? []) as Array<{ phone: string; source: string }>
+      for (const r of rows) {
+        const p = tenDigit(r.phone)
+        let s = bySrc.get(p); if (!s) { s = new Set(); bySrc.set(p, s) }
+        s.add(r.source)
+      }
+      if (rows.length < PAGE) break
+    }
+    const set = new Set<string>()
+    for (const [p, s] of bySrc) if (s.size >= 2) set.add(p)
+    families.push(set)
+  }
+
+  // Chat non-buyer: has a chat interest signal, no sales markers on this number.
+  if (f.chatNonBuyer) {
+    const chat = new Set<string>()
+    const buyers = new Set<string>()
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data } = await sb.from('wa_signals').select('phone').eq('source', 'whatsapp').range(from, from + PAGE - 1)
+      const rows = (data ?? []) as { phone: string }[]
+      for (const r of rows) chat.add(tenDigit(r.phone))
+      if (rows.length < PAGE) break
+    }
+    for (let from = 0; ; from += PAGE) {
+      const { data } = await sb.from('wa_b_customers').select('phone, wa_b_markers!inner(customer_id)').range(from, from + PAGE - 1)
+      const rows = (data ?? []) as { phone: string }[]
+      for (const r of rows) buyers.add(tenDigit(r.phone))
+      if (rows.length < PAGE) break
+    }
+    const set = new Set<string>()
+    for (const p of chat) if (!buyers.has(p)) set.add(p)
+    families.push(set)
+  }
+
+  // Ad-lead family (wa_ad_leads — table may not exist until the ad migration; guard).
+  if (f.adLead || f.adCampaign?.length) {
+    const set = new Set<string>()
+    let q = sb.from('wa_ad_leads').select('phone')
+    if (f.adCampaign?.length) q = q.in('ad_campaign', f.adCampaign)
+    const { data, error } = await q
+    if (!error) for (const r of (data ?? []) as { phone: string }[]) set.add(tenDigit(r.phone))
+    families.push(set)
+  }
+
   if (families.length === 0) return { phones: new Set(), error: 'Add at least one filter or paste numbers.' }
   return { phones: intersect(families) }
 }

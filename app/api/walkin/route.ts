@@ -20,6 +20,11 @@ const TIMING_LABEL: Record<string, string> = {
   within_7_days: 'within 7 days', within_1_month: 'within 1 month',
   '1_3_months': '1–3 months', browsing: 'just browsing',
 }
+// Map the form's timing value → the canonical walkin_timing field (targetable).
+// 'browsing' isn't a buying-window, so it stores null.
+const TIMING_CANONICAL: Record<string, string> = {
+  within_7_days: 'within_7d', within_1_month: 'within_1m', '1_3_months': '1_3m',
+}
 
 export async function POST(req: NextRequest) {
   const cookieStore = await cookies()
@@ -44,6 +49,7 @@ export async function POST(req: NextRequest) {
 
   const now = new Date().toISOString()
   const timingLabel = body.timing ? (TIMING_LABEL[body.timing] ?? body.timing) : null
+  const walkinTiming = body.timing ? (TIMING_CANONICAL[body.timing] ?? null) : null
   const visitNote = [
     `Walk-in ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`,
     timingLabel ? `buying ${timingLabel}` : null,
@@ -62,14 +68,14 @@ export async function POST(req: NextRequest) {
     customerId = existing.id as string
     const patch: Record<string, unknown> = {
       notes: existing.notes ? `${existing.notes}\n${visitNote}` : visitNote,
-      walkin_salesman_id: salesmanId, walkin_at: now,
+      walkin_salesman_id: salesmanId, walkin_at: now, walkin_timing: walkinTiming,
     }
     if (body.isVip && !existing.is_hot_lead) { patch.is_hot_lead = true; patch.hot_lead_at = now }
     await supabaseAdmin.from('wa_b_customers').update(patch).eq('id', customerId)
   } else {
     const { data: cust, error } = await supabaseAdmin.from('wa_b_customers').insert({
       name, phone, enrolled_by: user.id, source: 'walkin', notes: visitNote,
-      walkin_salesman_id: salesmanId, walkin_at: now,
+      walkin_salesman_id: salesmanId, walkin_at: now, walkin_timing: walkinTiming,
       is_hot_lead: !!body.isVip, hot_lead_at: body.isVip ? now : null,
     }).select('id').single()
     if (error || !cust) return Response.json({ error: error?.message ?? 'Could not save walk-in.' }, { status: 500 })
