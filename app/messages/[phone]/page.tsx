@@ -386,6 +386,17 @@ export default function ConversationPage({
   const displayName  = thread?.customer_name || formatPhone(phone)
   const customerName = thread?.customer_name || 'Customer'
 
+  // Log a call made from the inbox (simple registration, no outcome) tagged to the
+  // device's active salesman, then open the dialer.
+  async function logAndCall() {
+    const salesmanId = typeof window !== 'undefined' ? localStorage.getItem('mc_salesman') : null
+    fetch('/api/calls/log', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, salesmanId }),
+    }).catch(() => {})
+    window.location.href = `tel:+91${phone}`
+  }
+
   // "Interested in" banner — the specific topics tagged across the whole
   // conversation (Sale & Discounts, Gold Exchange, Necklaces, …) plus the metal
   // they picked. Topics are the single source of truth, shared with the Send module.
@@ -539,6 +550,14 @@ export default function ConversationPage({
             <p className="font-semibold text-gray-900 text-sm truncate">{displayName}</p>
             <p className="text-xs text-gray-400">{formatPhone(phone)} · view profile</p>
           </div>
+        </button>
+
+        {/* Call — logs the call (active salesman) then opens the dialer */}
+        <button onClick={logAndCall} title="Call & log" aria-label="Call & log"
+          className="flex-shrink-0 p-1.5 rounded-lg text-green-700 bg-green-50 border border-green-200">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
+          </svg>
         </button>
 
         {/* Bot on/off — staff can pause auto-replies and take over */}
