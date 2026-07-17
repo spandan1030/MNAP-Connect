@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     .eq('phone', phone).maybeSingle()
 
   // Everything else in parallel.
-  const [markerRes, aCustRes, signalsRes, ledgerRes, callsRes, contactRes] = await Promise.all([
+  const [markerRes, aCustRes, signalsRes, ledgerRes, callsRes, contactRes, audRes] = await Promise.all([
     bCust
       ? supabaseAdmin.from('wa_b_markers')
           .select('recency_tier,value_tier,rfm_segment,frequency_tier,primary_metal,lifetime_value,total_bills,days_since_last_purchase,first_purchase_date,last_purchase_date,audience_labels,is_high_value,is_likely_wedding,outreach_bucket')
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
     supabaseAdmin.from('wa_customers').select('id, name, dnd, is_opted_out').eq('phone', phone).maybeSingle(),
     supabaseAdmin.from('wa_signals').select('interest, source, last_seen').eq('phone', phone),
     supabaseAdmin.from('wa_send_ledger')
-      .select('meta_template_name, category, status, cohort_label, sent_at, template:wa_message_templates(name)')
+      .select('meta_template_name, category, status, cohort_label, sent_at, campaign_id, template:wa_message_templates(name)')
       .eq('phone', phone).order('sent_at', { ascending: false }).limit(20),
     bCust
       ? supabaseAdmin.from('wa_b_call_logs')
@@ -52,6 +52,7 @@ export async function GET(req: NextRequest) {
           .eq('customer_id', bCust.id).order('called_at', { ascending: false }).limit(10)
       : Promise.resolve({ data: null }),
     supabaseAdmin.from('contacts').select('is_opted_out').eq('phone', phone).maybeSingle(),
+    supabaseAdmin.from('audience_members').select('audience:wa_audiences(id, name, is_dynamic)').eq('phone', phone),
   ])
 
   const aCust = aCustRes.data as { id: string; name: string | null; dnd: boolean; is_opted_out: boolean } | null
@@ -79,11 +80,17 @@ export async function GET(req: NextRequest) {
     (interests[s.source] ??= []).push(s.interest)
   }
 
-  const sends = ((ledgerRes.data ?? []) as unknown as Array<{ meta_template_name: string | null; category: string | null; status: string; cohort_label: string | null; sent_at: string; template: { name: string } | { name: string }[] | null }>)
+  const sends = ((ledgerRes.data ?? []) as unknown as Array<{ meta_template_name: string | null; category: string | null; status: string; cohort_label: string | null; sent_at: string; campaign_id: string | null; template: { name: string } | { name: string }[] | null }>)
     .map(r => ({
       label: (Array.isArray(r.template) ? r.template[0]?.name : r.template?.name) ?? r.meta_template_name ?? r.category ?? 'message',
       category: r.category, status: r.status, cohort: r.cohort_label, sentAt: r.sent_at,
+      inCampaign: !!r.campaign_id,
     }))
+
+  // Which saved audiences this phone is currently a member of.
+  const audiences = ((audRes.data ?? []) as unknown as Array<{ audience: { id: string; name: string; is_dynamic: boolean } | { id: string; name: string; is_dynamic: boolean }[] | null }>)
+    .map(r => (Array.isArray(r.audience) ? r.audience[0] : r.audience))
+    .filter((a): a is { id: string; name: string; is_dynamic: boolean } => !!a)
 
   const known = !!bCust || !!aCust
   return Response.json({
@@ -100,6 +107,7 @@ export async function GET(req: NextRequest) {
     },
     markers: markerRes.data ?? null,
     walkin,
+    audiences,
     interests,
     calls: (callsRes.data ?? []) as Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string }>,
     sends,

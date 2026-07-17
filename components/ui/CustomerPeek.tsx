@@ -24,9 +24,10 @@ interface PeekData {
     audience_labels: string[] | null; is_high_value: boolean | null; is_likely_wedding: boolean | null
   } | null
   walkin: { salesman: string | null; at: string | null; converted: boolean } | null
+  audiences: Array<{ id: string; name: string; is_dynamic: boolean }>
   interests: Record<string, string[]>
   calls: Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string }>
-  sends: Array<{ label: string; category: string | null; status: string; cohort: string | null; sentAt: string }>
+  sends: Array<{ label: string; category: string | null; status: string; cohort: string | null; sentAt: string; inCampaign: boolean }>
 }
 
 const SOURCE_DOT: Record<string, string> = {
@@ -128,6 +129,19 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                 </Section>
               )}
 
+              {/* Audiences this person currently belongs to. */}
+              {data.audiences.length > 0 && (
+                <Section title="In audiences">
+                  <div className="flex flex-wrap gap-1.5">
+                    {data.audiences.map(a => (
+                      <span key={a.id} className="text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 rounded-full">
+                        {a.name}{a.is_dynamic ? ' ·live' : ''}
+                      </span>
+                    ))}
+                  </div>
+                </Section>
+              )}
+
               {/* Signals — separated by where they came from. Chat & calls are
                   interest signals; sales are things already bought (not interest). */}
               <InterestSection title="Interested in — from WhatsApp chat" dot="bg-green-500" keys={data.interests.whatsapp} />
@@ -182,7 +196,12 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                         <span className="text-gray-400 w-20 flex-shrink-0">{fmtDateTime(s.sentAt)}</span>
                         <span className="text-gray-700 truncate flex items-center gap-1">
                           {s.category && <Tag>{CATEGORY_LABEL[s.category] ?? s.category}</Tag>}
-                          <span className="truncate">{s.label}{s.cohort ? ` · ${s.cohort}` : ''}</span>
+                          <span className="truncate">
+                            {s.label}
+                            {s.inCampaign && s.cohort
+                              ? ` · ${s.cohort}`
+                              : <span className="text-gray-400"> · outside campaign</span>}
+                          </span>
                         </span>
                       </div>
                     ))}
