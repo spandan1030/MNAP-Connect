@@ -44,6 +44,7 @@ L4 ACTIVATION  — ONE shared machine per channel, same resolved audience
 | D-timing | **Walk-in "planning to buy" is a button** on the walk-in form (customer-stated): `within_7d` / `within_1m` / `1_3m`. Stored as a real field, not a note. |
 | D-gov | **Frequency governance:** one channel per person per week; priority **call > walk-in follow-up > chat > ad**; calls have a hard cooldown (below). |
 | D-callsupp | **Call suppression:** (a) one no-connect → next attempt **≥ 2 days** later; (b) **3 no-response attempts → stop calling**, set `call_unresponsive` feature, route to chat/ad. |
+| D-migrate ✅ | **The live lapsed-winback call campaign migrates non-destructively — no data loss.** Keep `wa_b_call_campaigns`/`wa_b_call_tasks`/`wa_b_call_logs` as-is; wrap the same campaign as audience **A1** pointing at the *same* queue + history. Already-contacted stay suppressed (task status/logs untouched), due stay queued, all responses stay attributed. Verify parity BEFORE switching any UI. |
 | D-1 ✅ | **Audience resolution + activation = app-owned.** The app is the superset of features and the home of all 3 activations; one resolver = one definition = true modularity. **Marker *computation* stays in the pipeline** (billing access) and feeds the app. Ad activation = the app exports the resolved audience's phones (+LTV) as an upload CSV. |
 
 ---
