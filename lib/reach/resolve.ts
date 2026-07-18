@@ -112,26 +112,28 @@ export interface ResolveOptions {
   includeOptedOut?: boolean
 }
 
-// Resolve a filter to matching phones. Returns { error } when nothing is active
-// (so the caller can 400). Manual paste list short-circuits the families.
-export async function resolveCohortPhones(
+// Drop anyone who has opted out, unless this is an ad/export resolve.
+async function applyOptOut(sb: Sb, phones: Set<string>, opts: ResolveOptions): Promise<Set<string>> {
+  if (opts.includeOptedOut) return phones
+  const out = await optedOutPhones(sb)
+  if (out.size === 0) return phones
+  const kept = new Set<string>()
+  for (const p of phones) if (!out.has(p)) kept.add(p)
+  return kept
+}
+
+// LEGACY resolver — derives every family from the raw event tables and intersects
+// in app memory. Superseded by the view-backed resolveCohortPhones below; kept
+// ONLY as the oracle for scripts/parity-check.mjs and deleted once that has run
+// clean against real data. Do not call it from app code.
+export async function resolveCohortPhonesLegacy(
   f: ReachFilter,
   opts: ResolveOptions = {},
 ): Promise<{ phones: Set<string>; error?: string }> {
   const sb = supabaseAdmin
 
-  // Drop anyone who has opted out, unless this is an ad/export resolve.
-  const applyOptOut = async (phones: Set<string>): Promise<Set<string>> => {
-    if (opts.includeOptedOut) return phones
-    const out = await optedOutPhones(sb)
-    if (out.size === 0) return phones
-    const kept = new Set<string>()
-    for (const p of phones) if (!out.has(p)) kept.add(p)
-    return kept
-  }
-
   const manual = (f.phones ?? []).map(tenDigit).filter(p => p.length === 10)
-  if (manual.length) return { phones: await applyOptOut(new Set(manual)) }
+  if (manual.length) return { phones: await applyOptOut(sb, new Set(manual), opts) }
 
   const families: Set<string>[] = []
 
@@ -313,5 +315,5 @@ export async function resolveCohortPhones(
   }
 
   if (families.length === 0) return { phones: new Set(), error: 'Add at least one filter or paste numbers.' }
-  return { phones: await applyOptOut(intersect(families)) }
+  return { phones: await applyOptOut(sb, intersect(families), opts) }
 }

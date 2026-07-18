@@ -1,4 +1,4 @@
-// Generates supabase/migrations/wa_045_customer_features.sql — the one-row-per-
+// Generates supabase/migrations/wa_046_customer_features.sql — the one-row-per-
 // person feature view.
 //
 // WHY THIS IS GENERATED: the view needs two columns per interest
@@ -33,7 +33,7 @@ const sigAggregates = keys.map(k =>
 
 const sigSelect = keys.map(k => `  sg.int_${k}_src,  sg.int_${k}_at`).join(',\n')
 
-const sql = `-- wa_045_customer_features.sql
+const sql = `-- wa_046_customer_features.sql
 -- ============================================================================
 --  GENERATED FILE — do not edit by hand.
 --  Produced by: node scripts/gen-feature-view.mjs
@@ -283,7 +283,7 @@ COMMENT ON VIEW customer_features IS
 GRANT SELECT ON customer_features TO authenticated, service_role;
 `
 
-const out = join(root, 'supabase', 'migrations', 'wa_045_customer_features.sql')
+const out = join(root, 'supabase', 'migrations', 'wa_046_customer_features.sql')
 writeFileSync(out, sql, 'utf8')
 console.log(`Wrote ${out}`)
 console.log(`  ${keys.length} interests → ${keys.length * 2} int_ columns`)

@@ -1,4 +1,4 @@
--- wa_045_customer_features.sql
+-- wa_046_customer_features.sql
 -- ============================================================================
 --  GENERATED FILE — do not edit by hand.
 --  Produced by: node scripts/gen-feature-view.mjs
