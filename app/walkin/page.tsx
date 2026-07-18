@@ -52,13 +52,38 @@ export default function WalkInPage() {
   const [done, setDone] = useState<{ phone: string; created: boolean; signals: number } | null>(null)
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
 
+  // Existing-number lookup — search the whole contact spine as the salesman types.
+  const [suggest, setSuggest] = useState<Array<{ phone: string; name: string }>>([])
+  const [showSuggest, setShowSuggest] = useState(false)
+  const [picked, setPicked] = useState<string | null>(null)
+
+  useEffect(() => {
+    const digits = phone.replace(/\D/g, '').replace(/^91/, '')
+    if (digits.length < 3 || digits === picked) { setSuggest([]); setShowSuggest(false); return }
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/contacts?q=${digits}&limit=8`)
+        const data = await res.json()
+        const rows = ((data.contacts ?? []) as Array<{ phone: string; name: string }>).map(c => ({ phone: c.phone, name: c.name }))
+        setSuggest(rows); setShowSuggest(rows.length > 0)
+      } catch { /* ignore */ }
+    }, 250)
+    return () => clearTimeout(t)
+  }, [phone, picked])
+
+  function pickContact(c: { phone: string; name: string }) {
+    setPhone(c.phone); setPicked(c.phone)
+    if (c.name && c.name !== 'Unknown') setName(c.name)
+    setShowSuggest(false)
+  }
+
   function toggle(key: string) {
     setSelected(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n })
   }
 
   function reset() {
     setName(''); setPhone(''); setSelected(new Set()); setTiming(''); setIsVip(false); setNotes('')
-    setError(''); setDone(null)
+    setError(''); setDone(null); setPicked(null); setSuggest([]); setShowSuggest(false)
   }
 
   async function save() {
@@ -119,8 +144,26 @@ export default function WalkInPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
                 <div className="flex gap-2 items-center">
                   <span className="text-sm text-gray-500 font-medium bg-gray-100 px-3 py-2.5 rounded-lg border border-gray-300">+91</span>
-                  <input value={phone} onChange={e => setPhone(e.target.value)} className="input flex-1" placeholder="10-digit number" inputMode="numeric" maxLength={13} />
+                  <div className="relative flex-1">
+                    <input value={phone} onChange={e => { setPicked(null); setPhone(e.target.value) }}
+                      onFocus={() => { if (suggest.length) setShowSuggest(true) }}
+                      className="input w-full" placeholder="10-digit number" inputMode="numeric" maxLength={13}
+                      autoComplete="off" autoCorrect="off" spellCheck={false} name="walkin-phone-lookup" />
+                    {showSuggest && suggest.length > 0 && (
+                      <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden max-h-60 overflow-y-auto">
+                        <p className="text-[10px] text-gray-400 px-3 pt-2 pb-1">Existing customers — tap to fill</p>
+                        {suggest.map(c => (
+                          <button key={c.phone} type="button" onClick={() => pickContact(c)}
+                            className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-gray-50 border-t border-gray-50">
+                            <span className="text-sm text-gray-800 truncate">{c.name}</span>
+                            <span className="text-xs text-gray-500 flex-shrink-0">+91 {c.phone}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
+                {picked && <p className="text-[11px] text-green-600 mt-1">Existing customer — details filled. Their new walk-in will update this profile.</p>}
               </div>
               {salesmen.length > 0 && (
                 <div>

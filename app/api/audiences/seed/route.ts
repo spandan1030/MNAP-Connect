@@ -1,11 +1,13 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { refreshAudienceMembers } from '@/lib/audiences/service'
 import { AUDIENCE_CATALOGUE } from '@/lib/audiences/catalogue'
 
-// Seed the pre-made audience catalogue (idempotent — skips presets already seeded
-// by name). Materialises each after insert. POST /api/audiences/seed
+// Seed the pre-made audience catalogue. Insert-only + idempotent: each row carries
+// a stable seed_key (UNIQUE), so re-clicking or two concurrent requests can never
+// duplicate (ON CONFLICT DO NOTHING). It does NOT materialise members here — that's
+// heavy (21 cohort resolves) and would time out; the client refreshes each audience
+// afterwards, one request at a time. POST /api/audiences/seed
 export async function POST() {
   const cookieStore = await cookies()
   const supabase = createServerClient(
@@ -16,23 +18,17 @@ export async function POST() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Existing seeded names (avoid duplicates on re-run).
-  const { data: existing } = await supabaseAdmin.from('wa_audiences').select('name').eq('is_seeded', true)
-  const have = new Set((existing ?? []).map((r: { name: string }) => r.name))
+  const rows = AUDIENCE_CATALOGUE.map(p => ({
+    seed_key: p.key, name: p.name, description: `${p.channel} · ${p.description}`,
+    filter: p.filter, is_dynamic: p.dynamic ?? true, is_seeded: true, created_by: user.id,
+  }))
 
-  let created = 0
-  const errors: string[] = []
-  for (const p of AUDIENCE_CATALOGUE) {
-    if (have.has(p.name)) continue
-    const { data: aud, error } = await supabaseAdmin.from('wa_audiences').insert({
-      name: p.name, description: `${p.channel} · ${p.description}`,
-      filter: p.filter, is_dynamic: p.dynamic ?? true, is_seeded: true, created_by: user.id,
-    }).select('id').single()
-    if (error || !aud) { errors.push(`${p.name}: ${error?.message ?? 'insert failed'}`); continue }
-    created++
-    const r = await refreshAudienceMembers(aud.id as string)
-    if (r.error) errors.push(`${p.name}: ${r.error}`)
-  }
+  // One upsert; the UNIQUE(seed_key) index makes it a no-op for rows already present.
+  const { error } = await supabaseAdmin.from('wa_audiences')
+    .upsert(rows, { onConflict: 'seed_key', ignoreDuplicates: true })
+  if (error) return Response.json({ error: error.message }, { status: 500 })
 
-  return Response.json({ created, skipped: AUDIENCE_CATALOGUE.length - created, errors })
+  const { count } = await supabaseAdmin.from('wa_audiences')
+    .select('id', { count: 'exact', head: true }).eq('is_seeded', true)
+  return Response.json({ ok: true, seeded: count ?? rows.length })
 }

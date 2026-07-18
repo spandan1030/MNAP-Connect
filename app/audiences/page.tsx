@@ -106,13 +106,28 @@ export default function AudiencesPage() {
     setLoading(false)
   }
 
+  // Materialise every audience, one request at a time (each cohort resolve is heavy;
+  // batching them in one call times out). Shows progress.
+  async function refreshAll(list: Audience[], prefix: string) {
+    for (let i = 0; i < list.length; i++) {
+      setSeedMsg(`${prefix} — building members ${i + 1}/${list.length} (${list[i].name})…`)
+      await fetch('/api/audiences/refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: list[i].id }),
+      }).catch(() => {})
+    }
+  }
+
   async function seedPresets() {
-    setSeeding(true); setSeedMsg(null)
+    setSeeding(true); setSeedMsg('Seeding presets…')
     try {
       const res = await fetch('/api/audiences/seed', { method: 'POST' })
       const data = await res.json()
       if (!res.ok) { setSeedMsg(data.error ?? 'Seeding failed.'); return }
-      setSeedMsg(`Seeded ${data.created} preset audience(s)${data.skipped ? `, ${data.skipped} already existed` : ''}.${data.errors?.length ? ` (${data.errors.length} warning(s))` : ''}`)
+      // Reload to get the seeded rows, then materialise them one by one.
+      const listRes = await fetch('/api/audiences'); const listData = await listRes.json()
+      const all: Audience[] = listData.audiences ?? []
+      await refreshAll(all, `Seeded ${data.seeded} audiences`)
+      setSeedMsg(`Done — ${data.seeded} preset audiences ready.`)
       load()
     } catch { setSeedMsg('Network error.') } finally { setSeeding(false) }
   }
