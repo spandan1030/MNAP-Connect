@@ -7,6 +7,14 @@ import type { ReachFilter } from '@/lib/types'
 //
 // Each active filter family produces a Set<phone>; the cohort is their
 // INTERSECTION (AND). A manual `phones` list is used alone (paste mode).
+//
+// DO-NOT-CONTACT: applied ONCE, at the end, from the unified `contacts.is_opted_out`
+// (chat STOP ∪ call DNC ∪ manual) — never per-family. Policy: opted out = no chat
+// and no call, but ADS are still allowed, so an ad/export caller passes
+// { includeOptedOut: true }. Before this, families filtered on the call-only
+// `is_do_not_call`, which meant a cohort's member count and what actually got sent
+// disagreed: call-DNC people were missing from the count, chat-STOP people were
+// counted but never sent to.
 
 type Sb = typeof supabaseAdmin
 
@@ -29,7 +37,6 @@ async function markerPhones(sb: Sb, f: ReachFilter): Promise<Set<string>> {
   for (let from = 0; ; from += PAGE) {
     let q = sb.from('wa_b_customers')
       .select('phone, wa_b_markers!inner(customer_id)')
-      .eq('is_do_not_call', false)
     if (f.recency_tier?.length)   q = q.in('wa_b_markers.recency_tier', f.recency_tier)
     if (f.value_tier?.length)     q = q.in('wa_b_markers.value_tier', f.value_tier)
     if (f.rfm_segment?.length)    q = q.in('wa_b_markers.rfm_segment', f.rfm_segment)
@@ -84,13 +91,47 @@ function intersect(sets: Set<string>[]): Set<string> {
   return out
 }
 
+// Every phone that has opted out of contact (chat STOP ∪ call DNC ∪ manual).
+async function optedOutPhones(sb: Sb): Promise<Set<string>> {
+  const set = new Set<string>()
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data } = await sb.from('contacts').select('phone')
+      .eq('is_opted_out', true).range(from, from + PAGE - 1)
+    const rows = (data ?? []) as { phone: string }[]
+    for (const r of rows) set.add(tenDigit(r.phone))
+    if (rows.length < PAGE) break
+  }
+  return set
+}
+
+export interface ResolveOptions {
+  // Ads may target people who opted out of chat/call — that opt-out is about
+  // messaging us contacting them, not about being shown an ad. Only ad/export
+  // callers should set this.
+  includeOptedOut?: boolean
+}
+
 // Resolve a filter to matching phones. Returns { error } when nothing is active
 // (so the caller can 400). Manual paste list short-circuits the families.
-export async function resolveCohortPhones(f: ReachFilter): Promise<{ phones: Set<string>; error?: string }> {
+export async function resolveCohortPhones(
+  f: ReachFilter,
+  opts: ResolveOptions = {},
+): Promise<{ phones: Set<string>; error?: string }> {
   const sb = supabaseAdmin
 
+  // Drop anyone who has opted out, unless this is an ad/export resolve.
+  const applyOptOut = async (phones: Set<string>): Promise<Set<string>> => {
+    if (opts.includeOptedOut) return phones
+    const out = await optedOutPhones(sb)
+    if (out.size === 0) return phones
+    const kept = new Set<string>()
+    for (const p of phones) if (!out.has(p)) kept.add(p)
+    return kept
+  }
+
   const manual = (f.phones ?? []).map(tenDigit).filter(p => p.length === 10)
-  if (manual.length) return { phones: new Set(manual) }
+  if (manual.length) return { phones: await applyOptOut(new Set(manual)) }
 
   const families: Set<string>[] = []
 
@@ -120,7 +161,7 @@ export async function resolveCohortPhones(f: ReachFilter): Promise<{ phones: Set
     const PAGE = 1000
     for (let from = 0; ; from += PAGE) {
       const { data } = await sb.from('wa_b_customers').select('phone')
-        .eq('is_hot_lead', true).eq('is_do_not_call', false).range(from, from + PAGE - 1)
+        .eq('is_hot_lead', true).range(from, from + PAGE - 1)
       const rows = (data ?? []) as { phone: string }[]
       for (const r of rows) set.add(tenDigit(r.phone))
       if (rows.length < PAGE) break
@@ -272,5 +313,5 @@ export async function resolveCohortPhones(f: ReachFilter): Promise<{ phones: Set
   }
 
   if (families.length === 0) return { phones: new Set(), error: 'Add at least one filter or paste numbers.' }
-  return { phones: intersect(families) }
+  return { phones: await applyOptOut(intersect(families)) }
 }
