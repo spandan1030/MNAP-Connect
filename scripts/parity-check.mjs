@@ -17,10 +17,41 @@
 // Read-only: it issues SELECTs and nothing else.
 
 import { createRequire } from 'node:module'
+import { createClient } from '@supabase/supabase-js'
 const require = createRequire(import.meta.url)
 
 const { resolveCohortPhones, resolveCohortPhonesLegacy } = require('../.parity-build/lib/reach/resolve.js')
 const { AUDIENCE_CATALOGUE } = require('../.parity-build/lib/audiences/catalogue.js')
+
+// ── Preflight ───────────────────────────────────────────────────────────────
+// resolveCohortPhones falls back to the legacy path when the view is missing or
+// behind. That fallback is right for production and POISON for a parity gate:
+// both sides then run the same code and every case "matches". An earlier run of
+// this script reported CLEAN while four cases were silently on the legacy path.
+// So: verify the columns up front, and treat any fallback during the run as a
+// failure, not a match.
+const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
+const REQUIRED = ['phone', 'sources', 'source_count', 'signal_sources', 'signal_source_count',
+  'call_campaign_ids', 'walkin_no_purchase', 'is_buyer', 'int_rate_src']
+const missing = []
+for (const col of REQUIRED) {
+  const { error } = await sb.from('customer_features').select(col).limit(1)
+  if (error) missing.push(col)
+}
+if (missing.length) {
+  console.error(`\nABORT — customer_features is missing: ${missing.join(', ')}`)
+  console.error('Apply supabase/migrations/wa_046_customer_features.sql, then re-run.\n')
+  process.exit(2)
+}
+console.log('preflight: customer_features has all required columns')
+
+// Trip a flag if the resolver logs its fallback warning mid-case.
+let fellBack = false
+const realWarn = console.warn
+console.warn = (...args) => {
+  if (String(args[0]).includes('[resolve]')) fellBack = true
+  realWarn(...args)
+}
 
 // A few hand-written cases beyond the catalogue, aimed squarely at the paths
 // that did NOT move to the view — they must be unchanged.
@@ -53,6 +84,7 @@ console.log('-'.repeat(78))
 
 for (const c of cases) {
   let legacy, view, tLegacy, tView
+  fellBack = false
   try {
     let t0 = Date.now()
     legacy = await resolveCohortPhonesLegacy(c.filter)
@@ -68,6 +100,12 @@ for (const c of cases) {
 
   if (view.error && !legacy.error) {
     console.log(`${pad(c.key, 6)}${pad(c.name.slice(0, 29), 30)}${num(legacy.phones.size, 8)}${num('err', 8)}${num('-', 7)}  VIEW ERROR: ${view.error}`)
+    failures++
+    continue
+  }
+
+  if (fellBack) {
+    console.log(`${pad(c.key, 6)}${pad(c.name.slice(0, 29), 30)}${num(legacy.phones.size, 8)}${num('-', 8)}${num('-', 7)}  FELL BACK TO LEGACY — not a real comparison`)
     failures++
     continue
   }
