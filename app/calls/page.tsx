@@ -68,6 +68,7 @@ export default function CallsPage() {
   const [idx, setIdx] = useState(0)
   const [override, setOverride] = useState<Card | null>(null)   // from search
   const [loading, setLoading] = useState(true)
+  const [deckError, setDeckError] = useState<string | null>(null)
 
   // Markers are loaded lazily, per visible card (never in bulk up front) so the
   // deck paints after 1 request instead of ~1 per 100 cards. `undefined` = not
@@ -145,21 +146,45 @@ export default function CallsPage() {
     // Live tasks: pending, past the cooldown (wa_044 R1), and belonging to a
     // customer who still has disconnect budget left (wa_044 R2 — the !inner join
     // makes the embedded filter drop the task, not just blank the customer).
+    //
+    // R2 is applied only if the wa_044 column is there. A failed query must NEVER
+    // read as an empty deck: before this, any error left the salesman staring at
+    // "All done for today" with a full queue behind it.
+    type Task = { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean; is_hot_lead: boolean } }
     const t = callCooldownCutoff()
-    const tasks: { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean; is_hot_lead: boolean } }[] = []
-    const PAGE = 1000
-    for (let from = 0; ; from += PAGE) {
-      const { data } = await supabase
-        .from('wa_b_call_tasks')
-        .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call,is_hot_lead)')
-        .eq('campaign_id', (camp as WaBCallCampaign).id)
-        .eq('status', 'pending')
-        .or(`last_attempt_date.is.null,last_attempt_date.lt.${t}`)
-        .lt('customer.failed_call_attempts', MAX_FAILED_CALL_ATTEMPTS)
-        .range(from, from + PAGE - 1)
-      const rows = (data ?? []) as unknown as typeof tasks
-      tasks.push(...rows)
-      if (rows.length < PAGE) break
+
+    async function fetchTasks(withDisconnectRule: boolean): Promise<{ rows: Task[]; error: string | null }> {
+      const out: Task[] = []
+      const PAGE = 1000
+      for (let from = 0; ; from += PAGE) {
+        let q = supabase
+          .from('wa_b_call_tasks')
+          .select('id, customer:wa_b_customers!inner(id,name,phone,is_do_not_call,is_hot_lead)')
+          .eq('campaign_id', (camp as WaBCallCampaign).id)
+          .eq('status', 'pending')
+          .or(`last_attempt_date.is.null,last_attempt_date.lt.${t}`)
+        if (withDisconnectRule) q = q.lt('customer.failed_call_attempts', MAX_FAILED_CALL_ATTEMPTS)
+        const { data, error } = await q.range(from, from + PAGE - 1)
+        if (error) return { rows: [], error: error.message }
+        const rows = (data ?? []) as unknown as Task[]
+        out.push(...rows)
+        if (rows.length < PAGE) break
+      }
+      return { rows: out, error: null }
+    }
+
+    let { rows: tasks, error } = await fetchTasks(true)
+    if (error) {
+      // Most likely cause: wa_044 not applied yet, so failed_call_attempts does
+      // not exist. Fall back to the cooldown rule alone so the team keeps calling,
+      // and say plainly that the disconnect rule is off.
+      const retry = await fetchTasks(false)
+      tasks = retry.rows
+      setDeckError(retry.error
+        ? `Could not load the deck: ${retry.error}`
+        : 'Showing the deck WITHOUT the 4-disconnect rule — apply migration wa_044 to switch it on.')
+    } else {
+      setDeckError(null)
     }
 
     setCards(tasks.map(t => ({
@@ -486,7 +511,13 @@ export default function CallsPage() {
         </div>
         {searchMsg && <p className="text-[11px] text-red-600">{searchMsg}</p>}
 
-        {!current && <Center>All done for today 🎉</Center>}
+        {deckError && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+            {deckError}
+          </div>
+        )}
+
+        {!current && <Center>{deckError ? 'No cards loaded — see the note above.' : 'All done for today 🎉'}</Center>}
 
         {current && (
           <div className="card p-4 space-y-3" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
