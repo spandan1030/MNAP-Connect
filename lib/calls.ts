@@ -53,3 +53,29 @@ export function telUrl(phone: string) {
   const ten = d.length > 10 && d.startsWith('91') ? d.slice(-10) : d
   return `tel:+91${ten}`
 }
+
+// ── Call suppression rules (wa_044) ────────────────────────────────────────
+// The single source of truth for who may be served a call card. Every deck —
+// Call Control, audience activation, the live winback campaign — reads these,
+// so changing a number here changes the rule everywhere.
+
+// R1: a customer attempted today is not re-served for this many days.
+// 2 = attempted Monday -> earliest Wednesday.
+export const CALL_COOLDOWN_DAYS = 2
+
+// R2: this many DISCONNECTED calls (success = false) retires them from calling.
+// Pending logs (success = null: Call tapped, outcome not submitted) never count.
+export const MAX_FAILED_CALL_ATTEMPTS = 4
+
+// The cooldown boundary: a task is eligible when last_attempt_date < this date.
+// Returns YYYY-MM-DD in local time, matching how last_attempt_date is stamped.
+export function callCooldownCutoff(now: Date = new Date()): string {
+  const d = new Date(now)
+  d.setDate(d.getDate() - (CALL_COOLDOWN_DAYS - 1))
+  return d.toLocaleDateString('en-CA')
+}
+
+// True when this customer has burned through the disconnect budget.
+export function isCallUnreachable(failedCallAttempts: number | null | undefined): boolean {
+  return (failedCallAttempts ?? 0) >= MAX_FAILED_CALL_ATTEMPTS
+}

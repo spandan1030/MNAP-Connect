@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import type { CallFilter } from '@/lib/types'
+import { MAX_FAILED_CALL_ATTEMPTS } from '@/lib/calls'
 
 // Admin Call Control: preview how many customers match a marker filter, or
 // create a campaign and generate the call cards (tasks) for them.
@@ -12,8 +13,10 @@ import type { CallFilter } from '@/lib/types'
 
 type Body = { preview?: boolean; name?: string; filter?: CallFilter }
 
-// Base query: customers (excluding DNC) inner-joined to their markers,
-// filtered by the marker criteria. head=true returns only an exact count.
+// Base query: callable customers inner-joined to their markers, filtered by the
+// marker criteria. head=true returns only an exact count. "Callable" excludes
+// do-not-call AND the call-unreachable (wa_044: >= 4 disconnects), so the preview
+// count and the generated deck agree with what the salesman will actually see.
 function tenDigit(raw: string | null | undefined): string {
   const d = (raw ?? '').replace(/\D/g, '')
   return d.length > 10 && d.startsWith('91') ? d.slice(-10) : d
@@ -38,6 +41,7 @@ function buildQuery(filter: CallFilter, head: boolean) {
     .from('wa_b_customers')
     .select('id, phone, wa_b_markers!inner(customer_id)', head ? { count: 'exact', head: true } : {})
     .eq('is_do_not_call', false)
+    .lt('failed_call_attempts', MAX_FAILED_CALL_ATTEMPTS)
 
   if (filter.recency_tier?.length)   q = q.in('wa_b_markers.recency_tier', filter.recency_tier)
   if (filter.value_tier?.length)     q = q.in('wa_b_markers.value_tier', filter.value_tier)

@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { resolveCohortPhones, tenDigit } from '@/lib/reach/resolve'
 import { dispatchTemplate } from '@/lib/reach/dispatch'
+import { isCallUnreachable, MAX_FAILED_CALL_ATTEMPTS } from '@/lib/calls'
 import type { ReachFilter } from '@/lib/types'
 
 // Activate a saved audience on a channel — one audience, any channel, reusing the
@@ -43,20 +44,25 @@ async function nameFor(phones: string[]): Promise<Map<string, string>> {
 
 // tenDigit-keyed phone -> wa_b_customers.id, for the member phones (needed to make
 // call tasks). Scans Type B customers in pages (bounded ~10k) so it's robust to
-// however phones are stored.
-async function typeBIds(want: Set<string>): Promise<Map<string, string>> {
-  const map = new Map<string, string>()
+// however phones are stored. Applies the calling gates (wa_044): do-not-call and
+// the disconnect budget are both excluded here, so an unreachable customer never
+// even gets a card minted.
+async function typeBIds(want: Set<string>): Promise<{ ids: Map<string, string>; unreachable: number }> {
+  const ids = new Map<string, string>()
+  let unreachable = 0
   for (let from = 0; ; from += 1000) {
     const { data } = await supabaseAdmin.from('wa_b_customers')
-      .select('id, phone, is_do_not_call').range(from, from + 999)
-    const rows = (data ?? []) as Array<{ id: string; phone: string; is_do_not_call: boolean }>
+      .select('id, phone, is_do_not_call, failed_call_attempts').range(from, from + 999)
+    const rows = (data ?? []) as Array<{ id: string; phone: string; is_do_not_call: boolean; failed_call_attempts: number | null }>
     for (const r of rows) {
       const p = tenDigit(r.phone)
-      if (!r.is_do_not_call && want.has(p) && !map.has(p)) map.set(p, r.id)
+      if (r.is_do_not_call || !want.has(p) || ids.has(p)) continue
+      if (isCallUnreachable(r.failed_call_attempts)) { unreachable++; continue }
+      ids.set(p, r.id)
     }
     if (rows.length < 1000) break
   }
-  return map
+  return { ids, unreachable }
 }
 
 export async function POST(req: NextRequest) {
@@ -137,9 +143,15 @@ export async function POST(req: NextRequest) {
 
   // ── CALL ────────────────────────────────────────────────────────────────
   if (channel === 'call') {
-    const ids = await typeBIds(new Set(phones.map(tenDigit)))
+    const { ids, unreachable } = await typeBIds(new Set(phones.map(tenDigit)))
     const customerIds = [...ids.values()]
-    if (customerIds.length === 0) return Response.json({ error: 'None of these members are callable (no Type-B / all do-not-call).' }, { status: 400 })
+    if (customerIds.length === 0) {
+      return Response.json({
+        error: unreachable > 0
+          ? `None of these members are callable — ${unreachable} are call-unreachable (${MAX_FAILED_CALL_ATTEMPTS}+ disconnects); reach them on chat instead.`
+          : 'None of these members are callable (no Type-B / all do-not-call).',
+      }, { status: 400 })
+    }
 
     // Reuse this audience's existing call campaign if it has one — that preserves
     // already-called / DNC card status (task upsert ignores existing), so nobody is
@@ -167,7 +179,7 @@ export async function POST(req: NextRequest) {
       if (tErr) return Response.json({ error: tErr.message }, { status: 500 })
       taskCount += chunk.length
     }
-    return Response.json({ channel: 'call', campaignId: campId, taskCount, callable: customerIds.length, members: phones.length })
+    return Response.json({ channel: 'call', campaignId: campId, taskCount, callable: customerIds.length, unreachable, members: phones.length })
   }
 
   return Response.json({ error: 'Pick a channel (chat or call).' }, { status: 400 })

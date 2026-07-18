@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import {
   CALL_TOPICS, CALL_INTENTS, TOPIC_LABEL, INTENT_LABEL,
   RECENCY_COLORS, VALUE_COLORS, telUrl,
+  MAX_FAILED_CALL_ATTEMPTS, callCooldownCutoff,
 } from '@/lib/calls'
 import { INTEREST_LABEL, SIGNAL_SOURCE_LABEL, CALL_TOPIC_TO_INTEREST, type SignalSource } from '@/lib/signals'
 import { cn } from '@/lib/utils'
@@ -47,8 +48,6 @@ interface HistoryEntry {
 interface Salesman { id: string; name: string; alias: string }
 
 type Phase = 'idle' | 'outcome' | 'success'
-
-const today = () => new Date().toLocaleDateString('en-CA')
 
 function agoText(days: number): string {
   if (days < 1) return 'today'
@@ -143,8 +142,10 @@ export default function CallsPage() {
     if (!camp) { setCampaign(null); setCards([]); setLoading(false); return }
     setCampaign(camp as WaBCallCampaign)
 
-    // live tasks: pending, not attempted today
-    const t = today()
+    // Live tasks: pending, past the cooldown (wa_044 R1), and belonging to a
+    // customer who still has disconnect budget left (wa_044 R2 — the !inner join
+    // makes the embedded filter drop the task, not just blank the customer).
+    const t = callCooldownCutoff()
     const tasks: { id: string; customer: { id: string; name: string; phone: string; is_do_not_call: boolean; is_hot_lead: boolean } }[] = []
     const PAGE = 1000
     for (let from = 0; ; from += PAGE) {
@@ -154,6 +155,7 @@ export default function CallsPage() {
         .eq('campaign_id', (camp as WaBCallCampaign).id)
         .eq('status', 'pending')
         .or(`last_attempt_date.is.null,last_attempt_date.lt.${t}`)
+        .lt('customer.failed_call_attempts', MAX_FAILED_CALL_ATTEMPTS)
         .range(from, from + PAGE - 1)
       const rows = (data ?? []) as unknown as typeof tasks
       tasks.push(...rows)

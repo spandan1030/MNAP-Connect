@@ -756,7 +756,13 @@ Salesmen cold-call sales-derived "lost leads" and log structured feedback. Feeds
 
 **Screens:** `/admin/calls` (Call Control — import, full marker + **interest** filter campaign builder, live DB count, signals sync/export) · `/calls` (salesman deck — one card at a time, tap-to-call, markers + converged interests + last-purchase date, Success→topics→intent, per-card three-dot **"Don't call"**, **editable history of last 100 calls**, search, hidden list) · `/admin/calls/report` (range summary, drill-down, feedback CSV). Routes under `/api/calls/*`.
 
-**Outcome model:** Success/Fail → topics[] (rate/designs/offers/booking) → intent (will_come/not_sure/wont_come/dont_call). Daily-retry on fail; dont_call → DNC + hidden (**calling-only exclusion — never suppresses seeding or other modules**).
+**Outcome model:** Success/Fail → topics[] (rate/designs/offers/booking) → intent (will_come/not_sure/wont_come/dont_call). dont_call → DNC + hidden (**calling-only exclusion — never suppresses seeding or other modules**).
+
+**Call suppression rules (`wa_044`, live) — one source of truth in `lib/calls.ts`:**
+- **R1 cooldown — `CALL_COOLDOWN_DAYS = 2`.** A failed card returns after **2 days**, not the next day (was daily-retry). Enforced at read time: `last_attempt_date < callCooldownCutoff()`.
+- **R2 unreachable — `MAX_FAILED_CALL_ATTEMPTS = 4`.** A customer with **≥ 4 disconnects** drops out of every calling deck. **Disconnects only** = `wa_b_call_logs.success = FALSE`; a **pending** log (`success IS NULL` — Call tapped, outcome not yet submitted) never counts, so an unfinished card can't suppress anyone.
+- **Mechanism:** `wa_b_customers.failed_call_attempts`, recomputed from the logs by trigger on every insert/update/delete (self-healing — editing Fail→Success decrements) and backfilled from all history, so the **live winback campaign obeys it immediately**.
+- **Applied at both ends:** the deck query (`/calls`), audience **call activation**, and Call Control's builder (preview count = what the salesman sees). **Non-destructive** — no rows deleted, no task status rewritten; raise the threshold and they come back. They stay reachable on chat/ads via audience **A5 `callUnresponsive`**.
 
 ## 18B. Unified Interest Signals (`wa_030`, applied 2026-07-15)
 
@@ -818,6 +824,7 @@ Message **any cohort** assembled from call signals, chat signals, markers, or a 
 - **New feature-filters (`wa_041` + resolver):** `walkedIn`, `walkinNoPurchase`, `walkinTiming` (`wa_b_customers.walkin_timing` within_7d/within_1m/1_3m, set on the walk-in form), `callUnresponsive` (≥3 no-connect calls), `multiSource` (signals from ≥2 sources), `chatNonBuyer` (chat signal, no markers), `adLead`/`adCampaign` (guarded — `wa_ad_leads` not built yet). All in `ReachFilter` + `resolveCohortPhones` + FilterBuilder Behaviour/Walk-in bands.
 - **Preset catalogue:** `lib/audiences/catalogue.ts` (21 audiences A1–E3+AD1) → `POST /api/audiences/seed` (idempotent, materialises each). AD1 empty until ads are wired.
 - **Decisions locked** (see plan §2): sending MANUAL for now (auto/scheduled later), audiences editable + fixed/dynamic, **sub-filters at send time**, **one calling cohort at a time (replace)**, everything attributes on the profile, reports show message + call insights, live lapsed-winback migrates non-destructively.
+- **Call suppression governance is now enforced, not just filterable (`wa_044`)** — 2-day cooldown + ≥4-disconnect retirement, shared by the deck, audience call activation and Call Control. See §18A "Call suppression rules".
 
 **Phase 9 — salesman mode (2026-07-16, `wa_039`):**
 - **Roster:** `salesmen` (name + short `alias`), managed in **Call Control** (its own `SalesmenRoster` component so typing doesn't re-render the heavy page — a full-page re-render per keystroke was reversing typed text on mobile). Rows can be set **Inactive** (leaves, keeps history) or **Deleted** (`ON DELETE SET NULL` → past calls/walk-ins fall back to "-"). Distinct from app-login accounts (`wa_b_call_logs.called_by` stays the device user). `wa_b_call_logs.salesman_id` + `wa_b_customers.walkin_salesman_id`/`walkin_at` added.

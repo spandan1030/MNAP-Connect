@@ -43,7 +43,7 @@ L4 ACTIVATION  — ONE shared machine per channel, same resolved audience
 | D-conv | **Conversion = a purchase within 90 days** of the touch (matches the existing funnel window). Measured from the sales DB import. |
 | D-timing | **Walk-in "planning to buy" is a button** on the walk-in form (customer-stated): `within_7d` / `within_1m` / `1_3m`. Stored as a real field, not a note. |
 | D-gov | **Frequency governance:** one channel per person per week; priority **call > walk-in follow-up > chat > ad**; calls have a hard cooldown (below). |
-| D-callsupp | **Call suppression:** (a) one no-connect → next attempt **≥ 2 days** later; (b) **3 no-response attempts → stop calling**, set `call_unresponsive` feature, route to chat/ad. |
+| D-callsupp | **Call suppression — ✅ LIVE (`wa_044`, 2026-07-18).** (a) one no-connect → next attempt **≥ 2 days** later (`CALL_COOLDOWN_DAYS = 2`); (b) **≥ 4 DISCONNECTS → stop calling** (`MAX_FAILED_CALL_ATTEMPTS = 4`) — counts `success = FALSE` only, **pending outcomes (`success IS NULL`) never count**; they stay reachable on chat/ad via A5. Constants in `lib/calls.ts`, counter `wa_b_customers.failed_call_attempts` (trigger-maintained + backfilled), enforced in the deck, audience call-activation and Call Control alike — including the live winback campaign. Threshold raised from the originally-planned 3 to **4** by user decision. |
 | D-manual | **Sending is MANUAL for now.** User picks an audience and hits send (e.g. a 1-day-timing walk-in, sent each day for 7 days); the ledger/suppression stops re-sending to those already contacted. **Auto/scheduled sending = LATER** (schedule messages across N days → auto-send). Noted for a later phase — not built now. |
 | D-edit | Audiences are **editable** after creation (name + filter + fixed/dynamic). |
 | D-fixeddyn | Each audience is **Fixed** (frozen member list at creation) OR **Auto-update** (re-resolves on refresh / daily run). Reuses the `is_dynamic` concept. |
@@ -84,8 +84,8 @@ Status: ✅ exists · 🔶 derivable now · 🆕 to build. "Feeds" = audience ID
 | `call_is_hot` | staff ★ on a call | ✅ | B2, D3 |
 | `reactivation_candidate` | call_will_come AND is_high_value | ✅ | A2 |
 | `call_recency` / `last_call_at` | days since last call | 🔶 | suppression, aging |
-| `no_connect_attempts` / `last_no_connect_at` | count of no-response tries · when | 🆕 | call cooldown (D-callsupp) |
-| **`call_unresponsive`** | 3 no-response attempts → true | 🆕 | A5 (route off calls) |
+| `failed_call_attempts` | count of **disconnects** (`success = FALSE`; pending excluded) | ✅ | call retirement (D-callsupp) — ≥4 hides from every deck |
+| **`call_unresponsive`** | ≥3 attempts, never connected → true | ✅ | A5 (route off calls) |
 | `call_interest_{rate,designs,offers,booking}` | topic on a connected call | ✅ | interest cuts |
 
 ### 3C. Chat features (from `wa_signals` chat, `wa_customer_interests`, `wa_messages`)
@@ -175,7 +175,7 @@ Every row is one `wa_audiences` record. **Ch:** 📞 call · 💬 chat · 📣 a
 
 1. **Pick** an audience from the library + a channel + a creative.
 2. **Daily run** resolves the audience → `audience_members` (fresh matches pulled in for dynamic ones).
-3. **Suppression** applied: chat/ad = message ledger (no re-send within the template's window); call = D-callsupp (2-day cooldown, 3-strike `call_unresponsive`); governance = one channel/person/week by priority.
+3. **Suppression** applied: chat/ad = message ledger (no re-send within the template's window); call = D-callsupp ✅ live (2-day cooldown, 4-disconnect retirement); governance = one channel/person/week by priority.
 4. **Send** via the channel's shared machine.
 5. **Funnel report** — the same sent→delivered→read→replied→converted(90d) + per-recipient drill-down we already have on `/campaigns`, now per audience.
 6. **Follow-up chaining** — an ad campaign's leads (AD1) feed a chat follow-up; a call's `will_come` feeds A2. Journey features record the sequence.
@@ -220,7 +220,7 @@ Every row is one `wa_audiences` record. **Ch:** 📞 call · 💬 chat · 📣 a
 - [ ] Daily resolve job + suppression + governance.
 
 **P3 — Activation + reporting**
-- [ ] Chat/call/ad activation off a shared audience; call suppression rules (D-callsupp).
+- [x] Chat/call/ad activation off a shared audience; call suppression rules (D-callsupp) — **enforced `wa_044`**.
 - [ ] Shared funnel report per audience.
 - [ ] Ad-upload export per audience (if app-owned, D-1).
 
