@@ -116,7 +116,9 @@ call_topics AS (
   GROUP BY 1
 ),
 call_camps AS (
-  SELECT mnap_ten_digit(c.phone) AS phone, array_agg(DISTINCT cc.name) AS campaigns
+  SELECT mnap_ten_digit(c.phone) AS phone,
+    array_agg(DISTINCT cc.name) AS campaigns,
+    array_agg(DISTINCT cc.id)   AS campaign_ids
   FROM wa_b_call_tasks tk
   JOIN wa_b_customers c        ON c.id  = tk.customer_id
   JOIN wa_b_call_campaigns cc  ON cc.id = tk.campaign_id
@@ -180,9 +182,14 @@ src AS (
   FROM all_sources GROUP BY 1
 ),
 
--- ── The interest pivot: tall wa_signals → one pair of columns per interest ──
+-- ── The interest pivot: tall wa_signals → one pair of columns per interest.
+--    signal_sources is the NARROW definition (declared interests only). It exists
+--    alongside the wider \`sources\` above so the two questions stay separable:
+--    "where did their interests come from" vs "which channels have we touched".
 sig AS (
   SELECT mnap_ten_digit(phone) AS phone,
+    array_agg(DISTINCT source) AS signal_sources,
+    count(DISTINCT source)     AS signal_source_count,
 ${sigAggregates}
   FROM wa_signals
   GROUP BY 1
@@ -222,6 +229,7 @@ SELECT
   COALESCE(cu.is_hot_lead, FALSE)                 AS call_is_hot,
   COALESCE(cu.is_do_not_call, FALSE)              AS call_dnc,
   ccamp.campaigns                                 AS call_campaigns,
+  ccamp.campaign_ids                              AS call_campaign_ids,
 
   -- ── chat_ ──
   ch.last_inbound_at                              AS chat_last_inbound_at,
@@ -245,8 +253,12 @@ SELECT
   ad.first_at                                     AS ad_first_at,
 
   -- ── cross-source ──
+  -- sources / source_count  = every CHANNEL touched (signals + a visit + an ad lead)
+  -- signal_sources / _count = only where a declared INTEREST came from
   COALESCE(sr.sources, '{}')                      AS sources,
   COALESCE(sr.source_count, 0)                    AS source_count,
+  COALESCE(sg.signal_sources, '{}')               AS signal_sources,
+  COALESCE(sg.signal_source_count, 0)             AS signal_source_count,
 
   -- ── int_<interest>_src / _at ──
 ${sigSelect}

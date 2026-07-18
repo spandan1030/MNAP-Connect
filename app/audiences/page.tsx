@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Navbar from '@/components/ui/Navbar'
 import FilterBuilder from '@/components/reach/FilterBuilder'
 import { createClient } from '@/lib/supabase/client'
+import { CALL_TOPICS, CALL_INTENTS } from '@/lib/calls'
 import { cn } from '@/lib/utils'
 import type { InterestTopic, MessageTemplate, ReachFilter, WaBCallCampaign } from '@/lib/types'
 
@@ -53,6 +54,15 @@ export default function AudiencesPage() {
   type Report = {
     chat: Array<{ campaignId: string; name: string; template: string | null; total: number; sent: number; failed: number; skipped: number; delivered: number; read: number; createdAt: string }>
     call: Array<{ campaignId: string; name: string; isActive: boolean; cards: number; attempts: number; connected: number; createdAt: string }>
+    // What came out of those calls — same insights as /admin/calls/report, scoped
+    // to this audience's cohorts rather than a date range.
+    callSummary: {
+      attempts: number; connected: number; noAnswer: number; pending: number
+      topics: Record<string, number>
+      intents: Record<string, number>
+      hotLeads: Array<{ name: string; phone: string }>
+      bySalesman: Array<{ alias: string; attempts: number; connected: number }>
+    } | null
   }
   const [reportFor, setReportFor] = useState<Audience | null>(null)
   const [report, setReport] = useState<Report | null>(null)
@@ -422,6 +432,81 @@ export default function AudiencesPage() {
                       </div>
                     )}
                   </div>
+
+                  {/* What happened on the calls — outcomes, not just volume. */}
+                  {report.callSummary && report.callSummary.attempts > 0 && (() => {
+                    const s = report.callSummary
+                    const rate = s.attempts ? Math.round((s.connected / s.attempts) * 100) : 0
+                    return (
+                      <div className="space-y-3">
+                        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">📞 Call outcomes</p>
+
+                        <div className="grid grid-cols-4 gap-1 text-center">
+                          <Metric label="Called" v={s.attempts} />
+                          <Metric label="Connected" v={s.connected} accent="text-green-700" />
+                          <Metric label="No answer" v={s.noAnswer} accent="text-gray-500" />
+                          <Metric label="Pending" v={s.pending} accent="text-amber-600" />
+                        </div>
+                        <p className="text-[10px] text-gray-400 -mt-1.5">{rate}% connect rate{s.pending > 0 ? ` · ${s.pending} awaiting an outcome` : ''}</p>
+
+                        {Object.keys(s.intents).length > 0 && (
+                          <div>
+                            <p className="text-[11px] text-gray-400 font-medium mb-1">Intent (what they said)</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {CALL_INTENTS.filter(i => s.intents[i.value]).map(i => (
+                                <span key={i.value} className="px-2.5 py-1 rounded-lg text-[11px] border border-gray-200 bg-white text-gray-700 font-medium">
+                                  {i.label} <span className="text-gray-400">{s.intents[i.value]}</span>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {Object.keys(s.topics).length > 0 && (
+                          <div>
+                            <p className="text-[11px] text-gray-400 font-medium mb-1">Interested in (connected calls)</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {CALL_TOPICS.filter(t => s.topics[t.value]).map(t => (
+                                <span key={t.value} className="px-2.5 py-1 rounded-lg text-[11px] border border-gray-200 bg-white text-gray-700 font-medium">
+                                  {t.label} <span className="text-gray-400">{s.topics[t.value]}</span>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {s.bySalesman.length > 0 && (
+                          <div>
+                            <p className="text-[11px] text-gray-400 font-medium mb-1">By salesman</p>
+                            <div className="space-y-1">
+                              {s.bySalesman.map(sm => (
+                                <div key={sm.alias} className="flex items-center justify-between rounded-lg px-2.5 py-1.5 border border-gray-200 bg-white text-xs">
+                                  <span className="font-medium truncate text-gray-700">{sm.alias === '—' ? 'Unattributed / past calls' : sm.alias}</span>
+                                  <span className="flex-shrink-0 tabular-nums text-gray-500">
+                                    {sm.connected}/{sm.attempts} · {sm.attempts ? Math.round((sm.connected / sm.attempts) * 100) : 0}%
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {s.hotLeads.length > 0 && (
+                          <div>
+                            <p className="text-[11px] text-gray-400 font-medium mb-1">★ Hot leads — {s.hotLeads.length}</p>
+                            <div className="space-y-1">
+                              {s.hotLeads.map(h => (
+                                <div key={h.phone} className="flex items-center justify-between text-xs border-b border-gray-50 last:border-0 py-1">
+                                  <span className="text-gray-800 truncate">{h.name}</span>
+                                  <a href={`tel:+91${h.phone}`} className="text-gray-500 flex-shrink-0">+91 {h.phone}</a>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </>
               )}
             </div>

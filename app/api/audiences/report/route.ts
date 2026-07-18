@@ -79,5 +79,64 @@ export async function GET(req: NextRequest) {
     call.push({ campaignId: c.id, name: c.name, isActive: c.is_active, cards: cards ?? 0, attempts, connected, createdAt: c.created_at })
   }
 
-  return Response.json({ chat, call })
+  // ── What actually happened on those calls ──
+  // Mirrors /admin/calls/report (topics, intent, salesman, hot leads) but scoped
+  // to this audience's cohorts instead of a date range. Counts are over ALL calls
+  // ever made under them, so the picture matches the campaign's whole life.
+  const campIds = ((callCamps ?? []) as Array<{ id: string }>).map(c => c.id)
+  let callSummary: Record<string, unknown> | null = null
+  if (campIds.length > 0) {
+    interface LogRow {
+      success: boolean | null
+      topics: string[] | null
+      intent: string | null
+      salesman_id: string | null
+      salesman: { alias: string } | { alias: string }[] | null
+      customer: { name: string; phone: string; is_hot_lead: boolean } | { name: string; phone: string; is_hot_lead: boolean }[] | null
+    }
+    const logs: LogRow[] = []
+    for (let from = 0; ; from += 1000) {
+      const { data } = await supabaseAdmin.from('wa_b_call_logs')
+        .select('success, topics, intent, salesman_id, salesman:salesmen(alias), customer:wa_b_customers!inner(name,phone,is_hot_lead), task:wa_b_call_tasks!inner(campaign_id)')
+        .in('task.campaign_id', campIds).range(from, from + 999)
+      const rows = (data ?? []) as unknown as LogRow[]
+      logs.push(...rows)
+      if (rows.length < 1000) break
+    }
+    const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? (v[0] ?? null) : v)
+
+    const topics: Record<string, number> = {}
+    const intents: Record<string, number> = {}
+    const bySalesman = new Map<string, { alias: string; attempts: number; connected: number }>()
+    const hot = new Map<string, { name: string; phone: string }>()
+    let attempts = 0, connected = 0, noAnswer = 0, pending = 0
+
+    for (const l of logs) {
+      attempts++
+      if (l.success === true) connected++
+      else if (l.success === false) noAnswer++
+      else pending++
+
+      // Topics are only meaningful on a connected call (that's when they're asked).
+      if (l.success === true) for (const t of l.topics ?? []) topics[t] = (topics[t] ?? 0) + 1
+      if (l.intent) intents[l.intent] = (intents[l.intent] ?? 0) + 1
+
+      const sid = l.salesman_id ?? '—'
+      let s = bySalesman.get(sid)
+      if (!s) { s = { alias: one(l.salesman)?.alias ?? '—', attempts: 0, connected: 0 }; bySalesman.set(sid, s) }
+      s.attempts++; if (l.success === true) s.connected++
+
+      const cust = one(l.customer)
+      if (cust?.is_hot_lead) hot.set(cust.phone, { name: cust.name, phone: cust.phone })
+    }
+
+    callSummary = {
+      attempts, connected, noAnswer, pending,
+      topics, intents,
+      hotLeads: [...hot.values()],
+      bySalesman: [...bySalesman.values()].sort((a, b) => b.attempts - a.attempts),
+    }
+  }
+
+  return Response.json({ chat, call, callSummary })
 }
