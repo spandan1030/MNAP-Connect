@@ -49,6 +49,23 @@ export default function AudiencesPage() {
   const [seeding, setSeeding] = useState(false)
   const [seedMsg, setSeedMsg] = useState<string | null>(null)
 
+  // insights
+  type Report = {
+    chat: Array<{ campaignId: string; name: string; template: string | null; total: number; sent: number; failed: number; skipped: number; delivered: number; read: number; createdAt: string }>
+    call: Array<{ campaignId: string; name: string; isActive: boolean; cards: number; attempts: number; connected: number; createdAt: string }>
+  }
+  const [reportFor, setReportFor] = useState<Audience | null>(null)
+  const [report, setReport] = useState<Report | null>(null)
+  const [reportLoading, setReportLoading] = useState(false)
+
+  async function openReport(a: Audience) {
+    setReportFor(a); setReport(null); setReportLoading(true)
+    try {
+      const res = await fetch(`/api/audiences/report?id=${a.id}`)
+      setReport(await res.json())
+    } catch { /* ignore */ } finally { setReportLoading(false) }
+  }
+
   // activation sheet
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [activate, setActivate] = useState<Audience | null>(null)
@@ -75,6 +92,18 @@ export default function AudiencesPage() {
   function openActivate(a: Audience) {
     setActivate(a); setChannel('chat'); setActTemplateId(''); setActLimit('')
     setSubOpen(false); setSubFilter({}); setActError(null); setActResult(null)
+  }
+  async function adoptActiveCall() {
+    if (!activate) return
+    setActBusy(true); setActError(null); setActResult(null)
+    try {
+      const res = await fetch('/api/audiences/adopt-active-call', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audienceId: activate.id }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setActError(data.error ?? 'Could not adopt.'); return }
+      setActResult(`Adopted "${data.adopted}" — this audience now owns that calling cohort (history preserved).`)
+    } catch { setActError('Network error.') } finally { setActBusy(false) }
   }
   async function runActivation() {
     if (!activate) return
@@ -231,6 +260,7 @@ export default function AudiencesPage() {
               </button>
               <button onClick={() => openActivate(a)} disabled={a.member_count === 0}
                 className="text-[11px] font-semibold text-white bg-green-600 px-2.5 py-1 rounded-lg disabled:opacity-40">Activate</button>
+              <button onClick={() => openReport(a)} className="text-[11px] font-medium text-gray-700 border border-gray-200 px-2.5 py-1 rounded-lg">Insights</button>
               <span className="flex-1" />
               <button onClick={() => remove(a)} className="text-[11px] text-red-500 px-2 py-1 rounded-lg hover:bg-red-50">Delete</button>
             </div>
@@ -310,7 +340,14 @@ export default function AudiencesPage() {
                   </div>
                 </>
               ) : (
-                <p className="text-[11px] text-gray-500">Pushing to calling <b>replaces</b> the current calling deck with this cohort. Non-callable / do-not-call members are skipped.</p>
+                <div className="space-y-2">
+                  <p className="text-[11px] text-gray-500">Pushing to calling <b>replaces</b> the current calling deck with this cohort. Non-callable / do-not-call members are skipped. Re-pushing this audience later keeps already-called cards (no re-calling).</p>
+                  <button onClick={adoptActiveCall} disabled={actBusy}
+                    className="text-[11px] font-medium text-gray-700 border border-gray-200 px-2.5 py-1.5 rounded-lg w-full">
+                    Adopt the current live calling cohort into this audience
+                  </button>
+                  <p className="text-[10px] text-gray-400">One-time: links your existing live call campaign (e.g. Lapsed Winback) to this audience, preserving its call history &amp; already-contacted status.</p>
+                </div>
               )}
 
               {/* optional sub-filter */}
@@ -339,6 +376,67 @@ export default function AudiencesPage() {
           </div>
         </div>
       )}
+
+      {/* Insights sheet — message funnel + call outcomes for this audience */}
+      {reportFor && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={() => setReportFor(null)}>
+          <div className="bg-white rounded-t-2xl flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-4 pb-3 border-b border-gray-100 flex items-center justify-between">
+              <p className="font-bold text-gray-900 truncate">Insights — {reportFor.name}</p>
+              <button onClick={() => setReportFor(null)} className="text-gray-400 text-xl leading-none">×</button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
+              {reportLoading && <p className="text-sm text-gray-400 text-center py-6">Loading…</p>}
+              {report && !reportLoading && (
+                <>
+                  <div>
+                    <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">💬 Chat</p>
+                    {report.chat.length === 0 ? <p className="text-xs text-gray-400">No chat sends yet.</p> : (
+                      <div className="space-y-2">
+                        {report.chat.map(c => (
+                          <div key={c.campaignId} className="border border-gray-100 rounded-lg p-2.5">
+                            <p className="text-xs font-medium text-gray-800 truncate">{c.name}{c.template ? ` · ${c.template}` : ''}</p>
+                            <div className="grid grid-cols-5 gap-1 mt-1.5 text-center">
+                              <Metric label="Sent" v={c.sent} /><Metric label="Deliv" v={c.delivered} />
+                              <Metric label="Read" v={c.read} /><Metric label="Failed" v={c.failed} accent="text-red-500" />
+                              <Metric label="Skip" v={c.skipped} accent="text-amber-600" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">📞 Calling</p>
+                    {report.call.length === 0 ? <p className="text-xs text-gray-400">No calling cohorts yet.</p> : (
+                      <div className="space-y-2">
+                        {report.call.map(c => (
+                          <div key={c.campaignId} className="border border-gray-100 rounded-lg p-2.5">
+                            <p className="text-xs font-medium text-gray-800 truncate">{c.name}{c.isActive ? ' · live' : ''}</p>
+                            <div className="grid grid-cols-3 gap-1 mt-1.5 text-center">
+                              <Metric label="Cards" v={c.cards} /><Metric label="Called" v={c.attempts} />
+                              <Metric label="Connected" v={c.connected} accent="text-green-700" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Metric({ label, v, accent }: { label: string; v: number; accent?: string }) {
+  return (
+    <div className="bg-gray-50 rounded-md py-1">
+      <p className={`text-sm font-bold ${accent ?? 'text-gray-900'}`}>{v.toLocaleString('en-IN')}</p>
+      <p className="text-[9px] text-gray-400">{label}</p>
     </div>
   )
 }

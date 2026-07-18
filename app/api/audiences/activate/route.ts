@@ -141,22 +141,33 @@ export async function POST(req: NextRequest) {
     const customerIds = [...ids.values()]
     if (customerIds.length === 0) return Response.json({ error: 'None of these members are callable (no Type-B / all do-not-call).' }, { status: 400 })
 
-    // One live calling cohort at a time — deactivate the rest (data preserved).
+    // Reuse this audience's existing call campaign if it has one — that preserves
+    // already-called / DNC card status (task upsert ignores existing), so nobody is
+    // re-called. Otherwise create one. Either way it becomes the single live cohort.
+    const { data: existingCamp } = await supabaseAdmin.from('wa_b_call_campaigns')
+      .select('id').eq('audience_id', audienceId).order('created_at', { ascending: false }).limit(1).maybeSingle()
     await supabaseAdmin.from('wa_b_call_campaigns').update({ is_active: false }).eq('is_active', true)
-    const { data: camp, error: cErr } = await supabaseAdmin.from('wa_b_call_campaigns')
-      .insert({ name: aud.name, filter_json: aud.filter, audience_id: audienceId, created_by: user.id, is_active: true })
-      .select('id').single()
-    if (cErr || !camp) return Response.json({ error: cErr?.message ?? 'Could not create call cohort.' }, { status: 500 })
+
+    let campId = existingCamp?.id as string | undefined
+    if (campId) {
+      await supabaseAdmin.from('wa_b_call_campaigns').update({ is_active: true }).eq('id', campId)
+    } else {
+      const { data: camp, error: cErr } = await supabaseAdmin.from('wa_b_call_campaigns')
+        .insert({ name: aud.name, filter_json: aud.filter, audience_id: audienceId, created_by: user.id, is_active: true })
+        .select('id').single()
+      if (cErr || !camp) return Response.json({ error: cErr?.message ?? 'Could not create call cohort.' }, { status: 500 })
+      campId = camp.id as string
+    }
 
     let taskCount = 0
     for (let i = 0; i < customerIds.length; i += 500) {
-      const chunk = customerIds.slice(i, i + 500).map(cid => ({ campaign_id: camp.id, customer_id: cid }))
+      const chunk = customerIds.slice(i, i + 500).map(cid => ({ campaign_id: campId, customer_id: cid }))
       const { error: tErr } = await supabaseAdmin.from('wa_b_call_tasks')
         .upsert(chunk, { onConflict: 'campaign_id,customer_id', ignoreDuplicates: true })
       if (tErr) return Response.json({ error: tErr.message }, { status: 500 })
       taskCount += chunk.length
     }
-    return Response.json({ channel: 'call', campaignId: camp.id, taskCount, callable: customerIds.length, members: phones.length })
+    return Response.json({ channel: 'call', campaignId: campId, taskCount, callable: customerIds.length, members: phones.length })
   }
 
   return Response.json({ error: 'Pick a channel (chat or call).' }, { status: 400 })
