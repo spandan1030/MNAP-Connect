@@ -529,18 +529,18 @@ export default function CallsPage() {
               </button>
               <div className="flex items-center gap-1 shrink-0">
                 {override && <button onClick={() => setOverride(null)} className="text-[11px] text-gray-500 border border-gray-200 rounded-lg px-2 py-1">Back to list</button>}
-                {/* hot-lead star — appears only once the call is marked connected
-                    (success phase now, or a prior connected call on this customer) */}
-                {(phase === 'success' || (summary?.successes ?? 0) > 0) && (
-                  <button onClick={toggleHotLead} title="Hot lead"
-                    aria-label={current.hot ? 'Remove hot-lead star' : 'Mark as hot lead'} className="p-1">
-                    <svg className={cn('w-6 h-6', current.hot ? 'text-amber-400' : 'text-gray-300')}
-                      fill={current.hot ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                      <path strokeLinecap="round" strokeLinejoin="round"
-                        d="M11.48 3.5a.56.56 0 011.04 0l2.12 4.66 5.1.53c.49.05.69.66.32 1l-3.8 3.44 1.06 5.02c.1.48-.42.85-.85.6L12 16.9l-4.47 2.4c-.43.24-.95-.13-.85-.6l1.06-5.03-3.8-3.43a.56.56 0 01.32-1l5.1-.53 2.12-4.66z" />
-                    </svg>
-                  </button>
-                )}
+                {/* hot-lead star — ALWAYS shown. It used to appear only after the
+                    call was marked connected, which meant an already-starred
+                    customer showed no star when the salesman picked up the card —
+                    exactly when knowing they're hot matters most. */}
+                <button onClick={toggleHotLead} title="Hot lead"
+                  aria-label={current.hot ? 'Remove hot-lead star' : 'Mark as hot lead'} className="p-1">
+                  <svg className={cn('w-6 h-6', current.hot ? 'text-amber-400' : 'text-gray-300')}
+                    fill={current.hot ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round"
+                      d="M11.48 3.5a.56.56 0 011.04 0l2.12 4.66 5.1.53c.49.05.69.66.32 1l-3.8 3.44 1.06 5.02c.1.48-.42.85-.85.6L12 16.9l-4.47 2.4c-.43.24-.95-.13-.85-.6l1.06-5.03-3.8-3.43a.56.56 0 01.32-1l5.1-.53 2.12-4.66z" />
+                  </svg>
+                </button>
                 {/* per-card three-dot menu */}
                 <div className="relative">
                   <button onClick={() => setCardMenu(o => !o)} aria-label="Card menu"
