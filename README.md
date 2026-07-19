@@ -44,7 +44,7 @@ at the top.
 | **README.md** (this file) | Entry point: overview, setup, migrations, doc index | Current |
 | **`MNAP_CONNECT_REFERENCE.md`** | ⭐ **System of record** — every table, module and migration; build phases 1–13 | Current |
 | **`GLOSSARY.md`** | Plain-English definitions: marker vs signal, feature, view, audience, rule, opt-out vs suppression | Current |
-| **`../MNAP_DATA_ATLAS.html`** | Visual tour of the data — the marker/signal loop, the audience engine, the full feature dictionary | Current to `wa_047` |
+| **`../MNAP_DATA_ATLAS.html`** | Visual tour — the marker/signal loop, the audience engine, the feature dictionary, and **§12 the feature & filter review guide** (every filter: label → column → how it's computed → what to ask of it) | Current to `wa_047` |
 | **`ENGAGEMENT_SYSTEM.md`** | WhatsApp engagement layer **and** Catalogue/Inventory/Purchase operations (§6) | Current for its scope; predates the audience engine |
 | **`LEADGEN_PHASE1_PLAN.md`** | Lead-gen decisions log — *why* the design is what it is | Built; L1/L3 re-architected — see its header note |
 | **`INTERVENTION_STRATEGY.md`** | Type B business rules, segment definitions, profiling architecture | Current (strategy) |
