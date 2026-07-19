@@ -1,6 +1,29 @@
 # Lead-Gen Phase 1 — Features → Audiences → Campaigns
 
-_Planning doc. Created 2026-07-17. Status: **design, not yet built.** Nothing here is built until the build checklist (§9) is approved._
+_Planning doc. Created 2026-07-17. Status: **BUILT AND LIVE** (`wa_040`–`wa_047`, complete 2026-07-19)._
+
+> **Read this first — the plan below is the decisions log, not the current design.**
+> Everything in §1–§9 was built, but **L1 and L3 were re-architected on 2026-07-19** and no
+> longer work the way this doc describes. The plan assumed a feature store assembled per
+> filter-family and intersected in app memory (AND-only). What shipped instead:
+>
+> - **L1** is the `customer_features` **view** — one row per person, one column per feature.
+>   The migration is **generated** by `scripts/gen-feature-view.mjs` from `lib/signals.ts`;
+>   never hand-edit it. Each of the 23 interests carries its **list of sources**, because
+>   source decides consent (rate-from-chat *is* the daily-rate subscription; rate-from-a-call
+>   is a salesman's note).
+> - **L3** is a **rule builder** (`lib/audiences/rules.ts`): groups OR'd, rules within a
+>   group AND'd, any rule negatable, whole tree → **one query**. AND/OR/NOT and every column
+>   are available, which this plan's filter model could not do. The legacy resolver is deleted.
+> - `wa_audiences.rules` was added alongside the old `filter` column — legacy audiences
+>   still resolve, so nothing was invalidated.
+>
+> Live behaviour is documented in **`MNAP_CONNECT_REFERENCE.md` (Phases 10–13)**,
+> **`MNAP_DATA_ATLAS.html` §09–11** and **`GLOSSARY.md`**. Use those, not this doc, to
+> answer "how does it work now". Keep this one for *why* the decisions were made.
+>
+> Still open from §9: auto/scheduled sending (manual today), precise `newly_lapsed` change
+> flag, ad-lead replied/converted tracking, and wiring the Meta/WhatsApp ads connection.
 
 Goal: turn everything we know about a customer (sales + calls + chat + walk-in) into a **modular lead-gen engine** — define audiences once, activate them on any channel (chat / call / ad), report one funnel. Drive **in-store footfall + lifetime value** (hyper-local, never online sales).
 

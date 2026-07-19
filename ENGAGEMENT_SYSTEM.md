@@ -4,10 +4,12 @@
 plus the Catalogue / Inventory / Purchase operations modules (section 6).*
 *Last updated: 17 June 2026.*
 
-> **Supersedes the stale parts of `MNAP_CONNECT_REFERENCE.md`.** That document still
-> describes `wa.me` deep links with "no API". That is no longer true — the app runs on the
-> **real WhatsApp Business Cloud API** (Meta Graph v22.0) with inbound webhooks, a messaging
-> inbox, auto-engagement, and broadcasting.
+> **Scope note (updated 2026-07-19).** This doc covers the **WhatsApp engagement layer and the
+> Catalogue / Inventory / Purchase modules**, and is current for those. It predates the
+> audience engine — for **audiences, features, rules, calling and lead-gen**, and for the
+> migration log generally, `MNAP_CONNECT_REFERENCE.md` is now the system of record and is kept
+> current after every change. (The older claim that this file supersedes that one no longer
+> holds; the `wa.me`/"no API" sections it referred to have since been corrected there.)
 
 ---
 

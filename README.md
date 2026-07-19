@@ -25,8 +25,12 @@ Mobile-first WhatsApp customer-engagement + store-operations app for **M N Alank
    party tracking. Built to scale to 5,000+ products (server-side pagination, DB-side filtering,
    indexes, lazy thumbnails).
 4. **Type B intervention CRM** — flexible prospect profiling + a 9-segment client-side
-   segmentation engine. *Data layer built; activation (daily dashboard, journeys, campaigns) is
-   the main pending phase.*
+   segmentation engine, plus the **cold-call module** (calling deck, outcomes, call history)
+   and the **walk-in module**.
+5. **Audiences & lead-gen** — a `customer_features` view holding **one row per person, one
+   column per feature**, and a **rule builder** over it (AND / OR / NOT). An audience is a
+   saved set of rules and a set of people — *not* a channel; you choose chat, call or ad when
+   you **activate** it, and one funnel reports all three. 21 audiences seeded.
 
 ---
 
@@ -38,16 +42,19 @@ at the top.
 | Doc | Scope | Status |
 |---|---|---|
 | **README.md** (this file) | Entry point: overview, setup, migrations, doc index | Current |
-| **`ENGAGEMENT_SYSTEM.md`** | ⭐ Authoritative current-state reference + roadmap: WhatsApp engagement layer **and** Catalogue/Inventory/Purchase operations (§6) | Current |
-| **`MNAP_CONNECT_REFERENCE.md`** | Foundational reference: Type A/B data model, segmentation, page structure | Partially historical — `wa.me`/"no API" sections superseded by `ENGAGEMENT_SYSTEM.md` |
-| **`INTERVENTION_STRATEGY.md`** | Type B business rules, segment definitions, profiling architecture | Current (strategy); module not yet activated |
+| **`MNAP_CONNECT_REFERENCE.md`** | ⭐ **System of record** — every table, module and migration; build phases 1–13 | Current |
+| **`GLOSSARY.md`** | Plain-English definitions: marker vs signal, feature, view, audience, rule, opt-out vs suppression | Current |
+| **`../MNAP_DATA_ATLAS.html`** | Visual tour of the data — the marker/signal loop, the audience engine, the full feature dictionary | Current to `wa_047` |
+| **`ENGAGEMENT_SYSTEM.md`** | WhatsApp engagement layer **and** Catalogue/Inventory/Purchase operations (§6) | Current for its scope; predates the audience engine |
+| **`LEADGEN_PHASE1_PLAN.md`** | Lead-gen decisions log — *why* the design is what it is | Built; L1/L3 re-architected — see its header note |
+| **`INTERVENTION_STRATEGY.md`** | Type B business rules, segment definitions, profiling architecture | Current (strategy) |
 | **`INTERVENTION_MODULE_DISCUSSION.md`** | Decision log for the Type B module | Historical |
 | **`WHATSAPP_CONFIG.md`** | WhatsApp API config (non-sensitive) + required env vars | Current |
 | **`AGENTS.md` / `CLAUDE.md`** | Agent/AI working rules for this repo | Current |
 
-**Rule of thumb:** for "what exists today and why," read `ENGAGEMENT_SYSTEM.md`. For the
-underlying Type A/B data model and segmentation rules, read `MNAP_CONNECT_REFERENCE.md` +
-`INTERVENTION_STRATEGY.md`.
+**Rule of thumb:** for "how does it work today," read `MNAP_CONNECT_REFERENCE.md` — it is kept
+current after every code or schema change. If a term is unfamiliar, `GLOSSARY.md`. If you'd
+rather see it than read it, `MNAP_DATA_ATLAS.html`. The planning docs explain *why*, not *what*.
 
 ---
 
