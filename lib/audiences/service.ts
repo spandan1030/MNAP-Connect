@@ -1,5 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { resolveCohortPhones, tenDigit } from '@/lib/reach/resolve'
+import { resolveRuleTree } from './resolve-rules'
+import { isEmptyTree, type RuleTree } from './rules'
 import type { ReachFilter } from '@/lib/types'
 
 // Audience service — resolve a saved audience's filter and MATERIALISE its members
@@ -41,10 +43,11 @@ export interface RefreshResult { members: number; added: number; removed: number
 // (used after its filter is edited).
 export async function refreshAudienceMembers(audienceId: string, force = false): Promise<RefreshResult> {
   const { data: aud } = await supabaseAdmin
-    .from('wa_audiences').select('id, filter, is_dynamic').eq('id', audienceId).maybeSingle()
+    .from('wa_audiences').select('id, filter, rules, is_dynamic').eq('id', audienceId).maybeSingle()
   if (!aud) return { members: 0, added: 0, removed: 0, error: 'Audience not found' }
 
   const filter = (aud.filter ?? {}) as ReachFilter
+  const rules = (aud.rules ?? null) as RuleTree | null
   const isDynamic = !!aud.is_dynamic
   const existing = await existingMemberPhones(audienceId)
 
@@ -53,7 +56,11 @@ export async function refreshAudienceMembers(audienceId: string, force = false):
     return { members: existing.size, added: 0, removed: 0 }
   }
 
-  const { phones: set, error } = await resolveCohortPhones(filter)
+  // A rule tree wins when present; otherwise the legacy filter. Both end up as
+  // a set of phones, so everything downstream is identical.
+  const { phones: set, error } = !isEmptyTree(rules)
+    ? await resolveRuleTree(rules!)
+    : await resolveCohortPhones(filter)
   if (error) return { members: existing.size, added: 0, removed: 0, error }
 
   const now = [...set]

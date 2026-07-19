@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { refreshAudienceMembers } from '@/lib/audiences/service'
+import { isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
 import type { ReachFilter } from '@/lib/types'
 
 // Edit a saved audience.  POST { id, name?, description?, filter?, isDynamic?, isActive? }
@@ -20,7 +21,8 @@ export async function POST(req: NextRequest) {
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = (await req.json().catch(() => ({}))) as {
-    id?: string; name?: string; description?: string; filter?: ReachFilter; isDynamic?: boolean; isActive?: boolean
+    id?: string; name?: string; description?: string; filter?: ReachFilter
+    rules?: RuleTree; isDynamic?: boolean; isActive?: boolean
   }
   if (!body.id) return Response.json({ error: 'Missing id' }, { status: 400 })
 
@@ -33,9 +35,13 @@ export async function POST(req: NextRequest) {
   if (body.description !== undefined) patch.description = body.description.trim() || null
   if (body.isActive !== undefined) patch.is_active = !!body.isActive
 
-  const filterChanged = body.filter !== undefined
+  const rulesChanged = body.rules !== undefined
+  const filterChanged = body.filter !== undefined || rulesChanged
   const dynamicChanged = body.isDynamic !== undefined
-  if (filterChanged) patch.filter = body.filter
+  if (body.filter !== undefined) patch.filter = body.filter
+  // Saving an empty tree clears it and hands the audience back to its legacy
+  // filter, rather than leaving a rule tree that matches nobody.
+  if (rulesChanged) patch.rules = isEmptyTree(body.rules) ? null : body.rules
   if (dynamicChanged) patch.is_dynamic = !!body.isDynamic && !(body.filter?.phones?.length)
 
   if (Object.keys(patch).length === 0) return Response.json({ error: 'Nothing to update.' }, { status: 400 })

@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { refreshAudienceMembers } from '@/lib/audiences/service'
+import { isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
 import type { ReachFilter } from '@/lib/types'
 
 // Audience library.
@@ -34,18 +35,22 @@ export async function POST(req: NextRequest) {
   const user = await auth()
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { name, description, filter, isDynamic } = (await req.json().catch(() => ({}))) as {
-    name?: string; description?: string; filter?: ReachFilter; isDynamic?: boolean
+  const { name, description, filter, rules, isDynamic } = (await req.json().catch(() => ({}))) as {
+    name?: string; description?: string; filter?: ReachFilter; rules?: RuleTree; isDynamic?: boolean
   }
   const nm = (name ?? '').trim()
   if (!nm) return Response.json({ error: 'Give the audience a name.' }, { status: 400 })
   const f: ReachFilter = filter ?? {}
+  const hasRules = !isEmptyTree(rules)
+  if (!hasRules && Object.keys(f).length === 0) {
+    return Response.json({ error: 'Add at least one rule.' }, { status: 400 })
+  }
   // A pasted phone list can only be a fixed snapshot.
   const dynamic = !!isDynamic && !(f.phones?.length)
 
   const { data: aud, error } = await supabaseAdmin.from('wa_audiences').insert({
     name: nm, description: (description ?? '').trim() || null,
-    filter: f, is_dynamic: dynamic, created_by: user.id,
+    filter: f, rules: hasRules ? rules : null, is_dynamic: dynamic, created_by: user.id,
   }).select('id').single()
   if (error || !aud) return Response.json({ error: error?.message ?? 'Could not create audience.' }, { status: 500 })
 

@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
   if (!id) return Response.json({ error: 'Missing id' }, { status: 400 })
 
   const { data: audience, error } = await supabaseAdmin.from('wa_audiences')
-    .select('id, name, description, filter, is_dynamic, is_active, is_seeded, member_count, last_refreshed_at, created_at')
+    .select('id, name, description, filter, rules, is_dynamic, is_active, is_seeded, member_count, last_refreshed_at, created_at')
     .eq('id', id).maybeSingle()
   if (error) return Response.json({ error: error.message }, { status: 500 })
   if (!audience) return Response.json({ error: 'Audience not found' }, { status: 404 })

@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import Navbar from '@/components/ui/Navbar'
 import FilterBuilder from '@/components/reach/FilterBuilder'
+import RuleBuilder from '@/components/audiences/RuleBuilder'
+import { emptyTree, isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
 import { createClient } from '@/lib/supabase/client'
 import { CALL_TOPICS, CALL_INTENTS } from '@/lib/calls'
 import { cn } from '@/lib/utils'
@@ -44,6 +46,11 @@ export default function AudiencesPage() {
   const [description, setDescription] = useState('')
   const [filter, setFilter] = useState<ReachFilter>({})
   const [isDynamic, setIsDynamic] = useState(false)
+  // Rule tree is how audiences are authored now. `useRules` is false only when
+  // editing an audience saved in the older filter format — those keep their own
+  // editor rather than being silently converted.
+  const [rules, setRules] = useState<RuleTree>(emptyTree())
+  const [useRules, setUseRules] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState<string | null>(null)
@@ -173,6 +180,7 @@ export default function AudiencesPage() {
 
   function openNew() {
     setEditing('new'); setName(''); setDescription(''); setFilter({}); setIsDynamic(false); setError(null)
+    setRules(emptyTree()); setUseRules(true)
   }
   async function openEdit(a: Audience) {
     setError(null)
@@ -182,21 +190,25 @@ export default function AudiencesPage() {
     setEditing(a.id)
     setName(aud.name); setDescription(aud.description ?? '')
     setFilter((aud.filter ?? {}) as ReachFilter); setIsDynamic(!!aud.is_dynamic)
+    const saved = (aud.rules ?? null) as RuleTree | null
+    setUseRules(!isEmptyTree(saved)); setRules(saved ?? emptyTree())
   }
   function close() { setEditing(null); setError(null) }
 
   async function save() {
     const nm = name.trim()
     if (!nm) { setError('Give the audience a name.'); return }
-    if (Object.keys(filter).length === 0) { setError('Add at least one filter.'); return }
+    if (useRules ? isEmptyTree(rules) : Object.keys(filter).length === 0) { setError('Add at least one rule.'); return }
     setBusy(true); setError(null)
     try {
       const isNew = editing === 'new'
       const res = await fetch(isNew ? '/api/audiences' : '/api/audiences/update', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isNew
-          ? { name: nm, description, filter, isDynamic }
-          : { id: editing, name: nm, description, filter, isDynamic }),
+        body: JSON.stringify({
+          ...(isNew ? {} : { id: editing }),
+          name: nm, description, isDynamic,
+          ...(useRules ? { rules } : { filter }),
+        }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Could not save.'); setBusy(false); return }
@@ -292,7 +304,19 @@ export default function AudiencesPage() {
               <input className="input text-sm" placeholder="Short description (optional)"
                 value={description} onChange={e => setDescription(e.target.value)} />
 
-              <FilterBuilder filter={filter} campaigns={campaigns} topics={topics} onChange={setFilter} />
+              {useRules ? (
+                <RuleBuilder tree={rules} onChange={setRules} dynamicOptions={{
+                  call_campaigns: campaigns.map(c => ({ value: c.id, label: c.name })),
+                  topics: topics.map(t => ({ value: t.id, label: t.name })),
+                }} />
+              ) : (
+                <>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 mb-2">
+                    <p className="text-[11px] text-amber-800">This audience uses the older filter format. It keeps working exactly as-is — editing it here changes nothing about how it resolves.</p>
+                  </div>
+                  <FilterBuilder filter={filter} campaigns={campaigns} topics={topics} onChange={setFilter} />
+                </>
+              )}
 
               <label className="flex items-start gap-2 text-[11px] text-gray-600 pt-1">
                 <input type="checkbox" className="mt-0.5" checked={isDynamic} onChange={e => setIsDynamic(e.target.checked)} />
