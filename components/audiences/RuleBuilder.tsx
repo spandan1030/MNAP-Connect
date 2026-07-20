@@ -5,6 +5,7 @@ import {
   FIELDS, FIELD_BY_KEY, opsFor, INTEREST_SOURCE_OPTIONS,
   type Rule, type RuleGroup, type RuleTree, type RuleOp, type FieldDef,
 } from '@/lib/audiences/rules'
+import { DATASETS, type Interval, type IntervalDataset } from '@/lib/audiences/intervals'
 
 // The rule builder. Boxes are OR'd, rules inside a box are AND'd, and any rule
 // can be negated — that is the entire grammar, and it is visible on screen
@@ -30,7 +31,7 @@ export default function RuleBuilder({ tree, onChange, dynamicOptions }: {
   // Debounced live counts — one request per settled edit, not per keystroke.
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current)
-    const hasAny = tree.groups?.some(g => g.rules?.length)
+    const hasAny = tree.groups?.some(g => g.rules?.length) || tree.intervals?.length
     if (!hasAny) { setCounts(null); return }
     setCounting(true)
     timer.current = setTimeout(async () => {
@@ -46,11 +47,14 @@ export default function RuleBuilder({ tree, onChange, dynamicOptions }: {
   }, [tree])
 
   const groups = tree.groups?.length ? tree.groups : [{ rules: [] }]
+  const intervals = tree.intervals ?? []
 
+  // Always spread the existing tree: editing a group must not silently drop the
+  // intervals (and vice versa).
   const setGroup = useCallback((gi: number, g: RuleGroup) => {
     const next = groups.map((old, i) => (i === gi ? g : old))
-    onChange({ groups: next })
-  }, [groups, onChange])
+    onChange({ ...tree, groups: next })
+  }, [groups, onChange, tree])
 
   const setRule = (gi: number, ri: number, r: Rule) =>
     setGroup(gi, { rules: groups[gi].rules.map((old, i) => (i === ri ? r : old)) })
@@ -60,11 +64,13 @@ export default function RuleBuilder({ tree, onChange, dynamicOptions }: {
 
   const removeRule = (gi: number, ri: number) => {
     const rules = groups[gi].rules.filter((_, i) => i !== ri)
-    if (!rules.length && groups.length > 1) onChange({ groups: groups.filter((_, i) => i !== gi) })
+    if (!rules.length && groups.length > 1) onChange({ ...tree, groups: groups.filter((_, i) => i !== gi) })
     else setGroup(gi, { rules })
   }
 
-  const addGroup = () => onChange({ groups: [...groups, { rules: [] }] })
+  const addGroup = () => onChange({ ...tree, groups: [...groups, { rules: [] }] })
+
+  const setIntervals = (next: Interval[]) => onChange({ ...tree, intervals: next })
 
   return (
     <div className="space-y-2">
@@ -114,15 +120,125 @@ export default function RuleBuilder({ tree, onChange, dynamicOptions }: {
         </div>
       ))}
 
+      {/* ── Intervals: a different question, so a visibly different section ── */}
+      {intervals.length > 0 && (
+        <div className="flex items-center gap-2 my-2">
+          <div className="h-px flex-1 bg-gray-300" />
+          <span className="text-[10px] font-bold text-gray-600 tracking-wider px-2 py-0.5 rounded-full border border-gray-300 bg-white">AND</span>
+          <div className="h-px flex-1 bg-gray-300" />
+        </div>
+      )}
+
+      {intervals.map((iv, i) => (
+        <IntervalRow
+          key={i}
+          interval={iv}
+          onChange={next => setIntervals(intervals.map((old, j) => (j === i ? next : old)))}
+          onRemove={() => setIntervals(intervals.filter((_, j) => j !== i))}
+        />
+      ))}
+
       <div className="flex items-center justify-between pt-1">
-        <button onClick={addGroup}
-          className="text-[11px] font-semibold text-gray-600 border border-gray-200 bg-white rounded-lg px-2.5 py-1">
-          + OR another group
-        </button>
+        <div className="flex gap-1.5">
+          <button onClick={addGroup}
+            className="text-[11px] font-semibold text-gray-600 border border-gray-200 bg-white rounded-lg px-2.5 py-1">
+            + OR another group
+          </button>
+          <button onClick={() => setIntervals([...intervals, { dataset: 'calls', days: 30 }])}
+            className="text-[11px] font-semibold text-blue-700 border border-blue-200 bg-white rounded-lg px-2.5 py-1">
+            + Time window
+          </button>
+        </div>
         <span className="text-[11px] font-bold text-gray-700">
           {counting ? 'counting…' : counts ? `${counts.total.toLocaleString('en-IN')} people match` : ''}
         </span>
       </div>
+    </div>
+  )
+}
+
+// ── one time window ────────────────────────────────────────────────────────
+// Kept visually distinct from a rule because it is a different question: a rule
+// asks about the person, this asks whether something HAPPENED in a window.
+function IntervalRow({ interval, onChange, onRemove }: {
+  interval: Interval
+  onChange: (iv: Interval) => void
+  onRemove: () => void
+}) {
+  const ds = DATASETS.find(d => d.key === interval.dataset)
+  const relative = typeof interval.days === 'number'
+
+  // Switching window style clears the other style's fields, so a stale date
+  // cannot linger invisibly behind a "last N days" choice.
+  const setRelative = (on: boolean) =>
+    onChange(on
+      ? { ...interval, days: 30, from: undefined, to: undefined }
+      : { ...interval, days: undefined, from: undefined, to: undefined })
+
+  return (
+    <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-2.5 space-y-2">
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => onChange({ ...interval, not: !interval.not })}
+          title="Flip to: did NOT happen in this window"
+          className={`text-[10px] font-bold rounded px-1.5 py-1 border ${
+            interval.not ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-400 border-gray-200'}`}>
+          NOT
+        </button>
+
+        <select
+          className="input text-sm flex-1"
+          value={interval.dataset}
+          onChange={e => onChange({ dataset: e.target.value as IntervalDataset, days: 30 })}>
+          {DATASETS.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
+        </select>
+
+        <button onClick={onRemove} className="text-gray-400 px-1.5 text-sm" title="Remove">×</button>
+      </div>
+
+      <div className="flex items-center gap-1.5">
+        <button onClick={() => setRelative(true)}
+          className={`text-[10px] font-semibold rounded-lg px-2 py-1 border ${
+            relative ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+          Last N days
+        </button>
+        <button onClick={() => setRelative(false)}
+          className={`text-[10px] font-semibold rounded-lg px-2 py-1 border ${
+            !relative ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+          Between dates
+        </button>
+      </div>
+
+      {relative ? (
+        <div className="flex items-center gap-2">
+          <input type="number" min={1} className="input text-sm w-24"
+            value={interval.days ?? ''}
+            onChange={e => onChange({ ...interval, days: e.target.value === '' ? undefined : Number(e.target.value) })} />
+          <span className="text-[11px] text-gray-500">days</span>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <input type="date" className="input text-sm" value={interval.from ?? ''}
+            onChange={e => onChange({ ...interval, from: e.target.value || undefined })} />
+          <span className="text-[11px] text-gray-400">→</span>
+          <input type="date" className="input text-sm" value={interval.to ?? ''}
+            onChange={e => onChange({ ...interval, to: e.target.value || undefined })} />
+        </div>
+      )}
+
+      <p className="text-[10px] text-gray-500 leading-tight">
+        {interval.not
+          ? <>Keeps people where <b>{ds?.verb}</b> did <b>NOT</b> happen in this window.</>
+          : <>Keeps people where <b>{ds?.verb}</b> in this window.</>}
+        {relative && <> This window <b>moves</b> each time the audience refreshes.</>}
+      </p>
+
+      {/* An honest note where the data cannot fully answer the question. */}
+      {ds?.caveat && (
+        <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-1.5 leading-tight">
+          {ds.caveat}
+        </p>
+      )}
     </div>
   )
 }

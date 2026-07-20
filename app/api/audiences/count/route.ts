@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { countForFilter } from '@/lib/audiences/resolve-rules'
+import { countForFilter, countForTree } from '@/lib/audiences/resolve-rules'
 import { ruleToPredicate, treeToFilterString, type RuleTree } from '@/lib/audiences/rules'
 
 // Live counts for the rule builder.
@@ -23,13 +23,26 @@ export async function POST(req: NextRequest) {
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { rules } = (await req.json().catch(() => ({}))) as { rules?: RuleTree }
-  if (!rules?.groups?.length) return Response.json({ total: 0, groups: [] })
+  if (!rules?.groups?.length && !rules?.intervals?.length) {
+    return Response.json({ total: 0, groups: [] })
+  }
 
   const { filter } = treeToFilterString(rules)
-  const total = filter ? (await countForFilter(filter)).count : 0
+  const hasIntervals = !!rules.intervals?.length
 
+  // The headline total must be what the audience ACTUALLY is. With intervals
+  // present that means resolving the whole tree — a filter-only count would
+  // report a bigger number than the audience, which is the worst kind of wrong:
+  // plausible, and used to decide who gets messaged.
+  const total = hasIntervals
+    ? (await countForTree(rules)).count
+    : filter ? (await countForFilter(filter)).count : 0
+
+  // Group and per-rule counts stay filter-only and so IGNORE intervals: each
+  // answers "how many does this rule match on its own", which is the question
+  // you need while building. Only the headline total is the real audience.
   const groups = []
-  for (const g of rules.groups) {
+  for (const g of rules.groups ?? []) {
     const preds = (g.rules ?? []).map(ruleToPredicate)
     // Per-rule: the rule alone, ignoring its neighbours.
     const perRule: (number | null)[] = []
