@@ -22,6 +22,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { INTERESTS, INTEREST_KEYS } from '@/lib/signals'
+import { describeInterval, isUsableInterval, type Interval } from './intervals'
 import {
   RECENCY_TIERS, VALUE_TIERS, RFM_SEGMENTS, FREQUENCY_TIERS, PRIMARY_METALS,
   CALL_TOPICS,
@@ -52,7 +53,17 @@ export interface Rule {
 }
 
 export interface RuleGroup { rules: Rule[] }
-export interface RuleTree { groups: RuleGroup[] }
+
+// A tree is: (groups OR'd together) AND (every interval).
+//
+// Rules ask about a PERSON and compile to one query on the feature view.
+// Intervals ask whether an EVENT happened in a window, which the feature view
+// cannot answer — it remembers only the most recent of each thing. They stay
+// separate mechanisms on purpose; see lib/audiences/intervals.ts.
+export interface RuleTree {
+  groups: RuleGroup[]
+  intervals?: Interval[]
+}
 
 export interface FieldDef {
   key: string
@@ -267,13 +278,22 @@ export function treeToFilterString(tree: RuleTree): { filter: string | null; rul
   return { filter: groups.length === 1 ? groups[0] : groups.join(','), ruleCount }
 }
 
+// Empty means "asks nothing". An interval alone is a perfectly good audience
+// ("everyone who walked in last week"), so it counts.
 export function isEmptyTree(tree: RuleTree | null | undefined): boolean {
-  if (!tree?.groups?.length) return true
-  return !tree.groups.some(g => g.rules?.length)
+  if (!tree) return true
+  const hasRules = (tree.groups ?? []).some(g => g.rules?.length)
+  const hasIntervals = (tree.intervals ?? []).some(isUsableInterval)
+  return !hasRules && !hasIntervals
 }
 
 export function emptyTree(): RuleTree {
-  return { groups: [{ rules: [] }] }
+  return { groups: [{ rules: [] }], intervals: [] }
+}
+
+/** The intervals that are complete enough to apply. */
+export function usableIntervals(tree: RuleTree): Interval[] {
+  return (tree.intervals ?? []).filter(isUsableInterval)
 }
 
 // Plain-English rendering, for the audience list and the reference docs.
@@ -306,6 +326,13 @@ export function describeTree(tree: RuleTree): string {
   const groups = (tree.groups ?? [])
     .filter(g => g.rules?.length)
     .map(g => g.rules.map(describeRule).join(' AND '))
-  if (!groups.length) return 'no rules'
-  return groups.length === 1 ? groups[0] : groups.map(g => `(${g})`).join(' OR ')
+  const rulePart = groups.length === 0 ? ''
+    : groups.length === 1 ? groups[0]
+    : groups.map(g => `(${g})`).join(' OR ')
+
+  const ivs = usableIntervals(tree).map(describeInterval)
+  if (!rulePart && !ivs.length) return 'no rules'
+  // Parenthesise the OR side so the AND with intervals reads unambiguously.
+  const left = rulePart && groups.length > 1 ? `(${rulePart})` : rulePart
+  return [left, ...ivs].filter(Boolean).join(' AND ')
 }
