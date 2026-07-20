@@ -39,6 +39,9 @@ export default function AudiencesPage() {
   const [loading, setLoading] = useState(true)
   const [campaigns, setCampaigns] = useState<WaBCallCampaign[]>([])
   const [topics, setTopics] = useState<InterestTopic[]>([])
+  // The feature view stores the salesman's ALIAS, not their id, so the filter
+  // options must be aliases too.
+  const [salesmen, setSalesmen] = useState<{ alias: string; name: string }[]>([])
 
   // editor state: null = closed, 'new' or an id
   const [editing, setEditing] = useState<string | 'new' | null>(null)
@@ -101,6 +104,8 @@ export default function AudiencesPage() {
       .then(({ data }) => setCampaigns((data ?? []) as WaBCallCampaign[]))
     supabase.from('wa_interest_topics').select('*').eq('is_active', true).is('parent_id', null).order('sort_order')
       .then(({ data }) => setTopics(((data ?? []) as InterestTopic[]).filter(t => t.topic_group !== 'system')))
+    supabase.from('salesmen').select('alias,name').order('alias')
+      .then(({ data }) => setSalesmen((data ?? []) as { alias: string; name: string }[]))
     supabase.from('wa_message_templates').select('*').eq('is_active', true)
       .not('meta_template_name', 'is', null).order('created_at', { ascending: false })
       .then(({ data }) => setTemplates((data ?? []) as MessageTemplate[]))
@@ -308,6 +313,7 @@ export default function AudiencesPage() {
                 <RuleBuilder tree={rules} onChange={setRules} dynamicOptions={{
                   call_campaigns: campaigns.map(c => ({ value: c.id, label: c.name })),
                   topics: topics.map(t => ({ value: t.id, label: t.name })),
+                  salesmen: salesmen.map(s => ({ value: s.alias, label: `${s.alias} — ${s.name}` })),
                 }} />
               ) : (
                 <>

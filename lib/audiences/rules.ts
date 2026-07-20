@@ -62,7 +62,7 @@ export interface FieldDef {
   type: FieldType
   dateColumn?: string                 // `interest`: where its last-seen lives
   options?: { value: string; label: string }[]
-  optionsFrom?: 'call_campaigns' | 'topics' | 'ad_campaigns'
+  optionsFrom?: 'call_campaigns' | 'topics' | 'ad_campaigns' | 'salesmen'
   hint?: string
 }
 
@@ -120,6 +120,12 @@ export const FIELDS: FieldDef[] = [
   { key: 'walkin_timing', column: 'walkin_timing', label: 'Said they’ll buy', group: 'Walk-in', type: 'choice', options: [
     { value: 'within_7d', label: 'Within 7 days' }, { value: 'within_1m', label: 'Within 1 month' }, { value: '1_3m', label: '1–3 months' }] },
   { key: 'walkin_no_purchase', column: 'walkin_no_purchase', label: 'Visited, not bought since', group: 'Walk-in', type: 'boolean', hint: 'Compares last purchase against the visit date' },
+  // wa_050/051: real visit history. Counts start at 1 for anyone who visited
+  // before the log existed — their earlier visits were overwritten and are gone.
+  { key: 'walkin_count', column: 'walkin_count', label: 'Number of visits', group: 'Walk-in', type: 'number', hint: 'History starts 19 Jul 2026; earlier repeat visits were not kept' },
+  { key: 'walkin_is_repeat', column: 'walkin_is_repeat', label: 'Has visited more than once', group: 'Walk-in', type: 'boolean' },
+  { key: 'walkin_first_at', column: 'walkin_first_at', label: 'First store visit', group: 'Walk-in', type: 'date' },
+  { key: 'walkin_salesman', column: 'walkin_salesman', label: 'Enrolled by (salesman)', group: 'Walk-in', type: 'choice', optionsFrom: 'salesmen', hint: 'Who signed them in on their latest visit' },
 
   // Ads
   { key: 'ad_is_lead', column: 'ad_is_lead', label: 'Came from an ad', group: 'Ads', type: 'boolean' },

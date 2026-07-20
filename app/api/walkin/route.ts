@@ -83,6 +83,20 @@ export async function POST(req: NextRequest) {
     created = true
   }
 
+  // ── Log the VISIT itself (wa_050) ──────────────────────────────────────────
+  // One row per visit. The columns set on the customer above are only a
+  // "latest visit" cache — this is the history, and a trigger keeps the cache
+  // in step. Without this row, a repeat visit would erase the previous one.
+  const { error: visitErr } = await supabaseAdmin.from('wa_walkin_visits').insert({
+    phone, customer_id: customerId, visited_at: now,
+    salesman_id: salesmanId, timing: walkinTiming,
+    note: (body.notes ?? '').trim() || null,
+    interests: interests.length ? interests : null,
+  })
+  // A failed visit log must not lose the walk-in: the customer row is already
+  // saved and correct. Report it, but keep what we have.
+  if (visitErr) console.error('[walkin] visit log failed:', visitErr.message)
+
   // ── Write the signals (source='walkin'), idempotent on (phone,interest,source) ─
   if (interests.length) {
     const rows = interests.map(interest => ({

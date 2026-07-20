@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { tenDigit } from '@/lib/reach/resolve'
 
 // Unified per-audience insights: every activation of this audience, chat AND call.
 //   GET /api/audiences/report?id=<uuid>
@@ -50,7 +51,42 @@ export async function GET(req: NextRequest) {
       }
       for (const s of byMsg.values()) { if (s.has('delivered') || s.has('read')) delivered++; if (s.has('read')) read++ }
     }
-    replied = 0  // reply attribution is shown on /campaigns detail; kept 0 here to stay light
+    // Replies: an inbound message from a recipient AFTER this campaign started.
+    // This used to be hardcoded to 0 "to stay light", which meant the report
+    // showed a real-looking zero for every audience — worse than showing
+    // nothing. Same definition as /campaigns detail, so the two agree.
+    {
+      const phones: string[] = []
+      for (let from = 0; ; from += 1000) {
+        const { data } = await supabaseAdmin.from('wa_send_ledger')
+          .select('phone').eq('campaign_id', cid).range(from, from + 999)
+        const rows = (data ?? []) as { phone: string }[]
+        phones.push(...rows.map(r => tenDigit(r.phone)))
+        if (rows.length < 1000) break
+      }
+      const uniq = [...new Set(phones)]
+      const threadToPhone = new Map<string, string>()
+      for (let i = 0; i < uniq.length; i += 300) {
+        const { data } = await supabaseAdmin.from('wa_threads')
+          .select('id, phone').in('phone', uniq.slice(i, i + 300))
+        for (const t of (data ?? []) as { id: string; phone: string }[]) {
+          threadToPhone.set(t.id, tenDigit(t.phone))
+        }
+      }
+      const since = c.created_at as string
+      const repliedPhones = new Set<string>()
+      const tids = [...threadToPhone.keys()]
+      for (let i = 0; i < tids.length; i += 200) {
+        const { data } = await supabaseAdmin.from('wa_messages')
+          .select('thread_id').eq('direction', 'inbound').gte('created_at', since)
+          .in('thread_id', tids.slice(i, i + 200))
+        for (const m of (data ?? []) as { thread_id: string }[]) {
+          const p = threadToPhone.get(m.thread_id)
+          if (p) repliedPhones.add(p)
+        }
+      }
+      replied = repliedPhones.size
+    }
     chat.push({
       campaignId: cid, name: c.name, template: c.template_name,
       total: c.total ?? 0, sent: c.sent ?? 0, failed: c.failed ?? 0,
@@ -67,16 +103,29 @@ export async function GET(req: NextRequest) {
     const { count: cards } = await supabaseAdmin.from('wa_b_call_tasks')
       .select('id', { count: 'exact', head: true }).eq('campaign_id', c.id)
     // Attempts / connected from logs whose task belongs to this campaign.
-    let attempts = 0, connected = 0
+    // A call log is one of THREE things, not two. Reporting only attempts and
+    // connected left an unexplained gap: pending cards (Call tapped, outcome
+    // never saved) counted as attempts but as neither outcome, so the numbers
+    // never added up. All three are returned now, and they reconcile:
+    //   attempts = connected + notConnected + pending
+    let attempts = 0, connected = 0, notConnected = 0, pending = 0
     for (let from = 0; ; from += 1000) {
       const { data } = await supabaseAdmin.from('wa_b_call_logs')
         .select('success, task:wa_b_call_tasks!inner(campaign_id)')
         .eq('task.campaign_id', c.id).range(from, from + 999)
       const rows = (data ?? []) as unknown as Array<{ success: boolean | null }>
-      for (const r of rows) { attempts++; if (r.success === true) connected++ }
+      for (const r of rows) {
+        attempts++
+        if (r.success === true) connected++
+        else if (r.success === false) notConnected++
+        else pending++
+      }
       if (rows.length < 1000) break
     }
-    call.push({ campaignId: c.id, name: c.name, isActive: c.is_active, cards: cards ?? 0, attempts, connected, createdAt: c.created_at })
+    call.push({
+      campaignId: c.id, name: c.name, isActive: c.is_active, cards: cards ?? 0,
+      attempts, connected, notConnected, pending, createdAt: c.created_at,
+    })
   }
 
   // ── What actually happened on those calls ──

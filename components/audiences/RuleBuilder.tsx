@@ -21,7 +21,7 @@ interface CountResult { total: number; groups: { total: number; rules: (number |
 export default function RuleBuilder({ tree, onChange, dynamicOptions }: {
   tree: RuleTree
   onChange: (t: RuleTree) => void
-  dynamicOptions?: Partial<Record<'call_campaigns' | 'topics' | 'ad_campaigns', Opt[]>>
+  dynamicOptions?: Partial<Record<'call_campaigns' | 'topics' | 'ad_campaigns' | 'salesmen', Opt[]>>
 }) {
   const [counts, setCounts] = useState<CountResult | null>(null)
   const [counting, setCounting] = useState(false)
