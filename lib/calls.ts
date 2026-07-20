@@ -54,25 +54,58 @@ export function telUrl(phone: string) {
   return `tel:+91${ten}`
 }
 
-// ── Call suppression rules (wa_044) ────────────────────────────────────────
+// ── Call suppression rules (wa_044, revised wa_048) ────────────────────────
 // The single source of truth for who may be served a call card. Every deck —
 // Call Control, audience activation, the live winback campaign — reads these,
 // so changing a number here changes the rule everywhere.
+//
+// R1 — HOW LONG TO WAIT depends on what happened on the last call:
+//        didn't connect / outcome not saved  -> CALL_COOLDOWN_DAYS
+//        connected, said "will come"         -> CALL_COOLDOWN_DAYS (hot, stays reachable)
+//        connected, anything else            -> CONNECTED_COOLDOWN_DAYS
+//      The date itself is computed by the database (wa_048) and stored on the
+//      customer as `call_snooze_until`, so no query re-derives the branching.
+//      These constants MUST match wa_b_call_snooze_days() in that migration.
+//
+// R2 — MAX_FAILED_CALL_ATTEMPTS disconnects retires them from calling for good.
+//      Separate and harder than R1: R1 is "not yet", R2 is "never again".
 
-// R1: a customer attempted today is not re-served for this many days.
-// 2 = attempted Monday -> earliest Wednesday.
-export const CALL_COOLDOWN_DAYS = 2
+// Short wait: we didn't get through, or we did and they're coming in.
+export const CALL_COOLDOWN_DAYS = 4
+
+// Long wait: we actually spoke and they did not commit to visiting.
+// Calling again inside a month reads as pestering.
+export const CONNECTED_COOLDOWN_DAYS = 30
+
+// The intent that keeps a connected call on the SHORT wait.
+export const HOT_INTENT = 'will_come'
 
 // R2: this many DISCONNECTED calls (success = false) retires them from calling.
 // Pending logs (success = null: Call tapped, outcome not submitted) never count.
 export const MAX_FAILED_CALL_ATTEMPTS = 4
 
-// The cooldown boundary: a task is eligible when last_attempt_date < this date.
-// Returns YYYY-MM-DD in local time, matching how last_attempt_date is stamped.
+// How long to wait after a call with this outcome — the TypeScript twin of
+// wa_b_call_snooze_days(). Kept so the app can explain a wait without a round trip.
+export function callSnoozeDays(succeeded: boolean | null | undefined, intent?: string | null): number {
+  return succeeded === true && intent !== HOT_INTENT ? CONNECTED_COOLDOWN_DAYS : CALL_COOLDOWN_DAYS
+}
+
+// Today, as the deck stamps dates (local YYYY-MM-DD).
+export function today(now: Date = new Date()): string {
+  return now.toLocaleDateString('en-CA')
+}
+
+// The legacy task-level boundary: a task is eligible when last_attempt_date < this.
+// Kept as a safety net alongside call_snooze_until; the two agree by construction.
 export function callCooldownCutoff(now: Date = new Date()): string {
   const d = new Date(now)
   d.setDate(d.getDate() - (CALL_COOLDOWN_DAYS - 1))
   return d.toLocaleDateString('en-CA')
+}
+
+// True while a customer is still inside their post-call wait.
+export function isCallSnoozed(snoozeUntil: string | null | undefined, now: Date = new Date()): boolean {
+  return !!snoozeUntil && snoozeUntil > today(now)
 }
 
 // True when this customer has burned through the disconnect budget.

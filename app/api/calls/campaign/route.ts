@@ -3,7 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import type { CallFilter } from '@/lib/types'
-import { MAX_FAILED_CALL_ATTEMPTS } from '@/lib/calls'
+import { MAX_FAILED_CALL_ATTEMPTS, today } from '@/lib/calls'
 
 // Admin Call Control: preview how many customers match a marker filter, or
 // create a campaign and generate the call cards (tasks) for them.
@@ -42,6 +42,9 @@ function buildQuery(filter: CallFilter, head: boolean) {
     .select('id, phone, wa_b_markers!inner(customer_id)', head ? { count: 'exact', head: true } : {})
     .eq('is_do_not_call', false)
     .lt('failed_call_attempts', MAX_FAILED_CALL_ATTEMPTS)
+    // wa_048: exclude anyone still inside their post-call wait, so the preview
+    // count matches the deck the salesman will actually be served.
+    .or(`call_snooze_until.is.null,call_snooze_until.lte.${today()}`)
 
   if (filter.recency_tier?.length)   q = q.in('wa_b_markers.recency_tier', filter.recency_tier)
   if (filter.value_tier?.length)     q = q.in('wa_b_markers.value_tier', filter.value_tier)

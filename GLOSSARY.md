@@ -94,7 +94,19 @@ all apply at send time, not when the audience is built.
 same person getting the same template twice inside its window, so re-running a
 send picks up where it left off.
 
-**Cooldown** — an attempted call card isn't served again for **2 days**.
+**Cooldown / the wait** — how long before a person's call card can come back. It
+depends on what happened last time:
+
+| Last call | Wait |
+|---|---|
+| Didn't connect | **4 days** |
+| Connected, said *will come* | **4 days** — hot, stays reachable |
+| Connected, anything else | **30 days** — we already spoke |
+
+Worked out once per person and stored, so every deck reads the same date rather
+than re-deriving the rule. Correcting a wrong outcome re-derives the wait
+immediately. Distinct from **retirement** below: a wait is *not yet*, retirement
+is *never again*.
 
 **Disconnect / retirement** — a call recorded as *failed*. **4 disconnects** and
 the person leaves every calling deck for good (they stay reachable on chat and

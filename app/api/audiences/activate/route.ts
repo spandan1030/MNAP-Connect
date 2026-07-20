@@ -4,7 +4,7 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { resolveCohortPhones, tenDigit } from '@/lib/reach/resolve'
 import { dispatchTemplate } from '@/lib/reach/dispatch'
-import { isCallUnreachable, MAX_FAILED_CALL_ATTEMPTS } from '@/lib/calls'
+import { isCallUnreachable, isCallSnoozed, MAX_FAILED_CALL_ATTEMPTS } from '@/lib/calls'
 import type { ReachFilter } from '@/lib/types'
 
 // Activate a saved audience on a channel — one audience, any channel, reusing the
@@ -47,22 +47,25 @@ async function nameFor(phones: string[]): Promise<Map<string, string>> {
 // however phones are stored. Applies the calling gates (wa_044): do-not-call and
 // the disconnect budget are both excluded here, so an unreachable customer never
 // even gets a card minted.
-async function typeBIds(want: Set<string>): Promise<{ ids: Map<string, string>; unreachable: number }> {
+async function typeBIds(want: Set<string>): Promise<{ ids: Map<string, string>; unreachable: number; snoozed: number }> {
   const ids = new Map<string, string>()
   let unreachable = 0
+  let snoozed = 0
   for (let from = 0; ; from += 1000) {
     const { data } = await supabaseAdmin.from('wa_b_customers')
-      .select('id, phone, is_do_not_call, failed_call_attempts').range(from, from + 999)
-    const rows = (data ?? []) as Array<{ id: string; phone: string; is_do_not_call: boolean; failed_call_attempts: number | null }>
+      .select('id, phone, is_do_not_call, failed_call_attempts, call_snooze_until').range(from, from + 999)
+    const rows = (data ?? []) as Array<{ id: string; phone: string; is_do_not_call: boolean; failed_call_attempts: number | null; call_snooze_until: string | null }>
     for (const r of rows) {
       const p = tenDigit(r.phone)
       if (r.is_do_not_call || !want.has(p) || ids.has(p)) continue
       if (isCallUnreachable(r.failed_call_attempts)) { unreachable++; continue }
+      // wa_048: still inside the post-call wait — not retired, just not yet.
+      if (isCallSnoozed(r.call_snooze_until)) { snoozed++; continue }
       ids.set(p, r.id)
     }
     if (rows.length < 1000) break
   }
-  return { ids, unreachable }
+  return { ids, unreachable, snoozed }
 }
 
 export async function POST(req: NextRequest) {
@@ -143,12 +146,20 @@ export async function POST(req: NextRequest) {
 
   // ── CALL ────────────────────────────────────────────────────────────────
   if (channel === 'call') {
-    const { ids, unreachable } = await typeBIds(new Set(phones.map(tenDigit)))
+    const { ids, unreachable, snoozed } = await typeBIds(new Set(phones.map(tenDigit)))
     const customerIds = [...ids.values()]
     if (customerIds.length === 0) {
+      // "Snoozed" and "unreachable" are very different answers: one is wait,
+      // the other is never. Say which, and how many of each.
+      const why: string[] = []
+      if (snoozed > 0) why.push(`${snoozed} were called recently and are still in their wait`)
+      if (unreachable > 0) why.push(`${unreachable} are call-unreachable (${MAX_FAILED_CALL_ATTEMPTS}+ disconnects)`)
       return Response.json({
-        error: unreachable > 0
-          ? `None of these members are callable — ${unreachable} are call-unreachable (${MAX_FAILED_CALL_ATTEMPTS}+ disconnects); reach them on chat instead.`
+        error: why.length
+          ? `None of these members are callable right now — ${why.join(', ')}. ${
+              snoozed > 0 && unreachable === 0
+                ? 'Try again once the wait is up, or reach them on chat.'
+                : 'Reach them on chat instead.'}`
           : 'None of these members are callable (no Type-B / all do-not-call).',
       }, { status: 400 })
     }
@@ -179,7 +190,7 @@ export async function POST(req: NextRequest) {
       if (tErr) return Response.json({ error: tErr.message }, { status: 500 })
       taskCount += chunk.length
     }
-    return Response.json({ channel: 'call', campaignId: campId, taskCount, callable: customerIds.length, unreachable, members: phones.length })
+    return Response.json({ channel: 'call', campaignId: campId, taskCount, callable: customerIds.length, unreachable, snoozed, members: phones.length })
   }
 
   return Response.json({ error: 'Pick a channel (chat or call).' }, { status: 400 })

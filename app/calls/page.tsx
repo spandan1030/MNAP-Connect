@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import {
   CALL_TOPICS, CALL_INTENTS, TOPIC_LABEL, INTENT_LABEL,
   RECENCY_COLORS, VALUE_COLORS, telUrl,
-  MAX_FAILED_CALL_ATTEMPTS, callCooldownCutoff,
+  MAX_FAILED_CALL_ATTEMPTS, callCooldownCutoff, today,
 } from '@/lib/calls'
 import { INTEREST_LABEL, SIGNAL_SOURCE_LABEL, CALL_TOPIC_TO_INTEREST, type SignalSource } from '@/lib/signals'
 import { cn } from '@/lib/utils'
@@ -163,7 +163,13 @@ export default function CallsPage() {
           .eq('campaign_id', (camp as WaBCallCampaign).id)
           .eq('status', 'pending')
           .or(`last_attempt_date.is.null,last_attempt_date.lt.${t}`)
-        if (withDisconnectRule) q = q.lt('customer.failed_call_attempts', MAX_FAILED_CALL_ATTEMPTS)
+        if (withDisconnectRule) {
+          q = q.lt('customer.failed_call_attempts', MAX_FAILED_CALL_ATTEMPTS)
+          // wa_048: the post-call wait, already worked out per customer — 4 days
+          // after a miss or a "will come", 30 after any other connected call.
+          q = q.or(`call_snooze_until.is.null,call_snooze_until.lte.${today()}`,
+                   { foreignTable: 'customer' })
+        }
         const { data, error } = await q.range(from, from + PAGE - 1)
         if (error) return { rows: [], error: error.message }
         const rows = (data ?? []) as unknown as Task[]
