@@ -38,17 +38,96 @@
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS opt_out_reason TEXT;
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS opted_out_at TIMESTAMPTZ;
 
+-- `customer_features` selects contacts.is_opted_out, so the column cannot be
+-- dropped while that view exists — and renaming it just renames it inside the
+-- view too, which is why a plain rename-then-drop fails.
+--
+-- So: capture the view's own definition FIRST (it still says `is_opted_out`),
+-- drop it, swap the column, then rebuild the view from the captured text. It
+-- re-binds to the new plain column of the same name. No need to re-run wa_046,
+-- and no copy of the 200-line view definition kept here to drift out of date.
 DO $$
+DECLARE
+  v      RECORD;
+  -- Two parallel arrays, NOT one delimited string: a view definition can
+  -- legitimately contain any separator character (|| for concatenation, for one),
+  -- so splitting on a delimiter would corrupt the SQL we are about to re-run.
+  names  TEXT[] := '{}';
+  defs   TEXT[] := '{}';
+  -- Dropping a view also drops its GRANTs and its COMMENT. customer_features
+  -- grants SELECT to authenticated + service_role; lose that and every audience
+  -- screen in the app starts returning nothing. So both get carried across too.
+  grants TEXT[] := '{}';
+  notes  TEXT[] := '{}';
 BEGIN
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
      WHERE table_name = 'contacts' AND column_name = 'is_opted_out'
        AND is_generated = 'ALWAYS'
   ) THEN
+    -- Find EVERY view built on this column, not just the one we know about.
+    -- Their definitions still say `is_opted_out`, which is the name the new
+    -- plain column will take, so a captured definition rebinds cleanly.
+    --
+    -- COLLECT FIRST, DROP AFTER: dropping inside this loop would mutate the very
+    -- catalog tables the loop is reading.
+    FOR v IN
+      SELECT DISTINCT dep.relname AS name, pg_get_viewdef(dep.oid, true) AS def
+        FROM pg_depend d
+        JOIN pg_rewrite r   ON r.oid = d.objid
+        JOIN pg_class dep   ON dep.oid = r.ev_class
+        JOIN pg_class src   ON src.oid = d.refobjid
+        JOIN pg_attribute a ON a.attrelid = src.oid AND a.attnum = d.refobjsubid
+       WHERE src.relname = 'contacts'
+         AND a.attname   = 'is_opted_out'
+         AND dep.relkind = 'v'
+         AND dep.relname <> 'contacts'
+    LOOP
+      names := array_append(names, v.name);
+      defs  := array_append(defs,  v.def);
+
+      grants := array_append(grants, COALESCE((
+        SELECT string_agg(
+                 format('GRANT %s ON %I TO %I;', g.privilege_type, g.table_name, g.grantee),
+                 ' ')
+          FROM information_schema.role_table_grants g
+         WHERE g.table_schema = 'public' AND g.table_name = v.name
+      ), ''));
+
+      notes := array_append(notes, COALESCE(
+        obj_description(format('public.%I', v.name)::regclass, 'pg_class'), ''));
+    END LOOP;
+
+    -- Deliberately NOT cascading. If something we did not capture depends on
+    -- one of these, we want this migration to STOP and name it, rather than
+    -- quietly delete a view it will never rebuild. Failing here costs nothing:
+    -- the whole block is one transaction and rolls back untouched.
+    IF array_length(names, 1) IS NOT NULL THEN
+      FOR i IN 1 .. array_length(names, 1) LOOP
+        EXECUTE format('DROP VIEW %I', names[i]);
+        RAISE NOTICE 'wa_049: captured and dropped view % (will rebuild)', names[i];
+      END LOOP;
+    END IF;
+
     ALTER TABLE contacts RENAME COLUMN is_opted_out TO is_opted_out_gen;
     ALTER TABLE contacts ADD COLUMN is_opted_out BOOLEAN NOT NULL DEFAULT FALSE;
     UPDATE contacts SET is_opted_out = COALESCE(is_opted_out_gen, FALSE);
     ALTER TABLE contacts DROP COLUMN is_opted_out_gen;
+
+    -- Rebuild in reverse, so a view that fed another is recreated first.
+    -- array_length is NULL (not 0) on an empty array, hence the guard.
+    IF array_length(names, 1) IS NOT NULL THEN
+      FOR i IN REVERSE array_length(names, 1) .. 1 LOOP
+        EXECUTE format('CREATE VIEW %I AS %s', names[i], defs[i]);
+        IF notes[i] <> '' THEN
+          EXECUTE format('COMMENT ON VIEW %I IS %L', names[i], notes[i]);
+        END IF;
+        IF grants[i] <> '' THEN
+          EXECUTE grants[i];
+        END IF;
+        RAISE NOTICE 'wa_049: rebuilt view % (grants and comment restored)', names[i];
+      END LOOP;
+    END IF;
   END IF;
 END $$;
 
