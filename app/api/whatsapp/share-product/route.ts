@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendImageMessage, sendTextMessage } from '@/lib/whatsapp/api'
+import { isOptedOut, OPTED_OUT_MESSAGE } from '@/lib/optout'
 
 // Share a catalogue product with a customer: sends the chosen product photo
 // (an already-public Supabase URL) with an optional caption. Only valid inside
@@ -18,11 +19,9 @@ export async function POST(req: NextRequest) {
   if (!phone) return Response.json({ error: 'phone is required' }, { status: 400 })
   if (!imageUrl && !text) return Response.json({ error: 'Nothing to send' }, { status: 400 })
 
-  // Respect Do-Not-Disturb (customer sent STOP)
-  const { data: dndCustomer } = await supabaseAdmin
-    .from('wa_customers').select('dnd').eq('phone', phone).maybeSingle()
-  if (dndCustomer?.dnd) {
-    return Response.json({ error: 'This number opted out (sent STOP) and cannot be messaged.' }, { status: 403 })
+  // Opt-out blocks sharing a product too (wa_049) — it is still us contacting them.
+  if (await isOptedOut(phone)) {
+    return Response.json({ error: OPTED_OUT_MESSAGE }, { status: 403 })
   }
 
   const now = new Date().toISOString()

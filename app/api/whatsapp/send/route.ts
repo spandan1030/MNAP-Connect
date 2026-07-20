@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/api'
 import { applyPlaceholders } from '@/lib/utils'
+import { isOptedOut, OPTED_OUT_MESSAGE } from '@/lib/optout'
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
@@ -27,11 +28,11 @@ export async function POST(req: NextRequest) {
 
   const cleanPhone = phone.replace(/\D/g, '')
 
-  // Respect Do-Not-Disturb (customer sent STOP) — block all outbound, including 1:1
-  const { data: dndCustomer } = await supabaseAdmin
-    .from('wa_customers').select('dnd').eq('phone', cleanPhone).maybeSingle()
-  if (dndCustomer?.dnd) {
-    return Response.json({ error: 'This number opted out (sent STOP) and cannot be messaged.' }, { status: 403 })
+  // Opt-out blocks ALL outbound, including 1:1 (wa_049). This used to read the
+  // chat-STOP column only, so a "don't contact me" given to a salesman did not
+  // stop an inbox message.
+  if (await isOptedOut(cleanPhone)) {
+    return Response.json({ error: OPTED_OUT_MESSAGE }, { status: 403 })
   }
 
   const now = new Date().toISOString()

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { verifySignature, sendTextMessage, sendImageMessage, sendTemplateMessage, sendInteractiveList, sendInteractiveButtons, getMediaDownloadUrl, downloadMediaBuffer } from '@/lib/whatsapp/api'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { applyPlaceholders } from '@/lib/utils'
+import { setOptOut } from '@/lib/optout'
 
 // Module-level cache for the rate template — avoids 2 DB round trips on warm instances.
 // Expires after 1 hour so template edits eventually take effect.
@@ -464,21 +465,17 @@ async function sendWelcomeMenu(phone: string, threadId: string) {
 // STOP → flag Do-Not-Disturb, opt out of broadcasts, confirm once
 async function handleStop(phone: string, threadId: string, customer: { id: string; dnd?: boolean } | null) {
   if (customer?.dnd) return // already opted out — stay silent
-  if (customer?.id) {
-    await supabaseAdmin.from('wa_customers')
-      .update({ dnd: true, is_opted_out: true, opted_out_at: new Date().toISOString() })
-      .eq('id', customer.id)
-  }
+  // wa_049: write the ONE flag. It mirrors down to wa_customers, so this also
+  // works for a STOP from someone we have no customer row for yet — the old
+  // code only recorded the opt-out if `customer.id` existed, and silently
+  // dropped it otherwise.
+  await setOptOut(phone, true, 'chat_stop')
   await sendBot(phone, threadId, 'stop_ack')
 }
 
-// START → clear DnD and re-engage
+// START → clear the opt-out and re-engage
 async function handleResume(phone: string, threadId: string, customer: { id: string } | null) {
-  if (customer?.id) {
-    await supabaseAdmin.from('wa_customers')
-      .update({ dnd: false, is_opted_out: false, opted_out_at: null })
-      .eq('id', customer.id)
-  }
+  await setOptOut(phone, false, 'chat_stop')
   await setBotState(threadId, 'active')
   await sendWelcomeMenu(phone, threadId)
 }
