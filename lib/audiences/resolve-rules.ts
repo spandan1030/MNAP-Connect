@@ -1,7 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { tenDigit } from '@/lib/reach/resolve'
 import { treeToFilterString, usableIntervals, type RuleTree } from './rules'
-import { intervalPhones } from './intervals'
+import { intervalPhones } from './intervals-query'
 
 // Resolve a rule tree to phones.
 //
