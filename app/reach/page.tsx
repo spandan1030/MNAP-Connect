@@ -271,7 +271,7 @@ export default function ReachPage() {
                         </p>
                       )}
                       {r.suppressedUntil && <p className="text-[10px] text-amber-600 mt-0.5">⛔ got this template — skips for {until(r.suppressedUntil)}</p>}
-                      {(r.is_do_not_call || r.dnd) && <p className="text-[10px] text-gray-400 mt-0.5">{r.is_do_not_call ? "Don't call" : 'Opted out (STOP)'}</p>}
+                      {(r.is_do_not_call || r.dnd) && <p className="text-[10px] text-gray-400 mt-0.5">Opted out</p>}
                     </div>
                   </div>
                 )

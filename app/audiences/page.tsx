@@ -97,6 +97,11 @@ export default function AudiencesPage() {
   const [actTemplateId, setActTemplateId] = useState('')
   const [actLimit, setActLimit] = useState<number | ''>('')
   const [subOpen, setSubOpen] = useState(false)
+  // Narrowing uses the SAME two faces as authoring. Both produce a rule tree
+  // (chips convert on send), so a send-time slice resolves through the one engine
+  // — including time windows, which the old chip-only narrowing could not do.
+  const [subAuthorMode, setSubAuthorMode] = useState<'rules' | 'chips'>('rules')
+  const [subRules, setSubRules] = useState<RuleTree>(emptyTree())
   const [subFilter, setSubFilter] = useState<ReachFilter>({})
   const [actBusy, setActBusy] = useState(false)
   const [actError, setActError] = useState<string | null>(null)
@@ -138,7 +143,7 @@ export default function AudiencesPage() {
 
   function openActivate(a: Audience) {
     setActivate(a); setChannel('chat'); setActTemplateId(''); setActLimit('')
-    setSubOpen(false); setSubFilter({}); setActError(null); setActResult(null)
+    setSubOpen(false); setSubAuthorMode('rules'); setSubRules(emptyTree()); setSubFilter({}); setActError(null); setActResult(null)
   }
   async function adoptActiveCall() {
     if (!activate) return
@@ -155,13 +160,24 @@ export default function AudiencesPage() {
   async function runActivation() {
     if (!activate) return
     setActBusy(true); setActError(null); setActResult(null)
+    // Resolve the narrowing into what the API takes: a rule tree if we can build
+    // one (rules mode, or convertible chips), else the legacy chip filter.
+    let narrow: Record<string, unknown> = {}
+    if (subAuthorMode === 'rules') {
+      if (!isEmptyTree(subRules)) narrow = { subRules }
+    } else if (chipsConvertible(subFilter)) {
+      const t = chipsToTree(subFilter)
+      if (!isEmptyTree(t)) narrow = { subRules: t }
+    } else if (Object.keys(subFilter).length) {
+      narrow = { subFilter }
+    }
     try {
       const res = await fetch('/api/audiences/activate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           audienceId: activate.id, channel,
           templateId: channel === 'chat' ? actTemplateId : undefined,
-          subFilter: Object.keys(subFilter).length ? subFilter : undefined,
+          ...narrow,
           limit: channel === 'chat' && actLimit !== '' ? actLimit : undefined,
         }),
       })
@@ -469,16 +485,39 @@ export default function AudiencesPage() {
                 </div>
               )}
 
-              {/* optional sub-filter */}
+              {/* optional sub-filter — same two faces as authoring, incl. time windows */}
               <div className="border-t border-gray-100 pt-2">
                 <button onClick={() => setSubOpen(o => !o)} className="text-[11px] font-medium text-gray-600 flex items-center gap-1">
                   {subOpen ? '▾' : '▸'} Narrow further (optional)
-                  {Object.keys(subFilter).length > 0 && <span className="text-green-600">· active</span>}
+                  {(subAuthorMode === 'rules' ? !isEmptyTree(subRules) : Object.keys(subFilter).length > 0) && <span className="text-green-600">· active</span>}
                 </button>
                 {subOpen && (
-                  <div className="mt-2">
-                    <p className="text-[10px] text-gray-400 mb-2">Send only to the slice of this audience that also matches — e.g. occasion = wedding, or walk-in timing. Doesn&apos;t change the saved audience.</p>
-                    <FilterBuilder filter={subFilter} campaigns={campaigns} topics={topics} onChange={setSubFilter} />
+                  <div className="mt-2 space-y-2">
+                    <p className="text-[10px] text-gray-400">Send only to the slice of this audience that also matches — e.g. occasion = wedding, or walked in between two dates. Doesn&apos;t change the saved audience.</p>
+                    <div className="flex rounded-lg border border-gray-200 overflow-hidden text-[11px] font-semibold">
+                      <button onClick={() => setSubAuthorMode('rules')}
+                        className={`flex-1 py-1.5 ${subAuthorMode === 'rules' ? 'bg-green-600 text-white' : 'bg-white text-gray-600'}`}>
+                        Rules (AND / OR / NOT)
+                      </button>
+                      <button onClick={() => setSubAuthorMode('chips')}
+                        className={`flex-1 py-1.5 ${subAuthorMode === 'chips' ? 'bg-green-600 text-white' : 'bg-white text-gray-600'}`}>
+                        Chips (tap to pick)
+                      </button>
+                    </div>
+                    {subAuthorMode === 'rules' ? (
+                      <RuleBuilder tree={subRules} onChange={setSubRules} dynamicOptions={{
+                        call_campaigns: campaigns.map(c => ({ value: c.id, label: c.name })),
+                        topics: topics.map(t => ({ value: t.id, label: t.name })),
+                        salesmen: salesmen.map(s => ({ value: s.alias, label: `${s.alias} — ${s.name}` })),
+                      }} />
+                    ) : (
+                      <>
+                        <FilterBuilder filter={subFilter} campaigns={campaigns} topics={topics} onChange={setSubFilter} />
+                        {!chipsConvertible(subFilter) && (
+                          <p className="text-[10px] text-amber-700">“Subscribed to” / pasted lists can&apos;t narrow — use Interest = Daily Rate, from Chat, or switch to Rules.</p>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
               </div>

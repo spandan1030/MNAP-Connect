@@ -3,6 +3,8 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { resolveCohortPhones, tenDigit } from '@/lib/reach/resolve'
+import { resolveRuleTree } from '@/lib/audiences/resolve-rules'
+import { isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
 import { dispatchTemplate } from '@/lib/reach/dispatch'
 import { callableTypeB, notCallableMessage, mintCallDeck } from '@/lib/calls/deck'
 import type { ReachFilter } from '@/lib/types'
@@ -52,8 +54,9 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { audienceId, channel, templateId, subFilter, limit } = (await req.json().catch(() => ({}))) as {
-    audienceId?: string; channel?: 'chat' | 'call'; templateId?: string; subFilter?: ReachFilter; limit?: number
+  const { audienceId, channel, templateId, subFilter, subRules, limit } = (await req.json().catch(() => ({}))) as {
+    audienceId?: string; channel?: 'chat' | 'call'; templateId?: string
+    subFilter?: ReachFilter; subRules?: RuleTree; limit?: number
   }
   if (!audienceId) return Response.json({ error: 'Missing audienceId' }, { status: 400 })
 
@@ -61,9 +64,17 @@ export async function POST(req: NextRequest) {
     .select('id, name, filter').eq('id', audienceId).maybeSingle()
   if (!aud) return Response.json({ error: 'Audience not found' }, { status: 404 })
 
-  // Members, optionally narrowed by a send-time sub-filter (AND).
+  // Members, optionally narrowed by a send-time sub-filter (AND). The narrowing
+  // uses the SAME two faces as authoring: subRules (rule tree from the Rules or
+  // Chips builder) resolves through the one engine; subFilter is the legacy chip
+  // shape, still accepted so older callers keep working. Neither changes the
+  // saved audience — this is a send-time slice only.
   let phones = await memberPhones(audienceId)
-  if (subFilter && Object.keys(subFilter).length > 0) {
+  if (subRules && !isEmptyTree(subRules)) {
+    const { phones: subSet, error } = await resolveRuleTree(subRules)
+    if (error) return Response.json({ error }, { status: 400 })
+    phones = phones.filter(p => subSet.has(p))
+  } else if (subFilter && Object.keys(subFilter).length > 0) {
     const { phones: subSet, error } = await resolveCohortPhones(subFilter)
     if (error) return Response.json({ error }, { status: 400 })
     phones = phones.filter(p => subSet.has(p))

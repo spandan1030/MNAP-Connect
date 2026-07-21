@@ -62,6 +62,22 @@ audience can be called this week and messaged next.
 alternatives (OR). One level deep, deliberately — enough for anything we build,
 still readable on a phone.
 
+**Interval** — an **event-window** filter: *did this event happen inside this
+window?* Rules ask about a person using `customer_features` (which remembers only
+the **most recent** of each thing); an interval asks the raw log, so "called *at
+all* during March" is answerable where a rule cannot. Four datasets — **called**
+(`wa_b_call_logs`), **messaged us** (`wa_messages`), **walked in**
+(`wa_walkin_visits`), **interest seen** (`wa_signals`) — each with **NOT** ("no
+such event in the window") and a relative (last N days) or absolute (between two
+dates) window. The whole audience is **(rule groups OR'd) AND (every interval)**.
+
+**Two faces, one engine (Rules / Chips)** — an audience can be authored two ways:
+the **Rules** builder (explicit field · op · value, AND/OR/NOT, plus intervals)
+or the friendly **Chips** UI. Chips convert to the *same* rule tree and resolve
+through the *same* engine, so the two are different keyboards for one instrument —
+never two behaviours. Both faces appear in **authoring**, in the **send-time
+sub-filter**, and in **Call Control**.
+
 **Materialise / refresh** — running an audience's rules and writing the matching
 people into `audience_members`. Membership is a **snapshot with a timestamp**,
 not a live query. Refreshing is manual today.

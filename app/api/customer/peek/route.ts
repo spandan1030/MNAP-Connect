@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     .eq('phone', phone).maybeSingle()
 
   // Everything else in parallel.
-  const [markerRes, aCustRes, signalsRes, ledgerRes, callsRes, contactRes, audRes] = await Promise.all([
+  const [markerRes, aCustRes, signalsRes, ledgerRes, callsRes, contactRes, audRes, visitsRes] = await Promise.all([
     bCust
       ? supabaseAdmin.from('wa_b_markers')
           .select('recency_tier,value_tier,rfm_segment,frequency_tier,primary_metal,lifetime_value,total_bills,days_since_last_purchase,first_purchase_date,last_purchase_date,audience_labels,is_high_value,is_likely_wedding,outreach_bucket')
@@ -53,6 +53,11 @@ export async function GET(req: NextRequest) {
       : Promise.resolve({ data: null }),
     supabaseAdmin.from('contacts').select('is_opted_out').eq('phone', phone).maybeSingle(),
     supabaseAdmin.from('audience_members').select('audience:wa_audiences(id, name, is_dynamic)').eq('phone', phone),
+    // Full store-visit history — one row per visit (wa_050). The customer row
+    // caches only the latest; this is every visit we have.
+    supabaseAdmin.from('wa_walkin_visits')
+      .select('visited_at, timing, note, interests, is_backfill, salesman:salesmen(alias)')
+      .eq('phone', phone).order('visited_at', { ascending: false }).limit(20),
   ])
 
   const aCust = aCustRes.data as { id: string; name: string | null; dnd: boolean; is_opted_out: boolean } | null
@@ -92,6 +97,16 @@ export async function GET(req: NextRequest) {
     .map(r => (Array.isArray(r.audience) ? r.audience[0] : r.audience))
     .filter((a): a is { id: string; name: string; is_dynamic: boolean } => !!a)
 
+  // Store-visit history, newest first. is_backfill rows are the single visit we
+  // reconstructed when the log was introduced — flagged so an observed visit is
+  // never confused with a guessed one.
+  const visits = ((visitsRes.data ?? []) as unknown as Array<{ visited_at: string; timing: string | null; note: string | null; interests: string[] | null; is_backfill: boolean; salesman: { alias: string } | { alias: string }[] | null }>)
+    .map(v => ({
+      at: v.visited_at, timing: v.timing, note: v.note, interests: v.interests ?? [],
+      isBackfill: v.is_backfill,
+      salesman: (Array.isArray(v.salesman) ? v.salesman[0]?.alias : v.salesman?.alias) ?? null,
+    }))
+
   const known = !!bCust || !!aCust
   return Response.json({
     phone,
@@ -107,6 +122,7 @@ export async function GET(req: NextRequest) {
     },
     markers: markerRes.data ?? null,
     walkin,
+    visits,
     audiences,
     interests,
     calls: (callsRes.data ?? []) as Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string }>,

@@ -3,11 +3,13 @@
 import { useEffect, useState } from 'react'
 import * as XLSX from 'xlsx'
 import Navbar from '@/components/ui/Navbar'
+import FilterBuilder from '@/components/reach/FilterBuilder'
+import RuleBuilder from '@/components/audiences/RuleBuilder'
+import { emptyTree, isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
+import { chipsToTree, chipsConvertible } from '@/lib/audiences/chips-to-tree'
 import { createClient } from '@/lib/supabase/client'
-import { RECENCY_TIERS, VALUE_TIERS, RFM_SEGMENTS, FREQUENCY_TIERS, PRIMARY_METALS } from '@/lib/calls'
-import { INTERESTS } from '@/lib/signals'
 import { formatDateTime, cn } from '@/lib/utils'
-import type { CallFilter, WaBCallCampaign } from '@/lib/types'
+import type { InterestTopic, ReachFilter, WaBCallCampaign } from '@/lib/types'
 
 const BATCH = 300
 
@@ -21,32 +23,29 @@ export default function CallControlPage() {
   const [progress, setProgress] = useState(0)
   const [importResult, setImportResult] = useState<string>('')
 
-  // ── Campaign builder ──
-  const [recency, setRecency] = useState<string[]>(['Lapsed'])
-  const [value, setValue] = useState<string[]>([])
-  const [rfm, setRfm] = useState<string[]>([])
-  const [frequency, setFrequency] = useState<string[]>([])
-  const [metal, setMetal] = useState<string[]>([])
-  const [interests, setInterests] = useState<string[]>([])
-  const [highValue, setHighValue] = useState(true)
-  const [wedding, setWedding] = useState(false)
-  const [lookalike, setLookalike] = useState(false)
-  const [minLtv, setMinLtv] = useState('')
-  const [minBills, setMinBills] = useState('')
-  const [maxDays, setMaxDays] = useState('')
+  // ── Campaign builder — the SAME two faces as Audiences (one engine) ──
+  //   'rules' — rule builder (field · op · value, OR / NOT, time windows)
+  //   'chips' — the familiar chip UI, converted to a rule tree on send
+  // Call Control no longer has its own filter grammar; it resolves through
+  // /api/calls/campaign's shared resolver (proven identical by callcohort-check).
+  const [authorMode, setAuthorMode] = useState<'rules' | 'chips'>('rules')
+  const [rules, setRules] = useState<RuleTree>(emptyTree())
+  const [filter, setFilter] = useState<ReachFilter>({})
   const [name, setName] = useState('')
   const [previewCount, setPreviewCount] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
 
   const [campaigns, setCampaigns] = useState<WaBCallCampaign[]>([])
+  const [topics, setTopics] = useState<InterestTopic[]>([])
+  const [salesmen, setSalesmen] = useState<{ alias: string; name: string }[]>([])
   const [dbCount, setDbCount] = useState<number | null>(null)
 
   // ── Converge interest signals ──
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState('')
 
-  useEffect(() => { loadCampaigns(); loadDbCount() }, [])
+  useEffect(() => { loadCampaigns(); loadDbCount(); loadBuilderRefs() }, [])
 
   async function loadCampaigns() {
     const { data } = await supabase
@@ -56,6 +55,15 @@ export default function CallControlPage() {
     setCampaigns((data as WaBCallCampaign[]) ?? [])
   }
 
+  // Dynamic options the shared builder needs: interest topics and the salesman
+  // roster (the feature view stores the salesman ALIAS, so options are aliases).
+  async function loadBuilderRefs() {
+    supabase.from('wa_interest_topics').select('*').eq('is_active', true).is('parent_id', null).order('sort_order')
+      .then(({ data }) => setTopics(((data ?? []) as InterestTopic[]).filter(t => t.topic_group !== 'system')))
+    supabase.from('salesmen').select('alias,name').order('alias')
+      .then(({ data }) => setSalesmen((data ?? []) as { alias: string; name: string }[]))
+  }
+
   async function loadDbCount() {
     const { count } = await supabase
       .from('wa_b_markers')
@@ -63,54 +71,16 @@ export default function CallControlPage() {
     setDbCount(count ?? 0)
   }
 
-  function currentFilter(): CallFilter {
-    const posInt = (s: string) => { const n = Number(s); return s.trim() !== '' && Number.isFinite(n) && n >= 0 ? n : undefined }
-    return {
-      recency_tier: recency.length ? recency : undefined,
-      value_tier: value.length ? value : undefined,
-      rfm_segment: rfm.length ? rfm : undefined,
-      frequency_tier: frequency.length ? frequency : undefined,
-      primary_metal: metal.length ? metal : undefined,
-      interests: interests.length ? interests : undefined,
-      is_high_value: highValue || undefined,
-      is_likely_wedding: wedding || undefined,
-      is_lookalike_seed: lookalike || undefined,
-      min_lifetime_value: posInt(minLtv),
-      min_total_bills: posInt(minBills),
-      max_days_since_last_purchase: posInt(maxDays),
+  // What the API takes: a rule tree if we can build one (rules mode, or
+  // convertible chips), else the legacy chip filter (API converts it the same
+  // way chipsToTree does). One place, so preview and create always agree.
+  function campaignBody(): { rules?: RuleTree; filter?: ReachFilter } | null {
+    if (authorMode === 'rules') return isEmptyTree(rules) ? null : { rules }
+    if (chipsConvertible(filter)) {
+      const t = chipsToTree(filter)
+      return isEmptyTree(t) ? null : { rules: t }
     }
-  }
-
-  function toggle(list: string[], set: (v: string[]) => void, item: string) {
-    set(list.includes(item) ? list.filter(x => x !== item) : [...list, item])
-    setPreviewCount(null)
-  }
-
-  function chipGroup(label: string, options: readonly string[], sel: string[], setSel: (v: string[]) => void) {
-    return (
-      <div>
-        <p className="text-[11px] text-gray-400 font-medium mb-1">{label}</p>
-        <div className="flex flex-wrap gap-1.5">
-          {options.map(t => (
-            <button key={t} onClick={() => toggle(sel, setSel, t)}
-              className={cn('px-3 py-1 rounded-lg text-xs border font-medium capitalize',
-                sel.includes(t) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200')}>
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
-  function numField(label: string, val: string, setter: (v: string) => void, placeholder: string) {
-    return (
-      <div className="flex-1 min-w-[140px]">
-        <p className="text-[11px] text-gray-400 font-medium mb-1">{label}</p>
-        <input type="number" min={0} inputMode="numeric" className="input py-1.5 text-xs" placeholder={placeholder}
-          value={val} onChange={e => { setter(e.target.value); setPreviewCount(null) }} />
-      </div>
-    )
+    return Object.keys(filter).length ? { filter } : null
   }
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -175,11 +145,13 @@ export default function CallControlPage() {
   }
 
   async function handlePreview() {
+    const body = campaignBody()
+    if (!body) { setMsg('Add at least one rule or chip.'); return }
     setBusy(true); setMsg('')
     const res = await fetch('/api/calls/campaign', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preview: true, filter: currentFilter() }),
+      body: JSON.stringify({ preview: true, ...body }),
     })
     const json = await res.json()
     setBusy(false)
@@ -189,11 +161,13 @@ export default function CallControlPage() {
 
   async function handleCreate() {
     if (!name.trim()) { setMsg('Enter a campaign name'); return }
+    const body = campaignBody()
+    if (!body) { setMsg('Add at least one rule or chip.'); return }
     setBusy(true); setMsg('')
     const res = await fetch('/api/calls/campaign', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim(), filter: currentFilter() }),
+      body: JSON.stringify({ name: name.trim(), ...body }),
     })
     const json = await res.json()
     setBusy(false)
@@ -251,48 +225,36 @@ export default function CallControlPage() {
         <section className="card p-4 space-y-3">
           <div>
             <p className="text-sm font-semibold text-gray-700">Create a call campaign</p>
-            <p className="text-xs text-gray-500">Filters run against the customer base already in the database — no upload needed. Only matching cards show to the caller; do-not-call customers are always excluded.</p>
+            <p className="text-xs text-gray-500">Same builder as Audiences — rules or chips over the customer base already in the database (no upload). Only callable cards show to the caller; do-not-call, unreachable and recently-called customers are always excluded.</p>
           </div>
 
-          {chipGroup('Recency tier', RECENCY_TIERS, recency, setRecency)}
-          {chipGroup('Value tier', VALUE_TIERS, value, setValue)}
-          {chipGroup('RFM segment', RFM_SEGMENTS, rfm, setRfm)}
-          {chipGroup('Frequency tier', FREQUENCY_TIERS, frequency, setFrequency)}
-          {chipGroup('Primary metal', PRIMARY_METALS, metal, setMetal)}
-
-          <div>
-            <p className="text-[11px] text-gray-400 font-medium mb-1">Interests <span className="text-gray-300">· chat · call · sales</span></p>
-            <div className="flex flex-wrap gap-1.5">
-              {INTERESTS.map(i => (
-                <button key={i.key} onClick={() => toggle(interests, setInterests, i.key)}
-                  className={cn('px-3 py-1 rounded-lg text-xs border font-medium',
-                    interests.includes(i.key) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200')}>
-                  {i.label}
-                </button>
-              ))}
-            </div>
+          {/* Two faces of the one engine, identical to the Audiences editor. */}
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-[11px] font-semibold">
+            <button onClick={() => { setAuthorMode('rules'); setPreviewCount(null) }}
+              className={`flex-1 py-1.5 ${authorMode === 'rules' ? 'bg-green-600 text-white' : 'bg-white text-gray-600'}`}>
+              Rules (AND / OR / NOT)
+            </button>
+            <button onClick={() => { setAuthorMode('chips'); setPreviewCount(null) }}
+              className={`flex-1 py-1.5 ${authorMode === 'chips' ? 'bg-green-600 text-white' : 'bg-white text-gray-600'}`}>
+              Chips (tap to pick)
+            </button>
           </div>
 
-          <div className="flex flex-wrap gap-3">
-            {numField('Min lifetime value (₹)', minLtv, setMinLtv, 'e.g. 50000')}
-            {numField('Min total bills', minBills, setMinBills, 'e.g. 2')}
-            {numField('Max days since purchase', maxDays, setMaxDays, 'e.g. 1095')}
-          </div>
-
-          <div className="flex flex-wrap gap-x-4 gap-y-2">
-            <label className="flex items-center gap-2 text-xs text-gray-700">
-              <input type="checkbox" checked={highValue} onChange={e => { setHighValue(e.target.checked); setPreviewCount(null) }} />
-              High-value only
-            </label>
-            <label className="flex items-center gap-2 text-xs text-gray-700">
-              <input type="checkbox" checked={wedding} onChange={e => { setWedding(e.target.checked); setPreviewCount(null) }} />
-              Likely-wedding only
-            </label>
-            <label className="flex items-center gap-2 text-xs text-gray-700">
-              <input type="checkbox" checked={lookalike} onChange={e => { setLookalike(e.target.checked); setPreviewCount(null) }} />
-              Lookalike seed only
-            </label>
-          </div>
+          {authorMode === 'rules' ? (
+            <RuleBuilder tree={rules} onChange={t => { setRules(t); setPreviewCount(null) }} dynamicOptions={{
+              call_campaigns: campaigns.map(c => ({ value: c.id, label: c.name })),
+              topics: topics.map(t => ({ value: t.id, label: t.name })),
+              salesmen: salesmen.map(s => ({ value: s.alias, label: `${s.alias} — ${s.name}` })),
+            }} />
+          ) : (
+            <>
+              <p className="text-[11px] text-gray-500">Tapped chips are AND&apos;d together. For OR groups or time windows, switch to Rules.</p>
+              <FilterBuilder filter={filter} campaigns={campaigns} topics={topics} onChange={f => { setFilter(f); setPreviewCount(null) }} />
+              {!chipsConvertible(filter) && (
+                <p className="text-[10px] text-amber-700">“Subscribed to” / pasted lists aren&apos;t a calling cohort — use Interest = Daily Rate, from Chat, or switch to Rules.</p>
+              )}
+            </>
+          )}
 
           <div className="flex items-center gap-2 border-t border-gray-100 pt-3">
             <button onClick={handlePreview} disabled={busy}

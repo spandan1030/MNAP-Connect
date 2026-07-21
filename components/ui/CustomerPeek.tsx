@@ -24,6 +24,7 @@ interface PeekData {
     audience_labels: string[] | null; is_high_value: boolean | null; is_likely_wedding: boolean | null
   } | null
   walkin: { salesman: string | null; at: string | null; converted: boolean } | null
+  visits: Array<{ at: string; timing: string | null; note: string | null; interests: string[]; isBackfill: boolean; salesman: string | null }>
   audiences: Array<{ id: string; name: string; is_dynamic: boolean }>
   interests: Record<string, string[]>
   calls: Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string }>
@@ -39,6 +40,11 @@ const SOURCE_DOT: Record<string, string> = {
 // not daily/oneoff, or the chip falls back to printing the raw slug.
 const CATEGORY_LABEL: Record<string, string> = {
   daily_rate: 'Daily rate', rate: 'Rate alert', offer: 'Offer', thankyou: 'Thank-you', custom: 'Custom',
+}
+
+// Walk-in timing buckets (see walk-in enrollment) — how soon they said they'd buy.
+const TIMING_LABEL: Record<string, string> = {
+  within_7d: 'within 7 days', within_1m: 'within a month', '1_3m': '1–3 months',
 }
 
 function fmtDate(s: string | null): string {
@@ -155,6 +161,28 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                     ? <span className="text-[10px] font-semibold bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded-full">Converted ✓</span>
                     : <span className="text-[10px] text-gray-400">not yet converted</span>}
                 </div>
+              )}
+
+              {/* Full store-visit history — one row per visit (wa_050). A single
+                  "reconstructed" row means the log only has the latest visit for
+                  this person (visits before 19 Jul 2026 weren't kept). */}
+              {data.visits.length > 0 && (
+                <Section title={`Store visits (${data.visits.length})`}>
+                  <div className="space-y-1">
+                    {data.visits.map((v, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs">
+                        <span className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0" />
+                        <span className="text-gray-500 w-24 flex-shrink-0">{fmtDate(v.at)}</span>
+                        <span className="text-gray-700 truncate flex items-center gap-1 flex-wrap">
+                          {v.salesman && <Tag>{v.salesman}</Tag>}
+                          {v.timing && <span className="text-gray-400">{TIMING_LABEL[v.timing] ?? v.timing}</span>}
+                          {v.interests.length > 0 && <span className="text-gray-500 truncate">{v.interests.map(k => INTEREST_LABEL[k] ?? k).join(', ')}</span>}
+                          {v.isBackfill && <span className="text-[9px] text-gray-400 italic">reconstructed</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
               )}
               <InterestSection title="Bought before — from sales" dot="bg-amber-400" keys={data.interests.sales} />
               <InterestSection title="Tagged at billing" dot="bg-purple-500" keys={data.interests.billing} />
