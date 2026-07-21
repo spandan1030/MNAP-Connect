@@ -4,7 +4,7 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { resolveCohortPhones, tenDigit } from '@/lib/reach/resolve'
 import { dispatchTemplate } from '@/lib/reach/dispatch'
-import { isCallUnreachable, isCallSnoozed, MAX_FAILED_CALL_ATTEMPTS } from '@/lib/calls'
+import { callableTypeB, notCallableMessage, mintCallDeck } from '@/lib/calls/deck'
 import type { ReachFilter } from '@/lib/types'
 
 // Activate a saved audience on a channel — one audience, any channel, reusing the
@@ -40,32 +40,6 @@ async function nameFor(phones: string[]): Promise<Map<string, string>> {
     }
   }
   return names
-}
-
-// tenDigit-keyed phone -> wa_b_customers.id, for the member phones (needed to make
-// call tasks). Scans Type B customers in pages (bounded ~10k) so it's robust to
-// however phones are stored. Applies the calling gates (wa_044): do-not-call and
-// the disconnect budget are both excluded here, so an unreachable customer never
-// even gets a card minted.
-async function typeBIds(want: Set<string>): Promise<{ ids: Map<string, string>; unreachable: number; snoozed: number }> {
-  const ids = new Map<string, string>()
-  let unreachable = 0
-  let snoozed = 0
-  for (let from = 0; ; from += 1000) {
-    const { data } = await supabaseAdmin.from('wa_b_customers')
-      .select('id, phone, is_do_not_call, failed_call_attempts, call_snooze_until').range(from, from + 999)
-    const rows = (data ?? []) as Array<{ id: string; phone: string; is_do_not_call: boolean; failed_call_attempts: number | null; call_snooze_until: string | null }>
-    for (const r of rows) {
-      const p = tenDigit(r.phone)
-      if (r.is_do_not_call || !want.has(p) || ids.has(p)) continue
-      if (isCallUnreachable(r.failed_call_attempts)) { unreachable++; continue }
-      // wa_048: still inside the post-call wait — not retired, just not yet.
-      if (isCallSnoozed(r.call_snooze_until)) { snoozed++; continue }
-      ids.set(p, r.id)
-    }
-    if (rows.length < 1000) break
-  }
-  return { ids, unreachable, snoozed }
 }
 
 export async function POST(req: NextRequest) {
@@ -146,51 +120,19 @@ export async function POST(req: NextRequest) {
 
   // ── CALL ────────────────────────────────────────────────────────────────
   if (channel === 'call') {
-    const { ids, unreachable, snoozed } = await typeBIds(new Set(phones.map(tenDigit)))
-    const customerIds = [...ids.values()]
-    if (customerIds.length === 0) {
-      // "Snoozed" and "unreachable" are very different answers: one is wait,
-      // the other is never. Say which, and how many of each.
-      const why: string[] = []
-      if (snoozed > 0) why.push(`${snoozed} were called recently and are still in their wait`)
-      if (unreachable > 0) why.push(`${unreachable} are call-unreachable (${MAX_FAILED_CALL_ATTEMPTS}+ disconnects)`)
-      return Response.json({
-        error: why.length
-          ? `None of these members are callable right now — ${why.join(', ')}. ${
-              snoozed > 0 && unreachable === 0
-                ? 'Try again once the wait is up, or reach them on chat.'
-                : 'Reach them on chat instead.'}`
-          : 'None of these members are callable (no Type-B / all do-not-call).',
-      }, { status: 400 })
+    // Same shared deck logic Call Control uses — one definition of "callable"
+    // and one way to mint the deck.
+    const { ids, unreachable, snoozed } = await callableTypeB(new Set(phones.map(tenDigit)))
+    if (ids.length === 0) {
+      return Response.json({ error: notCallableMessage(snoozed, unreachable) }, { status: 400 })
     }
-
-    // Reuse this audience's existing call campaign if it has one — that preserves
-    // already-called / DNC card status (task upsert ignores existing), so nobody is
-    // re-called. Otherwise create one. Either way it becomes the single live cohort.
-    const { data: existingCamp } = await supabaseAdmin.from('wa_b_call_campaigns')
-      .select('id').eq('audience_id', audienceId).order('created_at', { ascending: false }).limit(1).maybeSingle()
-    await supabaseAdmin.from('wa_b_call_campaigns').update({ is_active: false }).eq('is_active', true)
-
-    let campId = existingCamp?.id as string | undefined
-    if (campId) {
-      await supabaseAdmin.from('wa_b_call_campaigns').update({ is_active: true }).eq('id', campId)
-    } else {
-      const { data: camp, error: cErr } = await supabaseAdmin.from('wa_b_call_campaigns')
-        .insert({ name: aud.name, filter_json: aud.filter, audience_id: audienceId, created_by: user.id, is_active: true })
-        .select('id').single()
-      if (cErr || !camp) return Response.json({ error: cErr?.message ?? 'Could not create call cohort.' }, { status: 500 })
-      campId = camp.id as string
-    }
-
-    let taskCount = 0
-    for (let i = 0; i < customerIds.length; i += 500) {
-      const chunk = customerIds.slice(i, i + 500).map(cid => ({ campaign_id: campId, customer_id: cid }))
-      const { error: tErr } = await supabaseAdmin.from('wa_b_call_tasks')
-        .upsert(chunk, { onConflict: 'campaign_id,customer_id', ignoreDuplicates: true })
-      if (tErr) return Response.json({ error: tErr.message }, { status: 500 })
-      taskCount += chunk.length
-    }
-    return Response.json({ channel: 'call', campaignId: campId, taskCount, callable: customerIds.length, unreachable, snoozed, members: phones.length })
+    // reuseForAudienceId preserves already-called / DNC cards on re-push.
+    const res = await mintCallDeck({
+      name: aud.name, customerIds: ids, createdBy: user.id,
+      audienceId, filterJson: aud.filter, reuseForAudienceId: audienceId,
+    })
+    if ('error' in res) return Response.json({ error: res.error }, { status: 500 })
+    return Response.json({ channel: 'call', campaignId: res.campaignId, taskCount: res.taskCount, callable: ids.length, unreachable, snoozed, members: phones.length })
   }
 
   return Response.json({ error: 'Pick a channel (chat or call).' }, { status: 400 })
