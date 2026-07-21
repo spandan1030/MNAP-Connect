@@ -148,8 +148,12 @@ export const FIELDS: FieldDef[] = [
     options: INTERESTS.map(i => ({ value: i.key, label: i.label })),
     hint: 'Pick interests, and optionally which channel they came from' },
   { key: 'sources', column: 'sources', label: 'Channels touched', group: 'Interests', type: 'array', options: SOURCE_OPTIONS },
-  { key: 'source_count', column: 'source_count', label: 'Number of channels', group: 'Interests', type: 'number', hint: '≥2 = multi-source intent' },
+  { key: 'source_count', column: 'source_count', label: 'Number of channels', group: 'Interests', type: 'number', hint: 'Any touch — a visit or ad lead counts, even with no tagged interest' },
   { key: 'signal_sources', column: 'signal_sources', label: 'Interest came from', group: 'Interests', type: 'array', options: SOURCE_OPTIONS },
+  // The narrow twin of source_count: channels that produced a tagged INTEREST,
+  // not counting a bare visit or ad lead. This is what the chips "Multi-source
+  // intent" means (≥2), which is a different question from Number of channels.
+  { key: 'signal_source_count', column: 'signal_source_count', label: 'Interest channels (count)', group: 'Interests', type: 'number', hint: '≥2 = the chips “Multi-source intent”. Counts only channels that tagged an interest' },
   { key: 'is_opted_out', column: 'is_opted_out', label: 'Opted out of contact', group: 'Identity', type: 'boolean', hint: 'Blocks chat + call; ads unaffected' },
 ]
 

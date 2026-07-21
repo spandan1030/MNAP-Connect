@@ -5,6 +5,7 @@ import Navbar from '@/components/ui/Navbar'
 import FilterBuilder from '@/components/reach/FilterBuilder'
 import RuleBuilder from '@/components/audiences/RuleBuilder'
 import { emptyTree, isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
+import { chipsToTree, chipsConvertible } from '@/lib/audiences/chips-to-tree'
 import { createClient } from '@/lib/supabase/client'
 import { CALL_TOPICS, CALL_INTENTS } from '@/lib/calls'
 import { cn } from '@/lib/utils'
@@ -49,11 +50,14 @@ export default function AudiencesPage() {
   const [description, setDescription] = useState('')
   const [filter, setFilter] = useState<ReachFilter>({})
   const [isDynamic, setIsDynamic] = useState(false)
-  // Rule tree is how audiences are authored now. `useRules` is false only when
-  // editing an audience saved in the older filter format — those keep their own
-  // editor rather than being silently converted.
+  // Two faces of ONE engine, plus the legacy read-only view:
+  //   'rules'  — the rule builder (field · op · value, OR / NOT, time windows)
+  //   'chips'  — the familiar chip UI; converted to a rule tree on save, so it
+  //              resolves through the exact same engine (proven by chips-check)
+  //   'legacy' — an audience saved in the old filter format; shown as-is
   const [rules, setRules] = useState<RuleTree>(emptyTree())
-  const [useRules, setUseRules] = useState(true)
+  const [authorMode, setAuthorMode] = useState<'rules' | 'chips' | 'legacy'>('rules')
+  const [chipCount, setChipCount] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState<string | null>(null)
@@ -99,6 +103,27 @@ export default function AudiencesPage() {
   const [actResult, setActResult] = useState<string | null>(null)
 
   useEffect(() => { load() }, [])
+
+  // Live count for chips mode. The chips are converted to a rule tree and counted
+  // through the same endpoint the rule builder uses, so the number a chip
+  // audience shows is the number it will actually resolve to.
+  useEffect(() => {
+    if (authorMode !== 'chips') return
+    if (!chipsConvertible(filter) || Object.keys(filter).length === 0) { setChipCount(null); return }
+    const tree = chipsToTree(filter)
+    if (isEmptyTree(tree)) { setChipCount(null); return }
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/audiences/count', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rules: tree }),
+        })
+        setChipCount(res.ok ? (await res.json()).total : null)
+      } catch { setChipCount(null) }
+    }, 500)
+    return () => clearTimeout(t)
+  }, [filter, authorMode])
+
   useEffect(() => {
     supabase.from('wa_b_call_campaigns').select('*').order('created_at', { ascending: false }).limit(30)
       .then(({ data }) => setCampaigns((data ?? []) as WaBCallCampaign[]))
@@ -185,7 +210,7 @@ export default function AudiencesPage() {
 
   function openNew() {
     setEditing('new'); setName(''); setDescription(''); setFilter({}); setIsDynamic(false); setError(null)
-    setRules(emptyTree()); setUseRules(true)
+    setRules(emptyTree()); setAuthorMode('rules'); setChipCount(null)
   }
   async function openEdit(a: Audience) {
     setError(null)
@@ -196,14 +221,38 @@ export default function AudiencesPage() {
     setName(aud.name); setDescription(aud.description ?? '')
     setFilter((aud.filter ?? {}) as ReachFilter); setIsDynamic(!!aud.is_dynamic)
     const saved = (aud.rules ?? null) as RuleTree | null
-    setUseRules(!isEmptyTree(saved)); setRules(saved ?? emptyTree())
+    // A tree-based audience opens in the rule builder; an old filter-only one
+    // opens in its legacy view. Chips is an authoring choice, so it is never the
+    // opening mode for something already saved.
+    setAuthorMode(!isEmptyTree(saved) ? 'rules' : 'legacy'); setRules(saved ?? emptyTree())
+    setChipCount(null)
   }
   function close() { setEditing(null); setError(null) }
+
+  // In chips mode, the chips ARE a rule tree — convert live so the saved shape
+  // and the count both come from the one engine.
+  const chipTree = () => chipsToTree(filter)
 
   async function save() {
     const nm = name.trim()
     if (!nm) { setError('Give the audience a name.'); return }
-    if (useRules ? isEmptyTree(rules) : Object.keys(filter).length === 0) { setError('Add at least one rule.'); return }
+    // What actually gets saved, by mode.
+    let body: Record<string, unknown>
+    if (authorMode === 'legacy') {
+      if (Object.keys(filter).length === 0) { setError('Add at least one filter.'); return }
+      body = { filter }
+    } else if (authorMode === 'chips') {
+      if (!chipsConvertible(filter)) {
+        setError('Remove the “Subscribed to” chips — use Interest = Daily Rate, from Chat instead. (Paste-a-list is not an audience.)')
+        return
+      }
+      const tree = chipTree()
+      if (isEmptyTree(tree)) { setError('Pick at least one chip.'); return }
+      body = { rules: tree }
+    } else {
+      if (isEmptyTree(rules)) { setError('Add at least one rule.'); return }
+      body = { rules }
+    }
     setBusy(true); setError(null)
     try {
       const isNew = editing === 'new'
@@ -211,8 +260,7 @@ export default function AudiencesPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...(isNew ? {} : { id: editing }),
-          name: nm, description, isDynamic,
-          ...(useRules ? { rules } : { filter }),
+          name: nm, description, isDynamic, ...body,
         }),
       })
       const data = await res.json()
@@ -309,16 +357,47 @@ export default function AudiencesPage() {
               <input className="input text-sm" placeholder="Short description (optional)"
                 value={description} onChange={e => setDescription(e.target.value)} />
 
-              {useRules ? (
+              {/* Two faces of one engine. The toggle is hidden for legacy
+                  audiences, which stay in their own read-only view. */}
+              {authorMode !== 'legacy' && (
+                <div className="flex rounded-lg border border-gray-200 overflow-hidden text-[11px] font-semibold">
+                  <button onClick={() => setAuthorMode('rules')}
+                    className={`flex-1 py-1.5 ${authorMode === 'rules' ? 'bg-green-600 text-white' : 'bg-white text-gray-600'}`}>
+                    Rules (AND / OR / NOT)
+                  </button>
+                  <button onClick={() => setAuthorMode('chips')}
+                    className={`flex-1 py-1.5 ${authorMode === 'chips' ? 'bg-green-600 text-white' : 'bg-white text-gray-600'}`}>
+                    Chips (tap to pick)
+                  </button>
+                </div>
+              )}
+
+              {authorMode === 'rules' && (
                 <RuleBuilder tree={rules} onChange={setRules} dynamicOptions={{
                   call_campaigns: campaigns.map(c => ({ value: c.id, label: c.name })),
                   topics: topics.map(t => ({ value: t.id, label: t.name })),
                   salesmen: salesmen.map(s => ({ value: s.alias, label: `${s.alias} — ${s.name}` })),
                 }} />
-              ) : (
+              )}
+
+              {authorMode === 'chips' && (
+                <>
+                  <p className="text-[11px] text-gray-500">Tapped chips are AND'd together. This builds the same audience the rule view does — for OR groups, switch to Rules.</p>
+                  <FilterBuilder filter={filter} campaigns={campaigns} topics={topics} onChange={setFilter} />
+                  <div className="flex items-center justify-end">
+                    <span className="text-[11px] font-bold text-gray-700">
+                      {!chipsConvertible(filter)
+                        ? 'Uses “Subscribed to” — switch that to Interest = Daily Rate, from Chat'
+                        : chipCount == null ? '' : `${chipCount.toLocaleString('en-IN')} people match`}
+                    </span>
+                  </div>
+                </>
+              )}
+
+              {authorMode === 'legacy' && (
                 <>
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 mb-2">
-                    <p className="text-[11px] text-amber-800">This audience uses the older filter format. It keeps working exactly as-is — editing it here changes nothing about how it resolves.</p>
+                    <p className="text-[11px] text-amber-800">This audience uses the older filter format. It keeps working exactly as-is — editing it here changes nothing about how it resolves. To move it onto the new engine, rebuild it in Rules or Chips.</p>
                   </div>
                   <FilterBuilder filter={filter} campaigns={campaigns} topics={topics} onChange={setFilter} />
                 </>
