@@ -428,6 +428,10 @@ export interface ReachFilter {
   callUnresponsive?: boolean    // >=3 call attempts, never connected (route off calls)
   multiSource?: boolean         // interest signals from >=2 distinct sources
   chatNonBuyer?: boolean        // has a chat interest signal but no sales markers on this number
+  // customer app (contacts.app_user / has_scheme / app_product_interest — wa_053)
+  appUser?: boolean             // has an account on the customer app (app-admin export)
+  hasScheme?: boolean           // holds a gold-savings scheme in the app
+  appProductInterest?: boolean  // tapped "interested" / shared a product link into chat
   // ad leads (wa_ad_leads — inert until ads are wired)
   adLead?: boolean              // arrived via a click-to-WhatsApp / tracked ad
   adCampaign?: string[]         // specific ad campaign code(s)

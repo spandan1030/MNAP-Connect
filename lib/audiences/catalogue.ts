@@ -85,6 +85,17 @@ export const AUDIENCE_CATALOGUE: PresetAudience[] = [
     description: 'Chatting + interested, no purchase on this number — convert to footfall.',
     filter: { chatNonBuyer: true }, dynamic: true },
 
+  // ── Customer app ──
+  { key: 'APP1', name: 'App — product interest', channel: '💬 then 📞',
+    description: 'Tapped “interested” / shared a product link from the app. Hottest online intent.',
+    filter: { appProductInterest: true }, dynamic: true },
+  { key: 'APP2', name: 'App users', channel: '💬 chat',
+    description: 'Registered on the customer app (from the app-admin export).',
+    filter: { appUser: true }, dynamic: true },
+  { key: 'APP3', name: 'Scheme holders', channel: '💬 / 📞',
+    description: 'Hold an active gold-savings scheme in the app.',
+    filter: { hasScheme: true }, dynamic: true },
+
   // ── Ad-lead loop (inert until ads are wired) ──
   { key: 'AD1', name: 'Ad-lead follow-up', channel: '💬 then 📞',
     description: 'People who messaged us from an ad. Empty until ads are running.',

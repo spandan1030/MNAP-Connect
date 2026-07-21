@@ -81,6 +81,7 @@ const MORE = [
   { href: '/send',           label: 'Send (1:1)',   icon: ICONS.messages },
   { href: '/admin/templates', label: 'Templates',   icon: ICONS.templates },
   { href: '/admin/calls',    label: 'Call Control', icon: ICONS.phone },
+  { href: '/admin/app-users', label: 'App users',   icon: ICONS.customers },
   { href: '/purchase',       label: 'Purchase',  icon: ICONS.purchase },
   { href: '/reports',        label: 'Reports',   icon: ICONS.reports },
   { href: '/prospects',      label: 'Prospects', icon: ICONS.prospects },

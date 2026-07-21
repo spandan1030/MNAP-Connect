@@ -3,6 +3,7 @@ import { verifySignature, sendTextMessage, sendImageMessage, sendTemplateMessage
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { applyPlaceholders } from '@/lib/utils'
 import { setOptOut } from '@/lib/optout'
+import { markAppProductInterest } from '@/lib/app-features'
 
 // Module-level cache for the rate template — avoids 2 DB round trips on warm instances.
 // Expires after 1 hour so template edits eventually take effect.
@@ -234,6 +235,12 @@ async function handleInboundMessage(
     } else if (botState === 'with_agent') {
       // A human has taken over. Stay completely silent — even for "hi"/"hello" —
       // until staff resumes the bot from the chat. Don't talk over the salesman.
+    } else if (isAppProductInterest(text)) {
+      // They tapped "interested" / shared a gold.mnalankarpalace.com product link
+      // from the app. Note the choice, hand to a human, and acknowledge. Checked
+      // ahead of the menu so a "…interested…" message never falls through to the
+      // generic welcome. (interactive taps carry no `text`, so this can't eat one.)
+      await handleAppProductInterest(phone, threadId, customer)
     } else if (interactiveReply) {
       // An explicit button/menu tap — always honour it
       await handleFlowReply(phone, threadId, interactiveReply.id, customer, displayName)
@@ -301,6 +308,15 @@ function isStartKeyword(raw: string): boolean {
 
 function isDesignKeyword(raw: string): boolean {
   return /\b(design|designs|new design|necklace|ring|bangle|earring|chain|mangalsutra|pendant)\b/.test(raw.trim().toLowerCase())
+}
+
+// A product-interest message from the customer app: the app's "Share on WhatsApp"
+// pre-fills a gold.mnalankarpalace.com product link (and/or the word "interested").
+// Either one means "note my choice, someone reach out".
+function isAppProductInterest(raw: string): boolean {
+  const t = (raw ?? '').toLowerCase()
+  if (!t) return false
+  return t.includes('gold.mnalankarpalace.com') || /\binterested\b/.test(t)
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +425,7 @@ const BOT_DEFAULTS: Record<string, string> = {
   exchange_info: 'You can exchange your old gold for new jewellery at the best value. 🙏 Our team will share the details with you shortly.',
   cash_info:   'We offer instant cash for your gold. 🙏 Our team will contact you with the details shortly.',
   scheme_info: 'Our Gold Savings Scheme helps you save every month towards your jewellery. 🙏 Our representative will contact you shortly with all the details.',
+  app_interest_ack: 'Thank you! 🙏 We have noted your choice and will contact you with more details. Meanwhile, please continue browsing.',
   rate_outro:  'Would you like to see anything else?',
   ask_metal:   'Which are you interested in?',
   ask_product: 'Which item would you like to see?',
@@ -492,6 +509,22 @@ async function sendMoreOptions(phone: string, threadId: string) {
     { id: 'stop',      title: 'Stop receiving msgs' },
   ])
   await logOutbound(threadId, wamid, content)
+}
+
+// App product interest — customer tapped "interested" / shared a product link.
+// Raise the one feature flag (contacts.app_product_interest, wa_053 → the feature
+// view → every rule/chip audience), log it as a lead, hand to a human so someone
+// follows up with details, and acknowledge. The phone is already in the customer
+// book — every inbound auto-enrols above.
+async function handleAppProductInterest(
+  phone: string,
+  threadId: string,
+  customer: { id: string } | null,
+) {
+  await markAppProductInterest(phone)
+  await recordLead(threadId, customer?.id, { intent: 'app_product' })
+  await flagAgent(threadId)                       // "we will contact you with more details"
+  await sendBot(phone, threadId, 'app_interest_ack')
 }
 
 // Gold Savings Scheme — note the interest and hand to a representative

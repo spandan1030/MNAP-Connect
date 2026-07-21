@@ -1,55 +1,8 @@
-// Generates the one-row-per-person feature view as a numbered migration.
-//
-// BUMP `VERSION` BELOW whenever the view's shape changes. Regenerating over an
-// already-applied migration would leave that file describing something your
-// database never ran, so each change gets its own file and the old one stays as
-// the historical record.
-//
-// WHY THIS IS GENERATED: the view needs two columns per interest
-// (int_<key>_src, int_<key>_at) in two places each. Hand-writing ~92 lines that
-// must stay in step with lib/signals.ts is exactly the drift we're designing out:
-// add an interest there, re-run this, the columns exist. The taxonomy lives in
-// ONE file.
-//
-//   node scripts/gen-feature-view.mjs
-//
-// Re-run after editing INTERESTS in lib/signals.ts, then apply the migration.
-
-import { readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-
-// The migration this generator currently owns. History:
-//   wa_046 — first version
-//   wa_051 — + walk-in visit history (walkin_count / _first_at / _is_repeat)
-//   wa_054 — + customer-app features (app_user / has_scheme / app_product_interest),
-//            columns added to `contacts` by wa_053_app_features.sql
-const VERSION = 'wa_054'
-const FILENAME = `${VERSION}_customer_features.sql`
-
-// ── Read the canonical interest keys out of lib/signals.ts ──────────────────
-const src = readFileSync(join(root, 'lib', 'signals.ts'), 'utf8')
-const block = src.match(/export const INTERESTS:\s*InterestDef\[\]\s*=\s*\[([\s\S]*?)\n\]/)
-if (!block) throw new Error('Could not find the INTERESTS array in lib/signals.ts')
-const keys = [...block[1].matchAll(/\{\s*key:\s*'([a-z_]+)'/g)].map(m => m[1])
-if (keys.length < 20) throw new Error(`Only parsed ${keys.length} interests — the INTERESTS format changed, fix this script.`)
-if (new Set(keys).size !== keys.length) throw new Error('Duplicate interest keys in lib/signals.ts')
-
-// ── The two generated fragments ─────────────────────────────────────────────
-const sigAggregates = keys.map(k =>
-  `    array_agg(DISTINCT source) FILTER (WHERE interest = '${k}') AS int_${k}_src,\n` +
-  `    max(last_seen)             FILTER (WHERE interest = '${k}') AS int_${k}_at`
-).join(',\n')
-
-const sigSelect = keys.map(k => `  sg.int_${k}_src,  sg.int_${k}_at`).join(',\n')
-
-const sql = `-- ${FILENAME}
+-- wa_054_customer_features.sql
 -- ============================================================================
 --  GENERATED FILE — do not edit by hand.
 --  Produced by: node scripts/gen-feature-view.mjs
---  Interests (${keys.length}) read from lib/signals.ts: ${keys.join(', ')}
+--  Interests (23) read from lib/signals.ts: rate, designs, offers, scheme, exchange, cash, repair, necklace, ring, bangles, earrings, chain, mangalsutra, pendant, bracelet, anklet, investment, gold, silver, diamond, wedding, gift, festival
 -- ============================================================================
 --
 --  ONE ROW PER PERSON, ONE COLUMN PER FEATURE.
@@ -76,7 +29,7 @@ const sql = `-- ${FILENAME}
 -- Phone normaliser — matches tenDigit() in lib/reach/resolve.ts.
 CREATE OR REPLACE FUNCTION mnap_ten_digit(raw TEXT) RETURNS TEXT AS $$
   SELECT CASE WHEN length(d) > 10 AND left(d, 2) = '91' THEN right(d, 10) ELSE d END
-  FROM (SELECT regexp_replace(COALESCE(raw, ''), '\\D', '', 'g') AS d) s;
+  FROM (SELECT regexp_replace(COALESCE(raw, ''), '\D', '', 'g') AS d) s;
 $$ LANGUAGE sql IMMUTABLE;
 
 DROP VIEW IF EXISTS customer_features;
@@ -209,13 +162,58 @@ src AS (
 
 -- ── The interest pivot: tall wa_signals → one pair of columns per interest.
 --    signal_sources is the NARROW definition (declared interests only). It exists
---    alongside the wider \`sources\` above so the two questions stay separable:
+--    alongside the wider `sources` above so the two questions stay separable:
 --    "where did their interests come from" vs "which channels have we touched".
 sig AS (
   SELECT mnap_ten_digit(phone) AS phone,
     array_agg(DISTINCT source) AS signal_sources,
     count(DISTINCT source)     AS signal_source_count,
-${sigAggregates}
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'rate') AS int_rate_src,
+    max(last_seen)             FILTER (WHERE interest = 'rate') AS int_rate_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'designs') AS int_designs_src,
+    max(last_seen)             FILTER (WHERE interest = 'designs') AS int_designs_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'offers') AS int_offers_src,
+    max(last_seen)             FILTER (WHERE interest = 'offers') AS int_offers_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'scheme') AS int_scheme_src,
+    max(last_seen)             FILTER (WHERE interest = 'scheme') AS int_scheme_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'exchange') AS int_exchange_src,
+    max(last_seen)             FILTER (WHERE interest = 'exchange') AS int_exchange_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'cash') AS int_cash_src,
+    max(last_seen)             FILTER (WHERE interest = 'cash') AS int_cash_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'repair') AS int_repair_src,
+    max(last_seen)             FILTER (WHERE interest = 'repair') AS int_repair_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'necklace') AS int_necklace_src,
+    max(last_seen)             FILTER (WHERE interest = 'necklace') AS int_necklace_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'ring') AS int_ring_src,
+    max(last_seen)             FILTER (WHERE interest = 'ring') AS int_ring_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'bangles') AS int_bangles_src,
+    max(last_seen)             FILTER (WHERE interest = 'bangles') AS int_bangles_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'earrings') AS int_earrings_src,
+    max(last_seen)             FILTER (WHERE interest = 'earrings') AS int_earrings_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'chain') AS int_chain_src,
+    max(last_seen)             FILTER (WHERE interest = 'chain') AS int_chain_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'mangalsutra') AS int_mangalsutra_src,
+    max(last_seen)             FILTER (WHERE interest = 'mangalsutra') AS int_mangalsutra_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'pendant') AS int_pendant_src,
+    max(last_seen)             FILTER (WHERE interest = 'pendant') AS int_pendant_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'bracelet') AS int_bracelet_src,
+    max(last_seen)             FILTER (WHERE interest = 'bracelet') AS int_bracelet_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'anklet') AS int_anklet_src,
+    max(last_seen)             FILTER (WHERE interest = 'anklet') AS int_anklet_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'investment') AS int_investment_src,
+    max(last_seen)             FILTER (WHERE interest = 'investment') AS int_investment_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'gold') AS int_gold_src,
+    max(last_seen)             FILTER (WHERE interest = 'gold') AS int_gold_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'silver') AS int_silver_src,
+    max(last_seen)             FILTER (WHERE interest = 'silver') AS int_silver_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'diamond') AS int_diamond_src,
+    max(last_seen)             FILTER (WHERE interest = 'diamond') AS int_diamond_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'wedding') AS int_wedding_src,
+    max(last_seen)             FILTER (WHERE interest = 'wedding') AS int_wedding_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'gift') AS int_gift_src,
+    max(last_seen)             FILTER (WHERE interest = 'gift') AS int_gift_at,
+    array_agg(DISTINCT source) FILTER (WHERE interest = 'festival') AS int_festival_src,
+    max(last_seen)             FILTER (WHERE interest = 'festival') AS int_festival_at
   FROM wa_signals
   GROUP BY 1
 )
@@ -300,7 +298,29 @@ SELECT
   COALESCE(sg.signal_source_count, 0)             AS signal_source_count,
 
   -- ── int_<interest>_src / _at ──
-${sigSelect}
+  sg.int_rate_src,  sg.int_rate_at,
+  sg.int_designs_src,  sg.int_designs_at,
+  sg.int_offers_src,  sg.int_offers_at,
+  sg.int_scheme_src,  sg.int_scheme_at,
+  sg.int_exchange_src,  sg.int_exchange_at,
+  sg.int_cash_src,  sg.int_cash_at,
+  sg.int_repair_src,  sg.int_repair_at,
+  sg.int_necklace_src,  sg.int_necklace_at,
+  sg.int_ring_src,  sg.int_ring_at,
+  sg.int_bangles_src,  sg.int_bangles_at,
+  sg.int_earrings_src,  sg.int_earrings_at,
+  sg.int_chain_src,  sg.int_chain_at,
+  sg.int_mangalsutra_src,  sg.int_mangalsutra_at,
+  sg.int_pendant_src,  sg.int_pendant_at,
+  sg.int_bracelet_src,  sg.int_bracelet_at,
+  sg.int_anklet_src,  sg.int_anklet_at,
+  sg.int_investment_src,  sg.int_investment_at,
+  sg.int_gold_src,  sg.int_gold_at,
+  sg.int_silver_src,  sg.int_silver_at,
+  sg.int_diamond_src,  sg.int_diamond_at,
+  sg.int_wedding_src,  sg.int_wedding_at,
+  sg.int_gift_src,  sg.int_gift_at,
+  sg.int_festival_src,  sg.int_festival_at
 
 FROM contacts ct
 LEFT JOIN sales       s     ON s.phone     = mnap_ten_digit(ct.phone)
@@ -321,10 +341,3 @@ COMMENT ON VIEW customer_features IS
   'One row per person, one column per feature. Generated by scripts/gen-feature-view.mjs from lib/signals.ts — do not edit the migration by hand. An audience is a WHERE clause over this view.';
 
 GRANT SELECT ON customer_features TO authenticated, service_role;
-`
-
-const out = join(root, 'supabase', 'migrations', FILENAME)
-writeFileSync(out, sql, 'utf8')
-console.log(`Wrote ${out}`)
-console.log(`  ${keys.length} interests → ${keys.length * 2} int_ columns`)
-console.log(`  ${keys.join(', ')}`)

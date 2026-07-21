@@ -152,6 +152,7 @@ function viewActive(f: ReachFilter): boolean {
   if (markerActive(f)) return true
   if (f.hotLead || f.callUnresponsive || f.multiSource || f.chatNonBuyer) return true
   if (f.walkedIn || f.walkinNoPurchase || f.walkinTiming?.length) return true
+  if (f.appUser || f.hasScheme || f.appProductInterest) return true
   if (f.adLead || f.adCampaign?.length || f.campaignIds?.length) return true
   if (!callNeedsEventQuery(f) && (f.intents?.length || f.callTopics?.length)) return true
   if (!signalNeedsEventQuery(f) && (f.interests?.length || f.interestSources?.length)) return true
@@ -197,6 +198,11 @@ async function viewPhones(sb: Sb, f: ReachFilter): Promise<{ set: Set<string>; e
     // behaviour
     if (f.multiSource)  q = q.gte('signal_source_count', 2)
     if (f.chatNonBuyer) q = q.contains('signal_sources', ['whatsapp']).eq('is_buyer', false)
+
+    // customer app
+    if (f.appUser)             q = q.eq('app_is_user', true)
+    if (f.hasScheme)           q = q.eq('app_has_scheme', true)
+    if (f.appProductInterest)  q = q.eq('app_product_interest', true)
 
     // ads
     if (f.adLead)              q = q.eq('ad_is_lead', true)

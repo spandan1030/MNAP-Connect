@@ -78,6 +78,15 @@ through the *same* engine, so the two are different keyboards for one instrument
 never two behaviours. Both faces appear in **authoring**, in the **send-time
 sub-filter**, and in **Call Control**.
 
+**App features** — three person-level flags on the contact spine (`wa_053`),
+targetable like any other feature: **app user** (has a customer-app account),
+**has scheme** (holds a gold-savings scheme), and **app product interest**
+(tapped "interested" / shared a `gold.mnalankarpalace.com` product link into
+WhatsApp). The first two are fed by the app-admin export (`/admin/app-users`); the
+third is set by the chat webhook, which also acknowledges the customer and hands
+the thread to an agent to follow up. Opt-out still means no chat/no call — an app
+user who opted out can still be shown **ads**.
+
 **Materialise / refresh** — running an audience's rules and writing the matching
 people into `audience_members`. Membership is a **snapshot with a timestamp**,
 not a live query. Refreshing is manual today.

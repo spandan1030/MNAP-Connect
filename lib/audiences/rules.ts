@@ -138,6 +138,12 @@ export const FIELDS: FieldDef[] = [
   { key: 'walkin_first_at', column: 'walkin_first_at', label: 'First store visit', group: 'Walk-in', type: 'date' },
   { key: 'walkin_salesman', column: 'walkin_salesman', label: 'Enrolled by (salesman)', group: 'Walk-in', type: 'choice', optionsFrom: 'salesmen', hint: 'Who signed them in on their latest visit' },
 
+  // Customer app — who they are on the app (export) + product interest tapped in chat
+  { key: 'app_is_user', column: 'app_is_user', label: 'App user', group: 'App', type: 'boolean', hint: 'Has an account on the customer app (from the app-admin export)' },
+  { key: 'app_has_scheme', column: 'app_has_scheme', label: 'Has gold scheme', group: 'App', type: 'boolean', hint: 'Holds a gold-savings scheme in the app' },
+  { key: 'app_product_interest', column: 'app_product_interest', label: 'App product interest', group: 'App', type: 'boolean', hint: 'Tapped “interested” / shared a product link into WhatsApp' },
+  { key: 'app_product_interest_at', column: 'app_product_interest_at', label: 'App interest noted', group: 'App', type: 'date' },
+
   // Ads
   { key: 'ad_is_lead', column: 'ad_is_lead', label: 'Came from an ad', group: 'Ads', type: 'boolean' },
   { key: 'ad_campaigns', column: 'ad_campaigns', label: 'Ad campaign', group: 'Ads', type: 'array', optionsFrom: 'ad_campaigns' },

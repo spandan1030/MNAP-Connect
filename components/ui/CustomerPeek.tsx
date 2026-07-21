@@ -15,7 +15,7 @@ interface PeekData {
   isNew: boolean
   name: string | null
   source: string | null
-  flags: { is_hot_lead: boolean; is_opted_out: boolean }
+  flags: { is_hot_lead: boolean; is_opted_out: boolean; app_user: boolean; has_scheme: boolean; app_product_interest: boolean }
   markers: {
     recency_tier: string | null; value_tier: string | null; rfm_segment: string | null
     frequency_tier: string | null; primary_metal: string | null; lifetime_value: number | null
@@ -90,6 +90,9 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                 <p className="font-bold text-gray-900 truncate">{data?.name || (loading ? 'Loading…' : 'Unknown')}</p>
                 {data?.flags.is_hot_lead && <span className="text-amber-400" title="Hot lead">★</span>}
                 {data?.isNew && <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full">NEW — not in DB</span>}
+                {data?.flags.app_user && <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full" title="Registered on the customer app">App user</span>}
+                {data?.flags.has_scheme && <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full" title="Holds a gold-savings scheme in the app">Scheme</span>}
+                {data?.flags.app_product_interest && <span className="text-[10px] font-bold text-fuchsia-700 bg-fuchsia-50 border border-fuchsia-200 px-1.5 py-0.5 rounded-full" title="Tapped “interested” / shared a product link in chat">App interest</span>}
                 {data?.flags.is_opted_out && <span className="text-[10px] font-bold text-gray-600 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full">Opted out (all comms)</span>}
               </div>
               <a href={`tel:+91${phone}`} className="text-xs text-gray-500">+91 {phone}</a>

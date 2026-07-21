@@ -121,6 +121,15 @@ export default function FilterBuilder({ filter, onChange, campaigns, topics }: {
         </FilterGroup>
       </FilterSection>
 
+      {/* ── CUSTOMER APP ──────────────────────────────────── */}
+      <FilterSection title="Customer app" hint="From the app-admin export + product interest tapped in chat">
+        <FilterGroup label="App">
+          <Chip on={!!filter.appUser} onClick={() => toggleBool('appUser')}>App user</Chip>
+          <Chip on={!!filter.hasScheme} onClick={() => toggleBool('hasScheme')}>Has gold scheme</Chip>
+          <Chip on={!!filter.appProductInterest} onClick={() => toggleBool('appProductInterest')}>Product interest</Chip>
+        </FilterGroup>
+      </FilterSection>
+
       {/* ── SALES HISTORY ─────────────────────────────────── */}
       <FilterSection title="Sales history" hint="From real purchase markers">
         <FilterGroup label="Recency">

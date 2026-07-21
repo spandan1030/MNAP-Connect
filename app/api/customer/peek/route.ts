@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
           .select('success, topics, intent, called_at')
           .eq('customer_id', bCust.id).order('called_at', { ascending: false }).limit(10)
       : Promise.resolve({ data: null }),
-    supabaseAdmin.from('contacts').select('is_opted_out').eq('phone', phone).maybeSingle(),
+    supabaseAdmin.from('contacts').select('is_opted_out, app_user, has_scheme, app_product_interest').eq('phone', phone).maybeSingle(),
     supabaseAdmin.from('audience_members').select('audience:wa_audiences(id, name, is_dynamic)').eq('phone', phone),
     // Full store-visit history — one row per visit (wa_050). The customer row
     // caches only the latest; this is every visit we have.
@@ -61,8 +61,10 @@ export async function GET(req: NextRequest) {
   ])
 
   const aCust = aCustRes.data as { id: string; name: string | null; is_opted_out: boolean } | null
-  // Unified opt-out from the contact spine (chat STOP ∪ call DNC ∪ manual).
-  const contact = contactRes.data as { is_opted_out: boolean } | null
+  // Unified opt-out from the contact spine (chat STOP ∪ call DNC ∪ manual),
+  // plus the customer-app features (wa_053).
+  const contact = contactRes.data as
+    { is_opted_out: boolean; app_user: boolean; has_scheme: boolean; app_product_interest: boolean } | null
 
   // Walk-in enrollment: which salesman, and did they convert (buy) after it?
   let walkin: { salesman: string | null; at: string | null; converted: boolean } | null = null
@@ -119,6 +121,10 @@ export async function GET(req: NextRequest) {
       // One decision flag (wa_049): chat STOP ∪ call DNC ∪ manual. The per-channel
       // columns are provenance and are not surfaced as separate badges.
       is_opted_out: contact?.is_opted_out ?? aCust?.is_opted_out ?? false,
+      // Customer-app features (wa_053) — from the app-admin export + chat interest.
+      app_user: contact?.app_user ?? false,
+      has_scheme: contact?.has_scheme ?? false,
+      app_product_interest: contact?.app_product_interest ?? false,
     },
     markers: markerRes.data ?? null,
     walkin,

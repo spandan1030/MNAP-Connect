@@ -100,6 +100,11 @@ export function chipsToTree(f: ReachFilter): RuleTree {
   if (f.adLead)             rules.push({ field: 'ad_is_lead', op: 'is_true' })
   if (f.adCampaign?.length) rules.push({ field: 'ad_campaigns', op: 'any_of', values: f.adCampaign })
 
+  // ── Customer app ──
+  if (f.appUser)            rules.push({ field: 'app_is_user', op: 'is_true' })
+  if (f.hasScheme)          rules.push({ field: 'app_has_scheme', op: 'is_true' })
+  if (f.appProductInterest) rules.push({ field: 'app_product_interest', op: 'is_true' })
+
   // ── Chat activity ──
   if (f.messagedFrom || f.messagedTo) {
     intervals.push({
