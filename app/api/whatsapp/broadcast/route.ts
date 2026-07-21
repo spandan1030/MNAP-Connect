@@ -54,8 +54,7 @@ export async function POST(req: NextRequest) {
     .select('id, name, phone')
     .in('id', customerIds)
     .eq('is_active', true)
-    .eq('is_opted_out', false)
-    .eq('dnd', false)
+    .eq('is_opted_out', false)   // THE one flag; dnd is mirrored to it, no need to check both
 
   const total = (customers ?? []).length
   let sent = 0

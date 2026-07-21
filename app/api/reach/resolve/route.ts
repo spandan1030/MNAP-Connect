@@ -33,29 +33,30 @@ export async function POST(req: NextRequest) {
   const phones = [...candidate].slice(0, DECORATE_CAP)
 
   // ── 2. Decorate the (capped) phone list ──────────────────────────────────
-  const custByPhone = new Map<string, { id: string; name: string | null; is_hot_lead: boolean; is_do_not_call: boolean }>()
+  const custByPhone = new Map<string, { id: string; name: string | null; is_hot_lead: boolean }>()
   const markerByPhone = new Map<string, Record<string, unknown>>()
   for (let i = 0; i < phones.length; i += 300) {
     const chunk = phones.slice(i, i + 300)
     const { data } = await supabaseAdmin.from('wa_b_customers')
-      .select('id, phone, name, is_hot_lead, is_do_not_call, wa_b_markers(recency_tier,value_tier,rfm_segment,primary_metal,lifetime_value)')
+      .select('id, phone, name, is_hot_lead, wa_b_markers(recency_tier,value_tier,rfm_segment,primary_metal,lifetime_value)')
       .in('phone', chunk)
-    for (const c of (data ?? []) as unknown as Array<{ id: string; phone: string; name: string | null; is_hot_lead: boolean; is_do_not_call: boolean; wa_b_markers: Record<string, unknown> | null }>) {
+    for (const c of (data ?? []) as unknown as Array<{ id: string; phone: string; name: string | null; is_hot_lead: boolean; wa_b_markers: Record<string, unknown> | null }>) {
       const p = tenDigit(c.phone)
-      custByPhone.set(p, { id: c.id, name: c.name, is_hot_lead: c.is_hot_lead, is_do_not_call: c.is_do_not_call })
+      custByPhone.set(p, { id: c.id, name: c.name, is_hot_lead: c.is_hot_lead })
       const mk = Array.isArray(c.wa_b_markers) ? c.wa_b_markers[0] : c.wa_b_markers
       if (mk) markerByPhone.set(p, mk as Record<string, unknown>)
     }
   }
 
-  // Unified consent + display name from the contact spine (covers chat-only
-  // leads). chat_opted_out = STOP, call_opted_out = DNC, is_opted_out folds in manual.
-  const contactByPhone = new Map<string, { name: string | null; chat: boolean; call: boolean; optedOut: boolean }>()
+  // Display name + THE one opt-out flag from the contact spine (covers chat-only
+  // leads). We read only `is_opted_out` — the single decision flag (wa_049);
+  // the per-channel columns are provenance, never consulted here.
+  const contactByPhone = new Map<string, { name: string | null; optedOut: boolean }>()
   for (let i = 0; i < phones.length; i += 300) {
     const { data } = await supabaseAdmin.from('contacts')
-      .select('phone, name, name_override, chat_opted_out, call_opted_out, is_opted_out').in('phone', phones.slice(i, i + 300))
-    for (const r of (data ?? []) as Array<{ phone: string; name: string | null; name_override: string | null; chat_opted_out: boolean; call_opted_out: boolean; is_opted_out: boolean }>) {
-      contactByPhone.set(tenDigit(r.phone), { name: r.name_override || r.name, chat: r.chat_opted_out, call: r.call_opted_out, optedOut: r.is_opted_out })
+      .select('phone, name, name_override, is_opted_out').in('phone', phones.slice(i, i + 300))
+    for (const r of (data ?? []) as Array<{ phone: string; name: string | null; name_override: string | null; is_opted_out: boolean }>) {
+      contactByPhone.set(tenDigit(r.phone), { name: r.name_override || r.name, optedOut: r.is_opted_out })
     }
   }
 
@@ -108,8 +109,7 @@ export async function POST(req: NextRequest) {
       primary_metal: (m.primary_metal as string) ?? null,
       lifetime_value: (m.lifetime_value as number) ?? null,
       is_hot_lead: c?.is_hot_lead ?? false,
-      is_do_not_call: ct?.call ?? c?.is_do_not_call ?? false,
-      dnd: (ct?.chat || (!!ct?.optedOut && !ct?.chat && !ct?.call)) ?? false,
+      optedOut: ct?.optedOut ?? false,
       pastSends: sends.map(s => ({ label: s.label, category: s.category, sentAt: s.sentAt })),
       suppressedUntil,
     }

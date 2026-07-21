@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   // Type B customer (the sales-import / call universe) — anchor for markers + calls.
   const { data: bCust } = await supabaseAdmin
     .from('wa_b_customers')
-    .select('id, name, source, is_hot_lead, hot_lead_at, is_do_not_call, walkin_salesman_id, walkin_at')
+    .select('id, name, source, is_hot_lead, hot_lead_at, walkin_salesman_id, walkin_at')
     .eq('phone', phone).maybeSingle()
 
   // Everything else in parallel.
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
           .select('recency_tier,value_tier,rfm_segment,frequency_tier,primary_metal,lifetime_value,total_bills,days_since_last_purchase,first_purchase_date,last_purchase_date,audience_labels,is_high_value,is_likely_wedding,outreach_bucket')
           .eq('customer_id', bCust.id).maybeSingle()
       : Promise.resolve({ data: null }),
-    supabaseAdmin.from('wa_customers').select('id, name, dnd, is_opted_out').eq('phone', phone).maybeSingle(),
+    supabaseAdmin.from('wa_customers').select('id, name, is_opted_out').eq('phone', phone).maybeSingle(),
     supabaseAdmin.from('wa_signals').select('interest, source, last_seen').eq('phone', phone),
     supabaseAdmin.from('wa_send_ledger')
       .select('meta_template_name, category, status, cohort_label, sent_at, campaign_id, template:wa_message_templates(name)')
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
       .eq('phone', phone).order('visited_at', { ascending: false }).limit(20),
   ])
 
-  const aCust = aCustRes.data as { id: string; name: string | null; dnd: boolean; is_opted_out: boolean } | null
+  const aCust = aCustRes.data as { id: string; name: string | null; is_opted_out: boolean } | null
   // Unified opt-out from the contact spine (chat STOP ∪ call DNC ∪ manual).
   const contact = contactRes.data as { is_opted_out: boolean } | null
 
@@ -116,8 +116,8 @@ export async function GET(req: NextRequest) {
     source: bCust?.source ?? (aCust ? 'whatsapp' : null),
     flags: {
       is_hot_lead: bCust?.is_hot_lead ?? false,
-      is_do_not_call: bCust?.is_do_not_call ?? false,
-      dnd: aCust?.dnd ?? false,
+      // One decision flag (wa_049): chat STOP ∪ call DNC ∪ manual. The per-channel
+      // columns are provenance and are not surfaced as separate badges.
       is_opted_out: contact?.is_opted_out ?? aCust?.is_opted_out ?? false,
     },
     markers: markerRes.data ?? null,

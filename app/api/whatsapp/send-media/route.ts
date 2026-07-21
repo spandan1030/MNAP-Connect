@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendImageMessage } from '@/lib/whatsapp/api'
+import { isOptedOut, OPTED_OUT_MESSAGE } from '@/lib/optout'
 
 export async function POST(req: NextRequest) {
   // Auth check
@@ -29,11 +30,9 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Image must be under 10 MB' }, { status: 400 })
   }
 
-  // Respect Do-Not-Disturb (customer sent STOP)
-  const { data: dndCustomer } = await supabaseAdmin
-    .from('wa_customers').select('dnd').eq('phone', phone).maybeSingle()
-  if (dndCustomer?.dnd) {
-    return Response.json({ error: 'This number opted out (sent STOP) and cannot be messaged.' }, { status: 403 })
+  // Respect opt-out — THE one flag (chat STOP ∪ call DNC ∪ manual), not just STOP.
+  if (await isOptedOut(phone)) {
+    return Response.json({ error: OPTED_OUT_MESSAGE }, { status: 403 })
   }
 
   // Upload to Supabase Storage

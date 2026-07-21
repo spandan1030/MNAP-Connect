@@ -97,7 +97,7 @@ function TemplatePicker({ templates, value, onChange }: {
 // Pulls last_purchase_date from wa_b_markers (no upload) and sends via the
 // Reach ledger, so nobody is thanked twice inside the template's window.
 // ===========================================================================
-interface RecentRecipient { phone: string; name: string | null; lastPurchase: string | null; suppressed: boolean; dnd: boolean }
+interface RecentRecipient { phone: string; name: string | null; lastPurchase: string | null; suppressed: boolean; optedOut: boolean }
 
 function RecentBuyersTab({ templates, setError }: { templates: MessageTemplate[]; setError: (s: string | null) => void }) {
   const [templateId, setTemplateId] = useState('')
@@ -111,7 +111,7 @@ function RecentBuyersTab({ templates, setError }: { templates: MessageTemplate[]
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
 
   const template = templates.find(t => t.id === templateId) ?? null
-  const eligible = recipients.filter(r => !r.suppressed && !r.dnd)
+  const eligible = recipients.filter(r => !r.suppressed && !r.optedOut)
   // Only the first N eligible go out this batch; the rest roll to the next run
   // (already-thanked buyers are auto-suppressed, so no one is thanked twice).
   const toSend = cap === '' ? eligible : eligible.slice(0, Math.max(0, cap))
@@ -189,13 +189,13 @@ function RecentBuyersTab({ templates, setError }: { templates: MessageTemplate[]
           )}
           <div className="space-y-1.5 max-h-[48vh] overflow-y-auto">
             {recipients.map(r => (
-              <div key={r.phone} className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 ${r.suppressed || r.dnd ? 'border-gray-100 bg-gray-50' : 'border-gray-200'}`}>
+              <div key={r.phone} className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 ${r.suppressed || r.optedOut ? 'border-gray-100 bg-gray-50' : 'border-gray-200'}`}>
                 <button onClick={() => setPeekPhone(r.phone)} className="min-w-0 text-left">
                   <span className="text-xs font-medium text-gray-800 truncate underline decoration-dotted underline-offset-2">{r.name || 'Unknown'}</span>
                   <span className="text-[11px] text-gray-400 ml-1.5">+91 {r.phone}</span>
                 </button>
                 <span className="text-[10px] text-gray-400 flex-shrink-0">
-                  {r.suppressed ? 'already thanked' : r.dnd ? 'opted out' : r.lastPurchase ? new Date(r.lastPurchase).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
+                  {r.suppressed ? 'already thanked' : r.optedOut ? 'opted out' : r.lastPurchase ? new Date(r.lastPurchase).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
                 </span>
               </div>
             ))}

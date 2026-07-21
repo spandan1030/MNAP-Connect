@@ -63,7 +63,7 @@ export default function ReachPage() {
   // Selection = first N eligible (not suppressed / opted out). N = daily cap, or
   // everyone eligible when the cap is blank. Re-run whenever the cap changes.
   function eligiblePhones(recs: ReachRecipient[]): string[] {
-    return recs.filter(r => !r.suppressedUntil && !r.is_do_not_call && !r.dnd).map(r => r.phone)
+    return recs.filter(r => !r.suppressedUntil && !r.optedOut).map(r => r.phone)
   }
   function selectWithCap(recs: ReachRecipient[], capVal: number | '') {
     const elig = eligiblePhones(recs)
@@ -104,9 +104,9 @@ export default function ReachPage() {
     finally { setResolving(false) }
   }
 
-  const eligibleCount = recipients.filter(r => !r.suppressedUntil && !r.is_do_not_call && !r.dnd).length
+  const eligibleCount = recipients.filter(r => !r.suppressedUntil && !r.optedOut).length
   const suppressedCount = recipients.filter(r => r.suppressedUntil).length
-  const blockedCount = recipients.filter(r => r.is_do_not_call || r.dnd).length
+  const blockedCount = recipients.filter(r => r.optedOut).length
 
   const cohortLabel = useMemo(() => {
     if (mode === 'paste') return 'Manual list'
@@ -248,7 +248,7 @@ export default function ReachPage() {
 
             <div className="space-y-1.5 max-h-[46vh] overflow-y-auto">
               {recipients.map(r => {
-                const blocked = !!r.suppressedUntil || r.is_do_not_call || r.dnd
+                const blocked = !!r.suppressedUntil || r.optedOut
                 return (
                   <div key={r.phone} className={`flex items-start gap-2 rounded-lg border px-2.5 py-2 ${blocked ? 'border-gray-100 bg-gray-50' : 'border-gray-200'}`}>
                     <input type="checkbox" className="mt-1" checked={selected.has(r.phone)} disabled={blocked}
@@ -271,7 +271,7 @@ export default function ReachPage() {
                         </p>
                       )}
                       {r.suppressedUntil && <p className="text-[10px] text-amber-600 mt-0.5">⛔ got this template — skips for {until(r.suppressedUntil)}</p>}
-                      {(r.is_do_not_call || r.dnd) && <p className="text-[10px] text-gray-400 mt-0.5">Opted out</p>}
+                      {r.optedOut && <p className="text-[10px] text-gray-400 mt-0.5">Opted out</p>}
                     </div>
                   </div>
                 )

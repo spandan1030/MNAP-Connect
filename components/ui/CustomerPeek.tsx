@@ -15,7 +15,7 @@ interface PeekData {
   isNew: boolean
   name: string | null
   source: string | null
-  flags: { is_hot_lead: boolean; is_do_not_call: boolean; dnd: boolean; is_opted_out: boolean }
+  flags: { is_hot_lead: boolean; is_opted_out: boolean }
   markers: {
     recency_tier: string | null; value_tier: string | null; rfm_segment: string | null
     frequency_tier: string | null; primary_metal: string | null; lifetime_value: number | null
@@ -90,7 +90,6 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                 <p className="font-bold text-gray-900 truncate">{data?.name || (loading ? 'Loading…' : 'Unknown')}</p>
                 {data?.flags.is_hot_lead && <span className="text-amber-400" title="Hot lead">★</span>}
                 {data?.isNew && <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full">NEW — not in DB</span>}
-                {data?.flags.is_do_not_call && <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full">Don&apos;t call</span>}
                 {data?.flags.is_opted_out && <span className="text-[10px] font-bold text-gray-600 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full">Opted out (all comms)</span>}
               </div>
               <a href={`tel:+91${phone}`} className="text-xs text-gray-500">+91 {phone}</a>

@@ -271,8 +271,10 @@ export default function CallsPage() {
   function toggleHotLead() { if (current) setHotLead(current.customerId, !current.hot) }
 
   // ── mark "don't call" directly from the card (no call needed) ──
-  // Sets is_do_not_call + hides the task. Excludes from calling ONLY —
-  // seeding/ad audiences and every other module ignore this flag.
+  // Writes is_do_not_call; the wa_b_customers trigger folds it UP into THE one
+  // opt-out flag (contacts.is_opted_out), so it also stops chat — ads stay on.
+  // This is the sanctioned "legacy write flows up" path (wa_049). Undo below
+  // clears it and the trigger re-derives the flag, keeping any separate STOP/manual.
   async function markDontCall() {
     if (!current) return
     setSaving(true)

@@ -30,21 +30,22 @@ export async function GET(req: NextRequest) {
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days)
   const cutoffStr = cutoff.toLocaleDateString('en-CA')
 
-  // Buyers with a recent last purchase (exclude DNC via the joined customer).
+  // Buyers with a recent last purchase. Opt-out is applied ONCE below, from the
+  // unified flag — not here, so no per-channel column is consulted.
   const rows: Array<{ phone: string; name: string | null; last: string | null }> = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabaseAdmin
       .from('wa_b_markers')
-      .select('last_purchase_date, wa_b_customers!inner(phone, name, is_do_not_call)')
+      .select('last_purchase_date, wa_b_customers!inner(phone, name)')
       .gte('last_purchase_date', cutoffStr)
       .order('last_purchase_date', { ascending: false })
       .range(from, from + PAGE - 1)
     if (error) return Response.json({ error: error.message }, { status: 500 })
-    const page = (data ?? []) as unknown as Array<{ last_purchase_date: string | null; wa_b_customers: { phone: string; name: string | null; is_do_not_call: boolean } | { phone: string; name: string | null; is_do_not_call: boolean }[] }>
+    const page = (data ?? []) as unknown as Array<{ last_purchase_date: string | null; wa_b_customers: { phone: string; name: string | null } | { phone: string; name: string | null }[] }>
     for (const r of page) {
       const c = Array.isArray(r.wa_b_customers) ? r.wa_b_customers[0] : r.wa_b_customers
-      if (!c || c.is_do_not_call) continue
+      if (!c) continue
       rows.push({ phone: tenDigit(c.phone), name: c.name, last: r.last_purchase_date })
     }
     if (page.length < PAGE) break
@@ -73,16 +74,16 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Opted out (STOP) on Type A.
-  const dndSet = new Set<string>()
+  // Opted out — THE one flag from the contact spine (chat STOP ∪ call DNC ∪ manual).
+  const optedOutSet = new Set<string>()
   for (let i = 0; i < phones.length; i += 300) {
-    const { data } = await supabaseAdmin.from('wa_customers').select('phone, dnd').in('phone', phones.slice(i, i + 300))
-    for (const r of (data ?? []) as { phone: string; dnd: boolean }[]) if (r.dnd) dndSet.add(tenDigit(r.phone))
+    const { data } = await supabaseAdmin.from('contacts').select('phone').eq('is_opted_out', true).in('phone', phones.slice(i, i + 300))
+    for (const r of (data ?? []) as { phone: string }[]) optedOutSet.add(tenDigit(r.phone))
   }
 
   const recipients = phones.map(p => {
     const r = byPhone.get(p)!
-    return { phone: p, name: r.name, lastPurchase: r.last, suppressed: suppSet.has(p), dnd: dndSet.has(p) }
+    return { phone: p, name: r.name, lastPurchase: r.last, suppressed: suppSet.has(p), optedOut: optedOutSet.has(p) }
   })
 
   return Response.json({ days, total: recipients.length, recipients })

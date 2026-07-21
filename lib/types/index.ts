@@ -446,8 +446,7 @@ export interface ReachRecipient {
   primary_metal: string | null
   lifetime_value: number | null
   is_hot_lead: boolean
-  is_do_not_call: boolean
-  dnd: boolean                  // opted out of WhatsApp (sent STOP)
+  optedOut: boolean             // THE one flag (contacts.is_opted_out) — chat STOP ∪ call DNC ∪ manual
   pastSends: Array<{ label: string; category: string | null; sentAt: string }>
   suppressedUntil: string | null // set when the CURRENT template is within its window
 }

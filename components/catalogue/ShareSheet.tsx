@@ -42,7 +42,7 @@ export default function ShareSheet({
   useEffect(() => {
     async function load() {
       const [custRes, threadRes, topicRes, intRes] = await Promise.all([
-        supabase.from('wa_customers').select('id, name, phone').eq('is_active', true).eq('dnd', false).order('name'),
+        supabase.from('wa_customers').select('id, name, phone').eq('is_active', true).eq('is_opted_out', false).order('name'),
         supabase.from('wa_threads').select('phone, customer_name, customer_id, last_message_at').order('last_message_at', { ascending: false, nullsFirst: false }).limit(3),
         supabase.from('wa_interest_topics').select('*').eq('is_active', true).order('sort_order'),
         supabase.from('wa_customer_interests').select('customer_id, topic_id'),
