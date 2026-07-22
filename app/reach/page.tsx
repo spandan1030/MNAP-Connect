@@ -44,7 +44,7 @@ export default function ReachPage() {
   const [error, setError] = useState<string | null>(null)
 
   const [sending, setSending] = useState(false)
-  const [created, setCreated] = useState<{ campaignId: string; members: number; sent: number } | null>(null)
+  const [created, setCreated] = useState<{ campaignId: string; audienceId: string | null; members: number; sent: number } | null>(null)
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
   const router = useRouter()
 
@@ -144,7 +144,7 @@ export default function ReachPage() {
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Could not create campaign'); setSending(false); return }
-      setCreated({ campaignId: data.campaignId, members: data.members ?? 0, sent: data.send?.sent ?? 0 })
+      setCreated({ campaignId: data.campaignId, audienceId: data.audienceId ?? null, members: data.members ?? 0, sent: data.send?.sent ?? 0 })
     } catch { setError('Network error creating campaign') }
     finally { setSending(false) }
   }
@@ -240,9 +240,16 @@ export default function ReachPage() {
             {created && (
               <div className="text-xs bg-green-50 border border-green-100 rounded-lg px-3 py-2 text-green-800 space-y-1">
                 <p>Campaign created with {created.members.toLocaleString('en-IN')} members · sent to {created.sent} now.</p>
-                <button onClick={() => router.push('/campaigns')} className="font-semibold text-green-700 underline">
-                  Open campaign → finish sending the rest
-                </button>
+                <div className="flex flex-col gap-1">
+                  <button onClick={() => router.push('/campaigns')} className="font-semibold text-green-700 underline text-left">
+                    Open campaign → finish sending the rest
+                  </button>
+                  {created.audienceId && (
+                    <button onClick={() => router.push('/audiences')} className="font-semibold text-green-700 underline text-left">
+                      Continue as a funnel → carry who read/replied, then send again
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 

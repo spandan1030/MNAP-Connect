@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { resolveCohortPhones, tenDigit } from '@/lib/reach/resolve'
 import { dispatchTemplate } from '@/lib/reach/dispatch'
+import { createAudienceFromCohort, adoptChatCampaignAsStep } from '@/lib/audiences/adhoc'
 import type { ReachFilter } from '@/lib/types'
 
 // Create a campaign from a Reach cohort: resolve ALL eligible into members, then
@@ -92,5 +93,20 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return Response.json({ campaignId, members: memberPhones.length, dynamic, send })
+  // Fold into the one spine: this cohort becomes a real AUDIENCE and this blast
+  // becomes its step 1, so it can be continued (carry read/replied → narrow →
+  // send again) from the audience's funnel. Best-effort — a failure here never
+  // fails the send that already happened.
+  let audienceId: string | null = null
+  try {
+    const made = await createAudienceFromCohort({ name: campaignName, phones: memberPhones, filter: f, userId: user.id, isDynamic: dynamic })
+    if ('audienceId' in made) {
+      audienceId = made.audienceId
+      await adoptChatCampaignAsStep({
+        audienceId, campaignId, enteredPhones: memberPhones, templateId, name: campaignName, userId: user.id,
+      })
+    }
+  } catch { /* funnel glue is best-effort */ }
+
+  return Response.json({ campaignId, audienceId, members: memberPhones.length, dynamic, send })
 }

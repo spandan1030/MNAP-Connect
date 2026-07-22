@@ -406,12 +406,15 @@ async function recordLead(
 }
 
 // Record a quick-reply button tap on an audience-step send as a 'replied' event.
-// Attribution is exact: context.id (`wamid`) uniquely identifies the step message
-// we sent this person. No-op when the tapped message isn't a step send.
+// Attribution is exact: context.id (`wamid`) → the ledger row's campaign → a step
+// that owns that campaign. No-op when the tapped message isn't a step send.
 async function recordStepReply(wamid: string, buttonId: string) {
-  const { data: member } = await supabaseAdmin.from('audience_step_members')
-    .select('step_id').eq('wa_message_id', wamid).maybeSingle()
-  if (!member) return
+  const { data: ledger } = await supabaseAdmin.from('wa_send_ledger')
+    .select('campaign_id').eq('wa_message_id', wamid).not('campaign_id', 'is', null).maybeSingle()
+  if (!ledger?.campaign_id) return
+  const { data: step } = await supabaseAdmin.from('audience_steps')
+    .select('id').eq('campaign_id', ledger.campaign_id).maybeSingle()
+  if (!step) return
   const { data: msgRow } = await supabaseAdmin.from('wa_messages')
     .select('id').eq('wa_message_id', wamid).maybeSingle()
   await supabaseAdmin.from('wa_message_events').insert({

@@ -11,14 +11,15 @@ import { callableTypeB, mintCallDeck, notCallableMessage } from '@/lib/calls/dec
 //  A step CARRIES a cohort from the previous step's outcome, optionally NARROWS
 //  it by markers (the same rule engine as everywhere), then ACTS (chat / call).
 //  Every carry signal is an EXACT join — no time-window guessing:
-//    · delivered / read — wa_message_events (keyed to the step send's wamid)
+//    · delivered / read — wa_message_events (keyed to the step campaign's wamids)
 //    · replied          — a quick-reply button tap, recorded as a wa_message_events
 //                         'replied' row against the step send's wamid (see webhook)
 //    · connected        — wa_b_call_logs.success = true for the step's call deck
 //
-//  It reuses ALL existing infra: chat = dispatchTemplate + wa_campaigns; call =
-//  mintCallDeck. The step is thin orchestration; audience_step_members freezes
-//  who entered so the funnel is a historical fact.
+//  Chat outcomes derive from the step's CAMPAIGN ledger (campaign_id), not the
+//  frozen member snapshot — so a Reach blast adopted as a step, and any "send N
+//  more" done later on that campaign, are both reflected. audience_step_members
+//  freezes who ENTERED (for the entered count and 'all'-carry).
 // ═══════════════════════════════════════════════════════════════════════════
 
 export type CarrySignal = 'all' | 'delivered' | 'read' | 'replied' | 'connected'
@@ -43,29 +44,43 @@ export interface StepRow {
 
 const CHAT_SIGNALS: CarrySignal[] = ['delivered', 'read', 'replied']
 
-// ── Membership snapshot helpers ──────────────────────────────────────────────
+// ── Snapshot + ledger helpers ────────────────────────────────────────────────
 
-async function memberRows(stepId: string): Promise<Array<{ phone: string; wa_message_id: string | null }>> {
-  const out: Array<{ phone: string; wa_message_id: string | null }> = []
+async function memberPhones(stepId: string): Promise<string[]> {
+  const out: string[] = []
   for (let from = 0; ; from += 1000) {
     const { data } = await supabaseAdmin.from('audience_step_members')
-      .select('phone, wa_message_id').eq('step_id', stepId).range(from, from + 999)
-    const rows = (data ?? []) as Array<{ phone: string; wa_message_id: string | null }>
-    out.push(...rows)
+      .select('phone').eq('step_id', stepId).range(from, from + 999)
+    const rows = (data ?? []) as Array<{ phone: string }>
+    out.push(...rows.map(r => tenDigit(r.phone)))
     if (rows.length < 1000) break
   }
   return out
 }
 
-/** wamids of THIS step's sends that have an event in `statuses` (+ optional button). */
+/** Every successful send under this step's campaign: wamid -> phone. */
+async function campaignSends(campaignId: string | null): Promise<Map<string, string>> {
+  const byWamid = new Map<string, string>()
+  if (!campaignId) return byWamid
+  for (let from = 0; ; from += 1000) {
+    const { data } = await supabaseAdmin.from('wa_send_ledger')
+      .select('phone, wa_message_id').eq('campaign_id', campaignId).eq('status', 'sent')
+      .not('wa_message_id', 'is', null).range(from, from + 999)
+    const rows = (data ?? []) as Array<{ phone: string; wa_message_id: string }>
+    for (const r of rows) byWamid.set(r.wa_message_id, tenDigit(r.phone))
+    if (rows.length < 1000) break
+  }
+  return byWamid
+}
+
+/** wamids that have an event in `statuses` (+ optional button on a 'replied'). */
 async function wamidsWithStatus(
   wamids: string[], statuses: string[], button: string | null,
 ): Promise<Set<string>> {
   const hit = new Set<string>()
   for (let i = 0; i < wamids.length; i += 300) {
-    const slice = wamids.slice(i, i + 300)
     const { data } = await supabaseAdmin.from('wa_message_events')
-      .select('wa_message_id, status, raw').in('wa_message_id', slice).in('status', statuses)
+      .select('wa_message_id, status, raw').in('wa_message_id', wamids.slice(i, i + 300)).in('status', statuses)
     for (const e of (data ?? []) as Array<{ wa_message_id: string; status: string; raw: { button?: string } | null }>) {
       if (button && e.status === 'replied' && (e.raw?.button ?? null) !== button) continue
       hit.add(e.wa_message_id)
@@ -80,11 +95,9 @@ async function wamidsWithStatus(
 export async function engagementCohort(
   step: StepRow, signal: CarrySignal, button: string | null = null,
 ): Promise<Set<string>> {
-  const members = await memberRows(step.id)
-  if (signal === 'all') return new Set(members.map(m => tenDigit(m.phone)))
+  if (signal === 'all') return new Set(await memberPhones(step.id))
 
   if (signal === 'connected') {
-    // Call outcome: success=true on a log whose task belongs to this step's deck.
     const out = new Set<string>()
     if (!step.call_campaign_id) return out
     for (let from = 0; ; from += 1000) {
@@ -102,9 +115,8 @@ export async function engagementCohort(
     return out
   }
 
-  // Chat outcomes: delivered / read / replied, keyed to each send's wamid.
-  const byWamid = new Map<string, string>()   // wamid -> phone
-  for (const m of members) if (m.wa_message_id) byWamid.set(m.wa_message_id, tenDigit(m.phone))
+  // Chat outcomes: delivered / read / replied, from the step campaign's ledger.
+  const byWamid = await campaignSends(step.campaign_id)
   const statuses = signal === 'delivered' ? ['delivered', 'read'] : signal === 'read' ? ['read'] : ['replied']
   const hit = await wamidsWithStatus([...byWamid.keys()], statuses, signal === 'replied' ? button : null)
   const out = new Set<string>()
@@ -118,38 +130,30 @@ export async function engagementCohort(
 export async function resolveStepInput(step: StepRow): Promise<{ phones: string[]; error?: string }> {
   let base: Set<string>
 
-  if (step.seq <= 1 || step.carry_signal === 'all') {
-    // Step 1 (or an explicit 'all' carry) starts from the whole audience.
-    if (step.seq <= 1) {
-      base = new Set<string>()
-      for (let from = 0; ; from += 1000) {
-        const { data } = await supabaseAdmin.from('audience_members')
-          .select('phone').eq('audience_id', step.audience_id).range(from, from + 999)
-        const rows = (data ?? []) as { phone: string }[]
-        for (const r of rows) base.add(tenDigit(r.phone))
-        if (rows.length < 1000) break
-      }
-    } else {
-      const prev = await previousStep(step)
-      if (!prev) return { phones: [], error: 'No previous step to carry from.' }
-      if (prev.status !== 'run') return { phones: [], error: `Run step ${prev.seq} first.` }
-      base = await engagementCohort(prev, 'all')
+  if (step.seq <= 1) {
+    base = new Set<string>()
+    for (let from = 0; ; from += 1000) {
+      const { data } = await supabaseAdmin.from('audience_members')
+        .select('phone').eq('audience_id', step.audience_id).range(from, from + 999)
+      const rows = (data ?? []) as { phone: string }[]
+      for (const r of rows) base.add(tenDigit(r.phone))
+      if (rows.length < 1000) break
     }
   } else {
     const prev = await previousStep(step)
     if (!prev) return { phones: [], error: 'No previous step to carry from.' }
     if (prev.status !== 'run') return { phones: [], error: `Run step ${prev.seq} first.` }
-    // A chat-carry off a call step (or vice-versa) can't match — guard it.
-    if (CHAT_SIGNALS.includes(step.carry_signal) && prev.action !== 'chat') {
-      return { phones: [], error: `Step ${prev.seq} was a call — carry by "connected", not "${step.carry_signal}".` }
-    }
-    if (step.carry_signal === 'connected' && prev.action !== 'call') {
-      return { phones: [], error: `Step ${prev.seq} was a chat — carry by delivered / read / replied.` }
+    if (step.carry_signal !== 'all') {
+      if (CHAT_SIGNALS.includes(step.carry_signal) && prev.action !== 'chat') {
+        return { phones: [], error: `Step ${prev.seq} was a call — carry by "connected", not "${step.carry_signal}".` }
+      }
+      if (step.carry_signal === 'connected' && prev.action !== 'call') {
+        return { phones: [], error: `Step ${prev.seq} was a chat — carry by delivered / read / replied.` }
+      }
     }
     base = await engagementCohort(prev, step.carry_signal, step.carry_button)
   }
 
-  // Optional marker narrow (same engine as audience authoring).
   if (step.narrow_rules && !isEmptyTree(step.narrow_rules)) {
     const { phones: narrowSet, error } = await resolveRuleTree(step.narrow_rules)
     if (error) return { phones: [], error }
@@ -187,7 +191,6 @@ export async function runStep(stepId: string, userId: string): Promise<RunStepRe
   const { data: aud } = await supabaseAdmin.from('wa_audiences').select('name, filter').eq('id', step.audience_id).maybeSingle()
   const label = step.name?.trim() || `${aud?.name ?? 'Audience'} · step ${step.seq}`
 
-  // Freeze who entered (wamid filled in after a chat send).
   await snapshotEntered(step.id, entered)
 
   if (step.action === 'chat') {
@@ -213,10 +216,6 @@ export async function runStep(stepId: string, userId: string): Promise<RunStepRe
       userId, campaignId, cohortLabel: label, limit: null,
     })
     if (result.error) return { error: result.error, entered: entered.length }
-
-    // Backfill each sent person's wamid onto their snapshot row (the join key
-    // to wa_message_events for delivered / read / replied).
-    await backfillWamids(step.id, campaignId)
 
     await supabaseAdmin.from('audience_steps').update({
       status: 'run', campaign_id: campaignId, entered_count: entered.length, run_at: new Date().toISOString(),
@@ -250,45 +249,26 @@ async function snapshotEntered(stepId: string, phones: string[]): Promise<void> 
   }
 }
 
-async function backfillWamids(stepId: string, campaignId: string): Promise<void> {
-  const map: Array<{ step_id: string; phone: string; wa_message_id: string }> = []
-  for (let from = 0; ; from += 1000) {
-    const { data } = await supabaseAdmin.from('wa_send_ledger')
-      .select('phone, wa_message_id').eq('campaign_id', campaignId).eq('status', 'sent')
-      .not('wa_message_id', 'is', null).range(from, from + 999)
-    const rows = (data ?? []) as Array<{ phone: string; wa_message_id: string }>
-    for (const r of rows) map.push({ step_id: stepId, phone: tenDigit(r.phone), wa_message_id: r.wa_message_id })
-    if (rows.length < 1000) break
-  }
-  for (let i = 0; i < map.length; i += 500) {
-    await supabaseAdmin.from('audience_step_members').upsert(map.slice(i, i + 500), { onConflict: 'step_id,phone' })
-  }
-}
-
 // ── Per-step funnel counts (for the report) ──────────────────────────────────
 
 export interface StepFunnel {
   entered: number
-  // chat
   sent?: number; delivered?: number; read?: number; replied?: number
-  // call
   attempts?: number; connected?: number; notConnected?: number; pending?: number
 }
 
 export async function stepFunnel(step: StepRow): Promise<StepFunnel> {
   if (step.status !== 'run') return { entered: 0 }
-  const members = await memberRows(step.id)
-  const entered = members.length
+  const entered = step.entered_count ?? (await memberPhones(step.id)).length
 
   if (step.action === 'chat') {
-    const wamids = members.map(m => m.wa_message_id).filter((w): w is string => !!w)
+    const wamids = [...(await campaignSends(step.campaign_id)).keys()]
     const delivered = await wamidsWithStatus(wamids, ['delivered', 'read'], null)
     const read = await wamidsWithStatus(wamids, ['read'], null)
     const replied = await wamidsWithStatus(wamids, ['replied'], null)
     return { entered, sent: wamids.length, delivered: delivered.size, read: read.size, replied: replied.size }
   }
 
-  // call
   let attempts = 0, connected = 0, notConnected = 0, pending = 0
   if (step.call_campaign_id) {
     for (let from = 0; ; from += 1000) {

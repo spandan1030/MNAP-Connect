@@ -5,7 +5,8 @@ import type { CallFilter, ReachFilter } from '@/lib/types'
 import { resolveRuleTree } from '@/lib/audiences/resolve-rules'
 import { chipsToTree } from '@/lib/audiences/chips-to-tree'
 import { type RuleTree, isEmptyTree } from '@/lib/audiences/rules'
-import { callableTypeB, notCallableMessage, mintCallDeck } from '@/lib/calls/deck'
+import { callableTypeB, notCallableMessage } from '@/lib/calls/deck'
+import { createAudienceFromCohort, createAndRunCallStep } from '@/lib/audiences/adhoc'
 
 // Admin Call Control — build the calling deck through the ONE shared engine.
 //   POST { preview: true, filter | rules }   -> { count }
@@ -48,7 +49,10 @@ export async function POST(req: NextRequest) {
   // ── Preview: just the callable count ──
   if (body.preview) return Response.json({ count: ids.length })
 
-  // ── Create ──
+  // ── Create — fold into the one spine: the cohort becomes an AUDIENCE and the
+  // call becomes its step 1, so it can be continued (carry connected → narrow →
+  // WhatsApp them) from the audience's funnel. Deck-minting + gates are unchanged
+  // (createAndRunCallStep → runStep → callableTypeB → mintCallDeck). ──
   if (!body.name || !body.name.trim()) {
     return Response.json({ error: 'Campaign name required' }, { status: 400 })
   }
@@ -56,9 +60,10 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: notCallableMessage(snoozed, unreachable) }, { status: 400 })
   }
 
-  const res = await mintCallDeck({
-    name: body.name, customerIds: ids, createdBy: user.id, filterJson: body.filter ?? tree,
-  })
-  if ('error' in res) return Response.json({ error: res.error }, { status: 500 })
-  return Response.json({ campaignId: res.campaignId, taskCount: res.taskCount, unreachable, snoozed })
+  const made = await createAudienceFromCohort({ name: body.name, phones: [...phones], filter: body.filter ?? tree, userId: user.id })
+  if ('error' in made) return Response.json({ error: made.error }, { status: 500 })
+  const run = await createAndRunCallStep({ audienceId: made.audienceId, name: body.name, userId: user.id })
+  if (run.error) return Response.json({ error: run.error }, { status: 500 })
+
+  return Response.json({ audienceId: made.audienceId, taskCount: run.callable ?? 0, unreachable, snoozed })
 }

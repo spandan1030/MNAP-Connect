@@ -172,7 +172,7 @@ export default function CallControlPage() {
     const json = await res.json()
     setBusy(false)
     if (!res.ok) { setMsg(`Error: ${json.error}`); return }
-    setMsg(`Created "${name.trim()}" with ${json.taskCount} cards.`)
+    setMsg(`Created "${name.trim()}" with ${json.taskCount} cards — now an audience you can continue in Audiences → Insights (carry the connected → WhatsApp them).`)
     setName(''); setPreviewCount(null)
     loadCampaigns()
   }
