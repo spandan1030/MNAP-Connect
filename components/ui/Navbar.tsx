@@ -83,7 +83,6 @@ const MORE = [
   { href: '/admin/calls',    label: 'Call Control', icon: ICONS.phone },
   { href: '/admin/app-users', label: 'App users',   icon: ICONS.customers },
   { href: '/purchase',       label: 'Purchase',  icon: ICONS.purchase },
-  { href: '/reports',        label: 'Reports',   icon: ICONS.reports },
   { href: '/prospects',      label: 'Prospects', icon: ICONS.prospects },
   { href: '/admin/topics',   label: 'Topics',    icon: ICONS.topics },
   { href: '/admin/segments', label: 'Prospect segments', icon: ICONS.segments },
