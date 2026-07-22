@@ -123,6 +123,15 @@ async function handleInboundMessage(
   const contactName =
     contacts.find(c => c.wa_id === rawPhone)?.profile?.name ?? null
 
+  // A quick-reply BUTTON tap on an audience-STEP message carries context.id = the
+  // wamid of the step send. Record it as an exactly-attributable 'replied' event
+  // so a later step can carry "who tapped" forward. Additive: if the tapped
+  // message wasn't a step send, this no-ops and the bot flow is untouched.
+  const replyContextId = msg.context?.id ?? null
+  if (interactiveReply && replyContextId) {
+    await recordStepReply(replyContextId, interactiveReply.id)
+  }
+
   // Customer lookup and thread lookup are independent — run in parallel
   const [{ data: existingCustomer }, { data: existingThread }] = await Promise.all([
     supabaseAdmin.from('wa_customers').select('id, name, dnd').eq('phone', phone).maybeSingle(),
@@ -393,6 +402,21 @@ async function recordLead(
 ) {
   await supabaseAdmin.from('wa_lead_captures').insert({
     thread_id: threadId, customer_id: customerId ?? null, ...fields,
+  })
+}
+
+// Record a quick-reply button tap on an audience-step send as a 'replied' event.
+// Attribution is exact: context.id (`wamid`) uniquely identifies the step message
+// we sent this person. No-op when the tapped message isn't a step send.
+async function recordStepReply(wamid: string, buttonId: string) {
+  const { data: member } = await supabaseAdmin.from('audience_step_members')
+    .select('step_id').eq('wa_message_id', wamid).maybeSingle()
+  if (!member) return
+  const { data: msgRow } = await supabaseAdmin.from('wa_messages')
+    .select('id').eq('wa_message_id', wamid).maybeSingle()
+  await supabaseAdmin.from('wa_message_events').insert({
+    message_id: msgRow?.id ?? null, wa_message_id: wamid, status: 'replied',
+    event_at: new Date().toISOString(), raw: { button: buttonId, source: 'step' },
   })
 }
 
@@ -991,6 +1015,9 @@ interface WaInboundMessage {
     list_reply?: WaInteractiveReply
     button_reply?: WaInteractiveReply
   }
+  // On a quoted reply or a quick-reply button tap, WhatsApp echoes the wamid of
+  // the message being replied to — the exact-attribution key for audience steps.
+  context?: { id?: string }
 }
 
 interface WaStatusUpdate {

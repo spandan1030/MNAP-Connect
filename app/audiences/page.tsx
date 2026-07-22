@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Navbar from '@/components/ui/Navbar'
 import FilterBuilder from '@/components/reach/FilterBuilder'
 import RuleBuilder from '@/components/audiences/RuleBuilder'
+import StepFunnel from '@/components/audiences/StepFunnel'
 import { emptyTree, isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
 import { chipsToTree, chipsConvertible } from '@/lib/audiences/chips-to-tree'
 import { createClient } from '@/lib/supabase/client'
@@ -544,6 +545,17 @@ export default function AudiencesPage() {
               <button onClick={() => setReportFor(null)} className="text-gray-400 text-xl leading-none">×</button>
             </div>
             <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
+              {/* The multi-step funnel — the modular way to run this audience:
+                  carry survivors → narrow → act, as many steps as you like. */}
+              <StepFunnel audienceId={reportFor.id} templates={templates} dynamicOptions={{
+                call_campaigns: campaigns.map(c => ({ value: c.id, label: c.name })),
+                topics: topics.map(t => ({ value: t.id, label: t.name })),
+                salesmen: salesmen.map(s => ({ value: s.alias, label: `${s.alias} — ${s.name}` })),
+              }} />
+
+              <div className="border-t border-gray-100 pt-3">
+                <p className="text-[10px] text-gray-400 mb-2">Legacy activations (one-shot sends / calls on this audience)</p>
+              </div>
               {reportLoading && <p className="text-sm text-gray-400 text-center py-6">Loading…</p>}
               {report && !reportLoading && (
                 <>
