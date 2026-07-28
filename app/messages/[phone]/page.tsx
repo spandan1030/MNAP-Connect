@@ -1,6 +1,6 @@
 'use client'
 
-import { use, useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { use, useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { applyPlaceholders } from '@/lib/utils'
@@ -47,11 +47,70 @@ function StatusTick({ status }: { status: WaMessage['status'] }) {
 }
 
 // ---------------------------------------------------------------------------
+// Day dividers — WhatsApp-style "Today / Yesterday / 24 Jul 2026" chips so the
+// bubble's time-only stamp isn't ambiguous about WHICH day a message was sent.
+// ---------------------------------------------------------------------------
+function sameDay(a: string, b: string): boolean {
+  const da = new Date(a), db = new Date(b)
+  return da.getFullYear() === db.getFullYear()
+    && da.getMonth() === db.getMonth()
+    && da.getDate() === db.getDate()
+}
+
+function dayLabel(dateStr: string): string {
+  const now = new Date()
+  const yest = new Date(); yest.setDate(now.getDate() - 1)
+  if (sameDay(dateStr, now.toISOString()))  return 'Today'
+  if (sameDay(dateStr, yest.toISOString())) return 'Yesterday'
+  return new Date(dateStr).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function DayDivider({ date }: { date: string }) {
+  return (
+    <div className="flex justify-center my-3">
+      <span className="text-[11px] font-medium text-gray-500 bg-white border border-gray-200 rounded-full px-3 py-1 shadow-sm">
+        {dayLabel(date)}
+      </span>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Linkify — turn http(s) URLs in a message body into tappable links. Splitting
+// on a capturing group leaves URLs at the odd indices.
+// ---------------------------------------------------------------------------
+const URL_RE = /(https?:\/\/[^\s]+)/g
+function linkify(text: string, isOut: boolean) {
+  return text.split(URL_RE).map((part, i) => {
+    if (i % 2 === 0) return part
+    // Keep trailing sentence punctuation out of the href.
+    const m = part.match(/^(.*?)([.,!?;:)]*)$/)
+    const url = m ? m[1] : part
+    const tail = m ? m[2] : ''
+    return (
+      <Fragment key={i}>
+        <a href={url} target="_blank" rel="noopener noreferrer"
+          className={`underline break-all ${isOut ? 'text-green-100' : 'text-green-700'}`}>
+          {url}
+        </a>
+        {tail}
+      </Fragment>
+    )
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Single message bubble
 // ---------------------------------------------------------------------------
 function MessageBubble({ msg }: { msg: WaMessage }) {
   const isOut = msg.direction === 'outbound'
-  const isImage = (msg.message_type ?? 'text') === 'image'
+  const type  = msg.message_type ?? 'text'
+  const isImage    = type === 'image'
+  const isVideo    = type === 'video'
+  const isAudio    = type === 'audio'
+  const isDocument = type === 'document'
+  // Image + video fill the bubble edge-to-edge; audio/document sit in normal padding.
+  const edgeMedia = (isImage || isVideo) && !!msg.media_url
   const time = new Date(msg.created_at).toLocaleTimeString('en-IN', {
     hour: '2-digit', minute: '2-digit', hour12: true
   })
@@ -63,7 +122,7 @@ function MessageBubble({ msg }: { msg: WaMessage }) {
           isOut
             ? 'bg-green-600 text-white rounded-br-sm'
             : 'bg-white text-gray-900 border border-gray-100 rounded-bl-sm'
-        } ${isImage && msg.media_url ? 'p-1' : 'px-3.5 py-2'}`}
+        } ${edgeMedia ? 'p-1' : 'px-3.5 py-2'}`}
       >
         {/* Image */}
         {isImage && msg.media_url && (
@@ -76,31 +135,67 @@ function MessageBubble({ msg }: { msg: WaMessage }) {
             />
           </a>
         )}
-        {isImage && !msg.media_url && (
-          <div className="flex items-center gap-1.5 px-2 py-1">
+
+        {/* Video */}
+        {isVideo && msg.media_url && (
+          <video
+            src={msg.media_url}
+            controls
+            preload="metadata"
+            className="rounded-xl block bg-black"
+            style={{ maxHeight: '320px', maxWidth: '100%' }}
+          />
+        )}
+
+        {/* Voice / audio */}
+        {isAudio && msg.media_url && (
+          <audio src={msg.media_url} controls className="max-w-full" style={{ minWidth: '220px' }} />
+        )}
+
+        {/* Document — download link */}
+        {isDocument && msg.media_url && (
+          <a
+            href={msg.media_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            download
+            className={`flex items-center gap-2 py-0.5 ${isOut ? 'text-green-50' : 'text-gray-700'}`}
+          >
+            <svg className="w-6 h-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+            </svg>
+            <span className="text-sm underline break-all">{msg.body || 'Document'}</span>
+          </a>
+        )}
+
+        {/* Media missing / unsupported type placeholder */}
+        {(isImage || isVideo || isAudio || isDocument || type === 'other') && !msg.media_url && (
+          <div className="flex items-center gap-1.5 px-1 py-1">
             <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 18h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v10.5a1.5 1.5 0 001.5 1.5z"/>
             </svg>
-            <span className="text-sm">Photo</span>
+            <span className="text-sm">
+              {isVideo ? 'Video' : isAudio ? 'Voice message' : isDocument ? 'Document' : isImage ? 'Photo' : 'Unsupported message'}
+            </span>
           </div>
         )}
 
-        {/* Caption or text body */}
-        {msg.body && (
-          <p className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${isImage && msg.media_url ? 'px-2.5 pt-1.5' : ''}`}>
-            {msg.body}
+        {/* Caption or text body (document renders its label above, so skip here) */}
+        {msg.body && !isDocument && (
+          <p className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${edgeMedia ? 'px-2.5 pt-1.5' : ''}`}>
+            {linkify(msg.body, isOut)}
           </p>
         )}
 
         {/* Footer: time + status */}
-        <div className={`flex items-center gap-1 mt-0.5 ${isImage && msg.media_url ? 'px-2.5 pb-1' : ''} ${isOut ? 'justify-end' : 'justify-start'}`}>
+        <div className={`flex items-center gap-1 mt-0.5 ${edgeMedia ? 'px-2.5 pb-1' : ''} ${isOut ? 'justify-end' : 'justify-start'}`}>
           <span className={`text-[10px] ${isOut ? 'text-green-200' : 'text-gray-400'}`}>{time}</span>
           {isOut && <StatusTick status={msg.status} />}
         </div>
 
         {/* Failed reason — code + plain English */}
         {isOut && msg.status === 'failed' && (msg.error_code || msg.failed_reason) && (
-          <div className={`mt-0.5 ${isImage && msg.media_url ? 'px-2.5 pb-1' : ''}`}>
+          <div className={`mt-0.5 ${edgeMedia ? 'px-2.5 pb-1' : ''}`}>
             <p className="text-[10px] text-red-300 font-semibold">
               Not delivered{msg.error_code ? ` · ${shortError(msg.error_code)}` : ''}
             </p>
@@ -630,9 +725,16 @@ export default function ConversationPage({
           </div>
         )}
 
-        {messages.map(msg => (
-          <MessageBubble key={msg.id} msg={msg} />
-        ))}
+        {messages.map((msg, i) => {
+          const prev = messages[i - 1]
+          const showDay = !prev || !sameDay(prev.created_at, msg.created_at)
+          return (
+            <Fragment key={msg.id}>
+              {showDay && <DayDivider date={msg.created_at} />}
+              <MessageBubble msg={msg} />
+            </Fragment>
+          )
+        })}
 
         <div ref={bottomRef} />
       </div>

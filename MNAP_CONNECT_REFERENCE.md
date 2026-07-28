@@ -121,6 +121,23 @@ tapped; old docs without `images` fall back to `[image]`.
   `mnap-customer` service-account key (Firebase console → Project settings → Service
   accounts → Generate new private key). Server-only; never exposed to the browser.
 
+### Two-way inbox — inbound media & message rendering
+The chat view (`app/messages/[phone]/page.tsx`) and the inbound webhook
+(`app/api/whatsapp/webhook/route.ts`) share the `wa_messages` row.
+- **Day dividers:** messages are grouped by day with WhatsApp-style chips
+  (**Today / Yesterday / "24 Jul 2026"**); each bubble itself shows the time only.
+- **Clickable links:** `http(s)://…` URLs in a message body are auto-linkified
+  (`linkify()`), trailing sentence punctuation kept out of the href.
+- **Inbound media:** the webhook downloads from Meta → stores in Supabase Storage
+  `wa-media` (`inbound/…`) → `wa_messages.media_url`, for **image, video, document,
+  and voice/audio** (was image-only before). `message_type` (wa_006) already allows all
+  of these — no migration. Bubbles render `<img>` (tap = open), `<video controls>`,
+  `<audio controls>`, or a document download link; a missing `media_url` shows a
+  placeholder. Thread previews use 📷/🎥/📄/🎤 prefixes.
+- **Not yet built:** quoted-reply display (inbound `context.id` is captured only for
+  audience-step attribution, `recordStepReply`) and staff outbound reply-to a specific
+  message.
+
 ---
 
 ## 3. Two-Module Architecture

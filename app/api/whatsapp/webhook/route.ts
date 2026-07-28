@@ -111,12 +111,18 @@ async function handleInboundMessage(
   const body =
     msg.type === 'text'        ? msg.text?.body ?? ''
     : msg.type === 'image'       ? (msg.image?.caption ?? null)
+    : msg.type === 'video'       ? (msg.video?.caption ?? null)
+    : msg.type === 'document'    ? (msg.document?.caption ?? msg.document?.filename ?? null)
+    : msg.type === 'audio'       ? null
     : interactiveReply           ? interactiveReply.title
     : `[${msg.type} message]`
 
   const messageType =
     msg.type === 'text'        ? 'text'
     : msg.type === 'image'       ? 'image'
+    : msg.type === 'video'       ? 'video'
+    : msg.type === 'document'    ? 'document'
+    : msg.type === 'audio'       ? 'audio'
     : msg.type === 'interactive' ? 'text'
     : 'other'
 
@@ -177,15 +183,25 @@ async function handleInboundMessage(
   let threadId: string
   const now = new Date().toISOString()
 
-  // For inbound images, download from Meta and store in Supabase Storage
+  // For inbound media (image / video / document / voice), download from Meta and
+  // store in Supabase Storage. Each of these payload shapes carries { id, mime_type }.
+  const inboundMedia =
+    msg.type === 'image'    ? msg.image
+    : msg.type === 'video'    ? msg.video
+    : msg.type === 'document' ? msg.document
+    : msg.type === 'audio'    ? msg.audio
+    : null
   let mediaUrl: string | null = null
-  if (msg.type === 'image' && msg.image?.id) {
-    mediaUrl = await fetchAndStoreInboundMedia(msg.image.id, msg.image.mime_type ?? 'image/jpeg')
+  if (inboundMedia?.id) {
+    mediaUrl = await fetchAndStoreInboundMedia(inboundMedia.id, inboundMedia.mime_type ?? 'application/octet-stream')
       .catch(err => { console.error('[webhook] Media store error:', err); return null })
   }
 
-  const preview = messageType === 'image'
-    ? ('📷 Photo' + (body ? `: ${body.slice(0, 40)}` : ''))
+  const preview =
+    messageType === 'image'    ? ('📷 Photo' + (body ? `: ${body.slice(0, 40)}` : ''))
+    : messageType === 'video'    ? ('🎥 Video' + (body ? `: ${body.slice(0, 40)}` : ''))
+    : messageType === 'document' ? ('📄 ' + (body ? body.slice(0, 44) : 'Document'))
+    : messageType === 'audio'    ? '🎤 Voice message'
     : (body ?? '').slice(0, 60)
 
   if (existingThread) {
@@ -1013,6 +1029,9 @@ interface WaInboundMessage {
   type: string
   text?: { body: string }
   image?: { id: string; mime_type?: string; caption?: string; sha256?: string }
+  video?: { id: string; mime_type?: string; caption?: string; sha256?: string }
+  document?: { id: string; mime_type?: string; caption?: string; filename?: string; sha256?: string }
+  audio?: { id: string; mime_type?: string; voice?: boolean; sha256?: string }
   interactive?: {
     type: string
     list_reply?: WaInteractiveReply
