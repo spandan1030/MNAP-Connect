@@ -24,6 +24,8 @@ export const INTERESTS: InterestDef[] = [
   { key: 'exchange',    label: 'Exchange',   group: 'engagement' },
   { key: 'cash',        label: 'Cash',       group: 'engagement' },
   { key: 'repair',      label: 'Repair',     group: 'engagement' },
+  // Shared a product link from the app/website, or said "interested" in a piece.
+  { key: 'app_interest', label: 'App Enquiry', group: 'engagement' },
   // product
   { key: 'necklace',    label: 'Necklace',    group: 'product' },
   { key: 'ring',        label: 'Ring',        group: 'product' },

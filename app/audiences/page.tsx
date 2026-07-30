@@ -4,11 +4,10 @@ import { useEffect, useState } from 'react'
 import Navbar from '@/components/ui/Navbar'
 import FilterBuilder from '@/components/reach/FilterBuilder'
 import RuleBuilder from '@/components/audiences/RuleBuilder'
-import StepFunnel from '@/components/audiences/StepFunnel'
+import AudienceInsights from '@/components/audiences/AudienceInsights'
 import { emptyTree, isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
 import { chipsToTree, chipsConvertible } from '@/lib/audiences/chips-to-tree'
 import { createClient } from '@/lib/supabase/client'
-import { CALL_TOPICS, CALL_INTENTS } from '@/lib/calls'
 import { cn } from '@/lib/utils'
 import type { InterestTopic, MessageTemplate, ReachFilter, WaBCallCampaign } from '@/lib/types'
 
@@ -65,31 +64,11 @@ export default function AudiencesPage() {
   const [seeding, setSeeding] = useState(false)
   const [seedMsg, setSeedMsg] = useState<string | null>(null)
 
-  // insights
-  type Report = {
-    chat: Array<{ campaignId: string; name: string; template: string | null; total: number; sent: number; failed: number; skipped: number; delivered: number; read: number; createdAt: string }>
-    call: Array<{ campaignId: string; name: string; isActive: boolean; cards: number; attempts: number; connected: number; createdAt: string }>
-    // What came out of those calls — same insights as /admin/calls/report, scoped
-    // to this audience's cohorts rather than a date range.
-    callSummary: {
-      attempts: number; connected: number; noAnswer: number; pending: number
-      topics: Record<string, number>
-      intents: Record<string, number>
-      hotLeads: Array<{ name: string; phone: string }>
-      bySalesman: Array<{ alias: string; attempts: number; connected: number }>
-    } | null
-  }
+  // insights — the sheet's content is the AudienceInsights component, which
+  // fetches its own per-template report.
   const [reportFor, setReportFor] = useState<Audience | null>(null)
-  const [report, setReport] = useState<Report | null>(null)
-  const [reportLoading, setReportLoading] = useState(false)
 
-  async function openReport(a: Audience) {
-    setReportFor(a); setReport(null); setReportLoading(true)
-    try {
-      const res = await fetch(`/api/audiences/report?id=${a.id}`)
-      setReport(await res.json())
-    } catch { /* ignore */ } finally { setReportLoading(false) }
-  }
+  function openReport(a: Audience) { setReportFor(a) }
 
   // activation sheet
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
@@ -544,144 +523,21 @@ export default function AudiencesPage() {
               <p className="font-bold text-gray-900 truncate">Insights — {reportFor.name}</p>
               <button onClick={() => setReportFor(null)} className="text-gray-400 text-xl leading-none">×</button>
             </div>
-            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
-              {/* The multi-step funnel — the modular way to run this audience:
-                  carry survivors → narrow → act, as many steps as you like. */}
-              <StepFunnel audienceId={reportFor.id} templates={templates} dynamicOptions={{
-                call_campaigns: campaigns.map(c => ({ value: c.id, label: c.name })),
-                topics: topics.map(t => ({ value: t.id, label: t.name })),
-                salesmen: salesmen.map(s => ({ value: s.alias, label: `${s.alias} — ${s.name}` })),
-              }} />
-
-              <div className="border-t border-gray-100 pt-3">
-                <p className="text-[10px] text-gray-400 mb-2">Legacy activations (one-shot sends / calls on this audience)</p>
-              </div>
-              {reportLoading && <p className="text-sm text-gray-400 text-center py-6">Loading…</p>}
-              {report && !reportLoading && (
-                <>
-                  <div>
-                    <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">💬 Chat</p>
-                    {report.chat.length === 0 ? <p className="text-xs text-gray-400">No chat sends yet.</p> : (
-                      <div className="space-y-2">
-                        {report.chat.map(c => (
-                          <div key={c.campaignId} className="border border-gray-100 rounded-lg p-2.5">
-                            <p className="text-xs font-medium text-gray-800 truncate">{c.name}{c.template ? ` · ${c.template}` : ''}</p>
-                            <div className="grid grid-cols-5 gap-1 mt-1.5 text-center">
-                              <Metric label="Sent" v={c.sent} /><Metric label="Deliv" v={c.delivered} />
-                              <Metric label="Read" v={c.read} /><Metric label="Failed" v={c.failed} accent="text-red-500" />
-                              <Metric label="Skip" v={c.skipped} accent="text-amber-600" />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">📞 Calling</p>
-                    {report.call.length === 0 ? <p className="text-xs text-gray-400">No calling cohorts yet.</p> : (
-                      <div className="space-y-2">
-                        {report.call.map(c => (
-                          <div key={c.campaignId} className="border border-gray-100 rounded-lg p-2.5">
-                            <p className="text-xs font-medium text-gray-800 truncate">{c.name}{c.isActive ? ' · live' : ''}</p>
-                            <div className="grid grid-cols-3 gap-1 mt-1.5 text-center">
-                              <Metric label="Cards" v={c.cards} /><Metric label="Called" v={c.attempts} />
-                              <Metric label="Connected" v={c.connected} accent="text-green-700" />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* What happened on the calls — outcomes, not just volume. */}
-                  {report.callSummary && report.callSummary.attempts > 0 && (() => {
-                    const s = report.callSummary
-                    const rate = s.attempts ? Math.round((s.connected / s.attempts) * 100) : 0
-                    return (
-                      <div className="space-y-3">
-                        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">📞 Call outcomes</p>
-
-                        <div className="grid grid-cols-4 gap-1 text-center">
-                          <Metric label="Called" v={s.attempts} />
-                          <Metric label="Connected" v={s.connected} accent="text-green-700" />
-                          <Metric label="No answer" v={s.noAnswer} accent="text-gray-500" />
-                          <Metric label="Pending" v={s.pending} accent="text-amber-600" />
-                        </div>
-                        <p className="text-[10px] text-gray-400 -mt-1.5">{rate}% connect rate{s.pending > 0 ? ` · ${s.pending} awaiting an outcome` : ''}</p>
-
-                        {Object.keys(s.intents).length > 0 && (
-                          <div>
-                            <p className="text-[11px] text-gray-400 font-medium mb-1">Intent (what they said)</p>
-                            <div className="flex flex-wrap gap-1.5">
-                              {CALL_INTENTS.filter(i => s.intents[i.value]).map(i => (
-                                <span key={i.value} className="px-2.5 py-1 rounded-lg text-[11px] border border-gray-200 bg-white text-gray-700 font-medium">
-                                  {i.label} <span className="text-gray-400">{s.intents[i.value]}</span>
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {Object.keys(s.topics).length > 0 && (
-                          <div>
-                            <p className="text-[11px] text-gray-400 font-medium mb-1">Interested in (connected calls)</p>
-                            <div className="flex flex-wrap gap-1.5">
-                              {CALL_TOPICS.filter(t => s.topics[t.value]).map(t => (
-                                <span key={t.value} className="px-2.5 py-1 rounded-lg text-[11px] border border-gray-200 bg-white text-gray-700 font-medium">
-                                  {t.label} <span className="text-gray-400">{s.topics[t.value]}</span>
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {s.bySalesman.length > 0 && (
-                          <div>
-                            <p className="text-[11px] text-gray-400 font-medium mb-1">By salesman</p>
-                            <div className="space-y-1">
-                              {s.bySalesman.map(sm => (
-                                <div key={sm.alias} className="flex items-center justify-between rounded-lg px-2.5 py-1.5 border border-gray-200 bg-white text-xs">
-                                  <span className="font-medium truncate text-gray-700">{sm.alias === '—' ? 'Unattributed / past calls' : sm.alias}</span>
-                                  <span className="flex-shrink-0 tabular-nums text-gray-500">
-                                    {sm.connected}/{sm.attempts} · {sm.attempts ? Math.round((sm.connected / sm.attempts) * 100) : 0}%
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {s.hotLeads.length > 0 && (
-                          <div>
-                            <p className="text-[11px] text-gray-400 font-medium mb-1">★ Hot leads — {s.hotLeads.length}</p>
-                            <div className="space-y-1">
-                              {s.hotLeads.map(h => (
-                                <div key={h.phone} className="flex items-center justify-between text-xs border-b border-gray-50 last:border-0 py-1">
-                                  <span className="text-gray-800 truncate">{h.name}</span>
-                                  <a href={`tel:+91${h.phone}`} className="text-gray-500 flex-shrink-0">+91 {h.phone}</a>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })()}
-                </>
-              )}
+            <div className="flex-1 overflow-y-auto px-5 py-3">
+              <AudienceInsights
+                audienceId={reportFor.id}
+                audienceName={reportFor.name}
+                onSaved={load}
+                dynamicOptions={{
+                  call_campaigns: campaigns.map(c => ({ value: c.id, label: c.name })),
+                  topics: topics.map(t => ({ value: t.id, label: t.name })),
+                  salesmen: salesmen.map(s => ({ value: s.alias, label: `${s.alias} — ${s.name}` })),
+                }}
+              />
             </div>
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-function Metric({ label, v, accent }: { label: string; v: number; accent?: string }) {
-  return (
-    <div className="bg-gray-50 rounded-md py-1">
-      <p className={`text-sm font-bold ${accent ?? 'text-gray-900'}`}>{v.toLocaleString('en-IN')}</p>
-      <p className="text-[9px] text-gray-400">{label}</p>
     </div>
   )
 }

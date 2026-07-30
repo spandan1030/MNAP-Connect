@@ -695,6 +695,7 @@ https://wa.me/91{phone}?text={url_encoded_message}
 | `supabase/migrations/wa_003_intervention_schema.sql` | Type B tables + RLS |
 | `supabase/migrations/wa_026_image_crop.sql` | 4:5 crop cols on `wa_product_images` (`display_url`, `display_thumb_url`, `crop`) |
 | `supabase/migrations/wa_027_image_in_app.sql` | `in_app` flag on `wa_product_images` for multi-photo publishing (backfills `is_primary`→`in_app`) |
+| `supabase/migrations/wa_056_app_interest_topic.sql` | Seeds the **App Product Interest** topic (key `app_interest`) so piece-interest chats are tagged like offers/designs |
 | `INTERVENTION_STRATEGY.md` | Full business rules, segment definitions, profiling architecture |
 | `INTERVENTION_MODULE_DISCUSSION.md` | Session-by-session decision log |
 
@@ -789,7 +790,9 @@ Salesmen cold-call sales-derived "lost leads" and log structured feedback. Feeds
 
 One phone-keyed layer converging interest signals from **all sources** onto one canonical taxonomy — crossing the Type A / Type B split (which are separate tables joined only by phone).
 
-**Table:** `wa_signals(phone, interest, source, weight, evidence, last_seen)`, UNIQUE(phone, interest, source). **Taxonomy** (`lib/signals.ts`): engagement (rate/designs/offers/scheme/exchange/cash/repair) · product (necklace/ring/bangles/earrings/chain/mangalsutra/pendant/bracelet/anklet/investment) · metal (gold/silver/diamond).
+**Table:** `wa_signals(phone, interest, source, weight, evidence, last_seen)`, UNIQUE(phone, interest, source). **Taxonomy** (`lib/signals.ts`): engagement (rate/designs/offers/scheme/exchange/cash/repair/**app_interest**) · product (necklace/ring/bangles/earrings/chain/mangalsutra/pendant/bracelet/anklet/investment) · metal (gold/silver/diamond).
+
+**App Product Interest tag (`wa_056`, 2026-07-31):** the chatbot detects a piece-interest message — the customer shared a `gold.mnalankarpalace.com` product link or said "interested" (`isAppProductInterest`) — and now tags the **App Product Interest** topic (canonical key `app_interest`, engagement group) in `handleAppProductInterest`, exactly like offers/designs/rate do. So besides raising the `contacts.app_product_interest` flag (wa_053) and logging a lead, it writes `wa_customer_interests` and mirrors into `wa_signals` (source `whatsapp`) — surfacing the customer in the chat "Interested in" banner + Assign-interests sheet and making them targetable in Reach as the "App Enquiry" interest chip. `tagTopic('%app product interest%')` no-ops until the wa_056 topic row exists.
 
 **Sources → signals:** `sales` ← `wa_b_markers.markers` (bought_*/buys_*/primary_metal) · `whatsapp` ← `wa_customer_interests` + `wa_lead_captures` (webhook `addInterest()` mirrors live) · `call` ← `wa_b_call_logs.topics` · `billing` ← reserved (Step 4 POS tags).
 

@@ -565,6 +565,11 @@ async function handleAppProductInterest(
   customer: { id: string } | null,
 ) {
   await markAppProductInterest(phone)
+  // Tag the "App Product Interest" topic (wa_056) — same path as offers/designs:
+  // writes wa_customer_interests + mirrors into wa_signals (key 'app_interest'),
+  // so these customers show in the chat "Interested in" banner and are targetable
+  // in Reach. No-ops safely until the wa_056 topic exists.
+  await tagTopic(customer?.id, '%app product interest%')
   await recordLead(threadId, customer?.id, { intent: 'app_product' })
   await flagAgent(threadId)                       // "we will contact you with more details"
   await sendBot(phone, threadId, 'app_interest_ack')
