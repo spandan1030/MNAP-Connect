@@ -120,10 +120,14 @@ Each catalogue product **is one barcoded piece**, with `wa_products.is_sold` (wa
   returns `{ updated, unchanged, matched, notFound[] }`. Linked from the catalogue list
   ("Stock" chip). No migration — reuses `is_sold`.
 - **Published to the app:** sold pieces **no longer vanish**. `catalogue-sync` now sets
-  `active = show_in_app && is_active` (dropped `&& !is_sold`) and adds **`inStock: !is_sold`**
-  to the doc, so the customer app can keep the piece visible and show a "Sold" treatment.
-  ⚠ Until the customer app branches on `inStock`, a sold-but-published piece shows like a
-  normal in-stock one.
+  `active = show_in_app && is_active` (dropped `&& !is_sold`) and adds
+  **`inStock = !is_sold && barcode present`** to the doc — so a piece is "in stock" only if
+  it's an **unsold, barcoded** piece; **a product with no barcode is treated as sold/out-of-
+  stock** (self-healing: add a barcode later → flips back on the next sync). The app keeps
+  the piece visible and shows a "Sold" treatment on `inStock:false`.
+  ⚠ Until the customer app branches on `inStock`, an `inStock:false` published piece shows
+  like a normal in-stock one. Existing published products only pick up the new flag on their
+  next sync — hit **↻ Re-sync customer app** on the catalogue list to backfill.
 
 ### Multi-photo publishing (gallery)
 A product can publish **several photos** to the customer app, not just the primary.

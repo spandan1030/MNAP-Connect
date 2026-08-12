@@ -39,7 +39,7 @@ interface CatalogueDoc {
   thumb: string | null
   images: string[]        // full gallery (primary first) shown in the customer app viewer
   active: boolean
-  inStock: boolean        // false once the piece is sold — the app shows a different treatment
+  inStock: boolean        // true only for an unsold, barcoded piece; else the app shows a "Sold" treatment
   source: 'connect'
   updatedAt: number
 }
@@ -76,7 +76,10 @@ function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: 
     // hidden anymore — they remain visible and carry `inStock:false` so the app can
     // show a "Sold" treatment (different info) instead of dropping the piece.
     active: Boolean(p.show_in_app) && p.is_active,
-    inStock: !p.is_sold,
+    // "In stock" means an unsold, BARCODED piece. A product with no barcode is
+    // treated as sold/out-of-stock (same tag the app already branches on). Self-
+    // healing: add a barcode later and it flips back to in-stock on the next sync.
+    inStock: !p.is_sold && Boolean(p.barcode && p.barcode.trim()),
     source: 'connect',
     updatedAt: Date.now(),
   }
