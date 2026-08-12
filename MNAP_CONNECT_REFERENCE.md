@@ -77,7 +77,9 @@ The doc carries `image`/`thumb` (the cover) **and** `images: string[]` (the full
 cover first) — the customer app's `PhotoViewer` swipes through `images`.
 Never sends party/cost/notes (barcode IS sent — note `catalogue` is public-read). Price is **not** sent — the customer app computes
 it live from its own daily rate. Unmapped purity → still published, `priceHidden:true`
-(app shows "Enquire"). Sold/inactive/unpublished → doc updated/removed automatically.
+(app shows "Enquire"). The doc also carries **`inStock: !is_sold`**. Inactive/unpublished
+→ doc updated/removed automatically; **sold pieces stay published** (visible) with
+`inStock:false` so the app can show a "Sold" treatment.
 
 - Files: `lib/firebase/admin.ts` (Admin init), `lib/catalogue-sync.ts` (`resolveKarat`,
   `syncProductToApp`, `resyncAllPublished`), `app/api/catalogue/publish/route.ts`
@@ -102,6 +104,26 @@ user pans/zooms (Instagram-style); re-cropping regenerates only the display file
 (original is never touched) and re-syncs if the photo is primary + published.
 - The **customer app is fed the crop**: `catalogue-sync.buildDoc` sends
   `display_url ?? image_url` (and `display_thumb_url ?? thumb_url ?? image_url`).
+- **Latest upload = primary by default:** on both `/catalogue/new` (save loop) and
+  `/catalogue/[id]` (`addPhotos`), the **most-recently-uploaded** photo is set primary +
+  `in_app`, overriding any previous primary (staff can re-pick with ★). Old rule was
+  "only the first-ever photo becomes primary".
+
+### Stock status — per-piece Sold / In stock (+ bulk update)
+Each catalogue product **is one barcoded piece**, with `wa_products.is_sold` (wa_017).
+- **Per-product:** the `/catalogue/[id]` page has a Sold ⇄ In stock toggle that persists
+  immediately and re-syncs the app if the piece is published.
+- **Bulk:** `/catalogue/stock` — paste barcodes (comma / space / newline separated) and
+  mark them all **Sold** or **In stock** in one action. `POST /api/catalogue/stock`
+  `{ barcodes, sold }` matches **case-insensitively** (index is `lower(barcode)`), flips
+  `is_sold` only on rows that differ, re-syncs matched pieces that are published, and
+  returns `{ updated, unchanged, matched, notFound[] }`. Linked from the catalogue list
+  ("Stock" chip). No migration — reuses `is_sold`.
+- **Published to the app:** sold pieces **no longer vanish**. `catalogue-sync` now sets
+  `active = show_in_app && is_active` (dropped `&& !is_sold`) and adds **`inStock: !is_sold`**
+  to the doc, so the customer app can keep the piece visible and show a "Sold" treatment.
+  ⚠ Until the customer app branches on `inStock`, a sold-but-published piece shows like a
+  normal in-stock one.
 
 ### Multi-photo publishing (gallery)
 A product can publish **several photos** to the customer app, not just the primary.

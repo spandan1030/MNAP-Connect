@@ -209,6 +209,7 @@ export default function CataloguePage() {
           <h1 className="text-lg font-bold text-gray-900">Catalogue</h1>
           <div className="flex items-center gap-2">
             <Link href="/catalogue/inventory" className="text-xs font-medium text-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg active:bg-gray-50">Inventory</Link>
+            <Link href="/catalogue/stock" className="text-xs font-medium text-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg active:bg-gray-50">Stock</Link>
             <Link href="/catalogue/values" className="text-xs font-medium text-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg active:bg-gray-50">Values</Link>
             <Link href="/catalogue/new" className="text-xs font-semibold bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg">+ Add</Link>
           </div>

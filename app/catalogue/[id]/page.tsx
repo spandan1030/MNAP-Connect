@@ -139,6 +139,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
     setUploading(true); setError(null)
     const imgs = Array.from(list).filter(f => f.type.startsWith('image/') && f.size <= 30 * 1024 * 1024)
     let order = images.length
+    const addedImages: WaProductImage[] = []
     for (const raw of imgs) {
       const { full, thumb } = await compressWithThumb(raw)
       const base = `products/${id}/${Date.now()}-${order}`
@@ -159,18 +160,31 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         const { data: ctup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-thumb.jpg`, cropped.thumb, { upsert: false, contentType: 'image/jpeg' })
         if (ctup) displayThumbUrl = supabase.storage.from('wa-media').getPublicUrl(ctup.path).data.publicUrl
       }
-      // first ever photo becomes the primary automatically
-      const makePrimary = images.length === 0 && order === 0
+      // Insert not-primary for now; the newest of this batch is promoted below.
       const { data: row } = await supabase.from('wa_product_images').insert({
         product_id: id, image_url: publicUrl, thumb_url: thumbUrl,
         display_url: displayUrl, display_thumb_url: displayThumbUrl, crop: null,
-        sort_order: order, is_primary: makePrimary, in_app: makePrimary,
+        sort_order: order, is_primary: false, in_app: false,
       }).select('*').single()
-      if (row) setImages(prev => [...prev, row as WaProductImage])
+      if (row) { addedImages.push(row as WaProductImage); setImages(prev => [...prev, row as WaProductImage]) }
       order++
     }
+
+    // The latest uploaded photo becomes the primary/cover by default (and is
+    // publish-ready), overriding any previous primary. Staff can re-pick manually.
+    const newPrimary = addedImages[addedImages.length - 1]
+    if (newPrimary) {
+      await supabase.from('wa_product_images').update({ is_primary: false }).eq('product_id', id)
+      await supabase.from('wa_product_images').update({ is_primary: true, in_app: true }).eq('id', newPrimary.id)
+      setImages(prev => prev
+        .map(i => i.id === newPrimary.id
+          ? { ...i, is_primary: true, in_app: true }
+          : { ...i, is_primary: false })
+        .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || a.sort_order - b.sort_order))
+    }
+
     setUploading(false)
-    if (showInApp) syncToApp() // first photo may have become primary
+    if (showInApp) syncToApp() // the newest photo became primary
   }
 
   // Drag-drop onto the Photos card + paste (Ctrl/⌘+V) — laptop convenience.

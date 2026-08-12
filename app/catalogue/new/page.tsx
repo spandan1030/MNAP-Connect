@@ -99,6 +99,7 @@ export default function NewProductPage() {
     // Upload photos under this product. We keep the original (full + thumb) AND a
     // 4:5-cropped display image (full + thumb) that the customer app is fed.
     let uploadFailed = false
+    const insertedImageIds: string[] = []
     for (let i = 0; i < files.length; i++) {
       const { full, thumb } = await compressWithThumb(files[i])
       const base = `products/${product.id}/${Date.now()}-${i}`
@@ -119,10 +120,18 @@ export default function NewProductPage() {
         const { data: ctup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-thumb.jpg`, cropped.thumb, { upsert: false, contentType: 'image/jpeg' })
         if (ctup) displayThumbUrl = supabase.storage.from('wa-media').getPublicUrl(ctup.path).data.publicUrl
       }
-      await supabase.from('wa_product_images').insert({
+      const { data: row } = await supabase.from('wa_product_images').insert({
         product_id: product.id, image_url: publicUrl, thumb_url: thumbUrl,
         display_url: displayUrl, display_thumb_url: displayThumbUrl, crop: crops[i], sort_order: i,
-      })
+      }).select('id').single()
+      if (row) insertedImageIds.push(row.id as string)
+    }
+
+    // The latest uploaded photo becomes the primary/cover by default (and is
+    // publish-ready), so the newest shot leads instead of the first one.
+    const primaryId = insertedImageIds[insertedImageIds.length - 1]
+    if (primaryId) {
+      await supabase.from('wa_product_images').update({ is_primary: true, in_app: true }).eq('id', primaryId)
     }
 
     if (uploadFailed) {

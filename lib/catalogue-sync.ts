@@ -39,6 +39,7 @@ interface CatalogueDoc {
   thumb: string | null
   images: string[]        // full gallery (primary first) shown in the customer app viewer
   active: boolean
+  inStock: boolean        // false once the piece is sold — the app shows a different treatment
   source: 'connect'
   updatedAt: number
 }
@@ -71,8 +72,11 @@ function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: 
     image: cover?.display_url ?? cover?.image_url ?? null,
     thumb: cover?.display_thumb_url ?? cover?.thumb_url ?? cover?.image_url ?? null,
     images: gallery.map(i => i.display_url ?? i.image_url).filter(Boolean) as string[],
-    // Shown to customers only while published, active and not sold.
-    active: Boolean(p.show_in_app) && p.is_active && !p.is_sold,
+    // Stays in the customer catalogue while published + active. Sold pieces are NOT
+    // hidden anymore — they remain visible and carry `inStock:false` so the app can
+    // show a "Sold" treatment (different info) instead of dropping the piece.
+    active: Boolean(p.show_in_app) && p.is_active,
+    inStock: !p.is_sold,
     source: 'connect',
     updatedAt: Date.now(),
   }
