@@ -77,12 +77,13 @@ The doc carries `image`/`thumb` (the cover) **and** `images: string[]` (the full
 cover first) — the customer app's `PhotoViewer` swipes through `images`.
 Never sends party/cost/notes (barcode IS sent — note `catalogue` is public-read). Price is **not** sent — the customer app computes
 it live from its own daily rate. Unmapped purity → still published, `priceHidden:true`
-(app shows "Enquire"). The doc also carries **`inStock: !is_sold`**. Inactive/unpublished
-→ doc updated/removed automatically; **sold pieces stay published** (visible) with
-`inStock:false` so the app can show a "Sold" treatment.
+(app shows "Enquire"). The doc also carries **`inStock: !is_sold && !is_catalogue_only`**
+and **`catalogueOnly: is_catalogue_only`**. Inactive/unpublished → doc updated/removed
+automatically; **sold pieces stay published** (visible) with `inStock:false` so the app can
+show a "Sold" treatment. Recommended app branching order: **catalogueOnly → inStock → normal**.
 
 - Files: `lib/firebase/admin.ts` (Admin init), `lib/catalogue-sync.ts` (`resolveKarat`,
-  `syncProductToApp`, `resyncAllPublished`), `app/api/catalogue/publish/route.ts`
+  `syncProductToApp`, `removeProductFromApp`, `resyncAllPublished`), `app/api/catalogue/publish/route.ts`
   (staff-authed POST `{id}` or `{resyncAll:true}`). Publish/re-sync fire automatically
   on save, sold-toggle, and primary-photo change; catalogue list has a manual
   **"↻ Re-sync customer app"** button.
@@ -119,15 +120,29 @@ Each catalogue product **is one barcoded piece**, with `wa_products.is_sold` (wa
   `is_sold` only on rows that differ, re-syncs matched pieces that are published, and
   returns `{ updated, unchanged, matched, notFound[] }`. Linked from the catalogue list
   ("Stock" chip). No migration — reuses `is_sold`.
-- **Published to the app:** sold pieces **no longer vanish**. `catalogue-sync` now sets
-  `active = show_in_app && is_active` (dropped `&& !is_sold`) and adds
-  **`inStock = !is_sold && barcode present`** to the doc — so a piece is "in stock" only if
-  it's an **unsold, barcoded** piece; **a product with no barcode is treated as sold/out-of-
-  stock** (self-healing: add a barcode later → flips back on the next sync). The app keeps
-  the piece visible and shows a "Sold" treatment on `inStock:false`.
+- **Published to the app:** sold pieces **no longer vanish**. `catalogue-sync` sets
+  `active = show_in_app && is_active` and adds **`inStock = !is_sold && !is_catalogue_only`**
+  to the doc (see Catalogue products below — this **replaced** the earlier "no barcode →
+  out-of-stock" rule). The app keeps the piece visible and shows a "Sold" treatment on
+  `inStock:false`.
   ⚠ Until the customer app branches on `inStock`, an `inStock:false` published piece shows
   like a normal in-stock one. Existing published products only pick up the new flag on their
   next sync — hit **↻ Re-sync customer app** on the catalogue list to backfill.
+
+### Catalogue products — design-only (not physical stock)
+`wa_products.is_catalogue_only` (**wa_057**, default false) marks a **design we show but do
+not physically stock** as a barcoded piece.
+- **Set it:** the `/catalogue/[id]` Status card toggle, the "Catalogue product" checkbox on
+  `/catalogue/new`, or the bulk **Type → Catalogue / Stock piece** action.
+- **Backfill (wa_057):** every existing product **without a barcode** was flagged
+  catalogue-only (they're designs, not pieces). Reversible per-product.
+- **Inventory** (`/catalogue/inventory`) counts **`is_active && !is_sold && !is_catalogue_only`**
+  — catalogue products are excluded. The list's **"In stock"** chip matches; a **"Catalogue"**
+  status chip filters `is_catalogue_only=true`. Cards show an indigo **CATALOGUE** badge.
+- **Published to the app:** catalogue products still publish as a **normal product with a live
+  price**, carrying **`catalogueOnly:true`** and **`inStock:false`** (they're not physical stock).
+  The customer app should branch **catalogueOnly first** (its own "design / made to order"
+  treatment), then `inStock` (sold), then normal — app-side rendering is a later change.
 
 ### Bulk actions on selected products
 The catalogue list (`/catalogue`) has a **Select** mode (toggle next to the item count): tap
@@ -136,6 +151,8 @@ cards to tick them, **Select all** ticks every loaded card, and the sticky botto
 `{ ids, action, ...args }`; afterwards the list **refetches page 0** so status/filter changes are
 reflected (e.g. a piece marked Sold drops out of the "In stock" view). Actions (v1):
 - **Stock** — `sold {sold}` flips `is_sold`; re-syncs published pieces (stock status).
+- **Type** — `catalogue {catalogue}` flips `is_catalogue_only`; re-syncs published pieces
+  (flips `inStock`/`catalogueOnly`).
 - **Review** — `review {review}` flips `needs_review`; not sent to the app.
 - **Customer app** — `publish {publish, makingPercent?}` flips `show_in_app` and syncs each
   (publish upserts, unpublish removes the Firestore doc). Making % is only overwritten when
@@ -143,9 +160,10 @@ reflected (e.g. a piece marked Sold drops out of the "In stock" view). Actions (
 - **Set party** — `set_party {party}` (chosen from existing Values); party is never published → no sync.
 - **Set making %** — `set_making {makingPercent}`; re-syncs published pieces (feeds the app's live price).
 - **Delete** — removes published pieces from the app (`removeProductFromApp`), deletes their
-  `wa_product_images` + storage objects, then the rows. (Note: this closes a gap in the single
-  `/catalogue/[id]` delete, which drops only the row and leaves the Firestore doc + storage behind.)
-No migration — reuses existing columns.
+  `wa_product_images` + storage objects, then the rows. **The single `/catalogue/[id]` delete
+  now routes through this same endpoint** (`{ ids:[id], action:'delete' }`), so it also cleans
+  up the Firestore doc + storage (previously it dropped only the row).
+Reuses existing columns (the `catalogue` action needs wa_057).
 
 ### Multi-photo publishing (gallery)
 A product can publish **several photos** to the customer app, not just the primary.
@@ -740,6 +758,7 @@ https://wa.me/91{phone}?text={url_encoded_message}
 | `supabase/migrations/wa_026_image_crop.sql` | 4:5 crop cols on `wa_product_images` (`display_url`, `display_thumb_url`, `crop`) |
 | `supabase/migrations/wa_027_image_in_app.sql` | `in_app` flag on `wa_product_images` for multi-photo publishing (backfills `is_primary`→`in_app`) |
 | `supabase/migrations/wa_056_app_interest_topic.sql` | Seeds the **App Product Interest** topic (key `app_interest`) so piece-interest chats are tagged like offers/designs |
+| `supabase/migrations/wa_057_catalogue_only.sql` | Adds `wa_products.is_catalogue_only` (design-only products, excluded from inventory); backfills all no-barcode products to catalogue |
 | `INTERVENTION_STRATEGY.md` | Full business rules, segment definitions, profiling architecture |
 | `INTERVENTION_MODULE_DISCUSSION.md` | Session-by-session decision log |
 

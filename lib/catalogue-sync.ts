@@ -39,7 +39,8 @@ interface CatalogueDoc {
   thumb: string | null
   images: string[]        // full gallery (primary first) shown in the customer app viewer
   active: boolean
-  inStock: boolean        // true only for an unsold, barcoded piece; else the app shows a "Sold" treatment
+  inStock: boolean        // physically in stock: unsold AND not a catalogue/design-only product
+  catalogueOnly: boolean  // design-only product (not physical stock) — app can give it its own treatment
   source: 'connect'
   updatedAt: number
 }
@@ -76,10 +77,13 @@ function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: 
     // hidden anymore — they remain visible and carry `inStock:false` so the app can
     // show a "Sold" treatment (different info) instead of dropping the piece.
     active: Boolean(p.show_in_app) && p.is_active,
-    // "In stock" means an unsold, BARCODED piece. A product with no barcode is
-    // treated as sold/out-of-stock (same tag the app already branches on). Self-
-    // healing: add a barcode later and it flips back to in-stock on the next sync.
-    inStock: !p.is_sold && Boolean(p.barcode && p.barcode.trim()),
+    // "In stock" = a physically available piece: unsold AND not a catalogue/design-only
+    // product (same definition inventory uses). Catalogue products still publish as a
+    // normal product with a live price — they just carry catalogueOnly:true below so the
+    // app can give them a dedicated "design / made to order" treatment.
+    // Recommended app branching order: catalogueOnly first, then inStock, then normal.
+    inStock: !p.is_sold && !p.is_catalogue_only,
+    catalogueOnly: Boolean(p.is_catalogue_only),
     source: 'connect',
     updatedAt: Date.now(),
   }

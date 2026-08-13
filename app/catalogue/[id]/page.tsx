@@ -19,6 +19,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   const [form, setForm]   = useState({ item_name: '', barcode: '', weight: '', purity: '', design: '', description: '', party: '', notes: '', is_active: true })
   const [options, setOptions] = useState<Options>({ item_name: [], design: [], description: [], purity: [], party: [] })
   const [isSold, setIsSold] = useState(false)
+  const [catalogueOnly, setCatalogueOnly] = useState(false)
   const [needsReview, setNeedsReview] = useState(false)
   const [showInApp, setShowInApp] = useState(false)
   const [makingPercent, setMakingPercent] = useState('9') // % of metal; prefilled
@@ -51,6 +52,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
           purity: p.purity ?? '', design: p.design ?? '', description: p.description ?? '', party: p.party ?? '', notes: p.notes ?? '', is_active: p.is_active,
         })
         setIsSold(p.is_sold)
+        setCatalogueOnly(Boolean(p.is_catalogue_only))
         setNeedsReview(p.needs_review)
         setShowInApp(Boolean(p.show_in_app))
         if (p.making_percent != null) setMakingPercent(String(p.making_percent))
@@ -77,6 +79,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       party:       form.party.trim() || null,
       notes:       form.notes.trim() || null,
       is_active:   form.is_active,
+      is_catalogue_only: catalogueOnly,
       making_percent: makingPercent.trim() ? Number(makingPercent) : null,
       updated_at: new Date().toISOString(),
     }).eq('id', id)
@@ -133,6 +136,13 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   async function toggleReview() {
     const v = !needsReview; setNeedsReview(v)
     await supabase.from('wa_products').update({ needs_review: v }).eq('id', id)
+  }
+  // Catalogue (design-only) ⇄ stock piece. Persists immediately; re-syncs the app
+  // (the flag flips inStock + catalogueOnly on the published doc).
+  async function toggleCatalogueOnly() {
+    const v = !catalogueOnly; setCatalogueOnly(v)
+    await supabase.from('wa_products').update({ is_catalogue_only: v, updated_at: new Date().toISOString() }).eq('id', id)
+    if (showInApp) syncToApp()
   }
 
   async function addPhotos(list: FileList | File[]) {
@@ -262,8 +272,19 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   }
 
   async function deleteProduct() {
-    await supabase.from('wa_products').delete().eq('id', id)
-    router.push('/catalogue')
+    // Route through the bulk API so it also removes the customer-app doc and the
+    // photo storage objects — not just the row.
+    try {
+      const res = await fetch('/api/catalogue/bulk', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [id], action: 'delete' }),
+      })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Delete failed') }
+      router.push('/catalogue')
+    } catch (e) {
+      setConfirmDelete(false)
+      setError(e instanceof Error ? e.message : 'Delete failed')
+    }
   }
 
   if (loading) return <div className="min-h-screen flex flex-col"><Navbar /><div className="flex-1 flex items-center justify-center text-gray-400 text-sm">Loading…</div></div>
@@ -294,19 +315,30 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         {error && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
 
         {/* Status — quick toggles (save instantly) */}
-        <div className="card p-3 flex gap-2">
-          <button onClick={toggleSold}
-            className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-colors ${
-              isSold ? 'bg-red-50 text-red-700 border-red-200' : 'bg-green-50 text-green-700 border-green-200'
+        <div className="card p-3 space-y-2">
+          <div className="flex gap-2">
+            <button onClick={toggleSold} disabled={catalogueOnly}
+              className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-colors disabled:opacity-40 ${
+                isSold ? 'bg-red-50 text-red-700 border-red-200' : 'bg-green-50 text-green-700 border-green-200'
+              }`}>
+              {isSold ? '● Sold' : '● In stock'}
+            </button>
+            <button onClick={toggleReview}
+              className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-colors ${
+                needsReview ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-gray-600 border-gray-300'
+              }`}>
+              {needsReview ? '⚑ Marked for review' : '⚐ Mark for review'}
+            </button>
+          </div>
+          <button onClick={toggleCatalogueOnly}
+            className={`w-full py-2 rounded-xl text-sm font-semibold border transition-colors ${
+              catalogueOnly ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-white text-gray-600 border-gray-300'
             }`}>
-            {isSold ? '● Sold' : '● In stock'}
+            {catalogueOnly ? '◆ Catalogue product (design only)' : '◇ Mark as catalogue product'}
           </button>
-          <button onClick={toggleReview}
-            className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-colors ${
-              needsReview ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-gray-600 border-gray-300'
-            }`}>
-            {needsReview ? '⚑ Marked for review' : '⚐ Mark for review'}
-          </button>
+          {catalogueOnly && (
+            <p className="text-[11px] text-gray-400">Design-only — kept out of inventory. Still publishes to the app as a normal product with a live price, tagged as catalogue.</p>
+          )}
         </div>
 
         {/* Photos */}

@@ -8,7 +8,7 @@ import Navbar from '@/components/ui/Navbar'
 import PreviewModal from '@/components/catalogue/PreviewModal'
 import type { WaProduct } from '@/lib/types'
 
-type Status = 'all' | 'instock' | 'sold' | 'review'
+type Status = 'all' | 'instock' | 'sold' | 'catalogue' | 'review'
 
 type Published = 'all' | 'yes' | 'no'
 
@@ -158,8 +158,9 @@ export default function CataloguePage() {
   const fetchPage = useCallback(async (pageIndex: number, reset: boolean) => {
     const { status: st, filters: f, search: s } = applied
     let qb = supabase.from('wa_products').select('*', { count: 'exact' })
-    if (st === 'instock') qb = qb.eq('is_sold', false)
+    if (st === 'instock') qb = qb.eq('is_sold', false).eq('is_catalogue_only', false)
     else if (st === 'sold') qb = qb.eq('is_sold', true)
+    else if (st === 'catalogue') qb = qb.eq('is_catalogue_only', true)
     else if (st === 'review') qb = qb.eq('needs_review', true)
     if (f.item_name.length)   qb = qb.in('item_name', f.item_name)
     if (f.design.length)      qb = qb.in('design', f.design)
@@ -314,7 +315,7 @@ export default function CataloguePage() {
         )}
 
         <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-          {([['all', 'All'], ['instock', 'In stock'], ['sold', 'Sold'], ['review', 'Review']] as const).map(([f, label]) => (
+          {([['all', 'All'], ['instock', 'In stock'], ['sold', 'Sold'], ['catalogue', 'Catalogue'], ['review', 'Review']] as const).map(([f, label]) => (
             <button key={f} onClick={() => setStatus(f)}
               className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
                 status === f ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
@@ -371,15 +372,19 @@ export default function CataloguePage() {
                             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                           </svg>
                         </span>
-                        {p.is_sold && (
+                        {p.is_catalogue_only ? (
+                          <span className="absolute top-1.5 right-1.5 text-[10px] font-bold text-white bg-indigo-500 px-1.5 py-0.5 rounded">CATALOGUE</span>
+                        ) : p.is_sold ? (
                           <span className="absolute top-1.5 right-1.5 text-[10px] font-bold text-white bg-red-600 px-1.5 py-0.5 rounded">SOLD</span>
-                        )}
+                        ) : null}
                       </>
                     ) : (
                       <>
-                        {p.is_sold && (
+                        {p.is_catalogue_only ? (
+                          <span className="absolute top-1.5 left-1.5 text-[10px] font-bold text-white bg-indigo-500 px-1.5 py-0.5 rounded">CATALOGUE</span>
+                        ) : p.is_sold ? (
                           <span className="absolute top-1.5 left-1.5 text-[10px] font-bold text-white bg-red-600 px-1.5 py-0.5 rounded">SOLD</span>
-                        )}
+                        ) : null}
                         <button onClick={e => { e.preventDefault(); e.stopPropagation(); setPreview(p) }} title="Preview"
                           className="absolute bottom-1.5 left-1.5 w-6 h-6 rounded-full bg-white/80 text-gray-600 flex items-center justify-center active:bg-white">
                           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -406,7 +411,11 @@ export default function CataloguePage() {
                         {p.purity && <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-100 px-1.5 py-0.5 rounded-full">{p.purity}</span>}
                         {p.weight != null && <span className="text-[10px] bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded-full">{p.weight} g</span>}
                       </div>
-                      {selectMode ? (
+                      {p.is_catalogue_only ? (
+                        <span className="flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-indigo-50 text-indigo-600 border-indigo-200">
+                          Catalogue
+                        </span>
+                      ) : selectMode ? (
                         <span className={`flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                           p.is_sold ? 'bg-red-50 text-red-600 border-red-200' : 'bg-green-50 text-green-700 border-green-200'
                         }`}>
@@ -482,6 +491,12 @@ export default function CataloguePage() {
                     className="bg-green-50 text-green-700 border-green-200">In stock</SheetBtn>
                   <SheetBtn onClick={() => applyBulk('sold', { sold: true }, 'Marked sold')} disabled={bulkBusy}
                     className="bg-red-50 text-red-600 border-red-200">Sold</SheetBtn>
+                </BulkGroup>
+                <BulkGroup label="Type">
+                  <SheetBtn onClick={() => applyBulk('catalogue', { catalogue: true }, 'Marked catalogue')} disabled={bulkBusy}
+                    className="bg-indigo-50 text-indigo-600 border-indigo-200">Catalogue</SheetBtn>
+                  <SheetBtn onClick={() => applyBulk('catalogue', { catalogue: false }, 'Marked stock')} disabled={bulkBusy}
+                    className="bg-white text-gray-600 border-gray-300">Stock piece</SheetBtn>
                 </BulkGroup>
                 <BulkGroup label="Review">
                   <SheetBtn onClick={() => applyBulk('review', { review: true }, 'Flagged')} disabled={bulkBusy}

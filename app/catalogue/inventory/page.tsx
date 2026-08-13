@@ -27,9 +27,9 @@ export default function InventoryPage() {
 
   useEffect(() => {
     async function load() {
-      // In-stock only: active and not sold
+      // In-stock only: active, not sold, and a real physical piece (not a catalogue/design-only product)
       const { data } = await supabase.from('wa_products').select('*')
-        .eq('is_active', true).eq('is_sold', false)
+        .eq('is_active', true).eq('is_sold', false).eq('is_catalogue_only', false)
       setProducts((data ?? []) as WaProduct[])
       setLoading(false)
     }

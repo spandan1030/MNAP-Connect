@@ -13,6 +13,7 @@ export default function NewProductPage() {
   const router = useRouter()
 
   const [form, setForm] = useState({ item_name: '', barcode: '', weight: '', purity: '22K', design: '', description: '', party: '', notes: '' })
+  const [catalogueOnly, setCatalogueOnly] = useState(false)
   const [options, setOptions] = useState<Options>({ item_name: [], design: [], description: [], purity: [], party: [] })
 
   useEffect(() => { fetchCatalogueOptions().then(setOptions) }, [])
@@ -78,6 +79,7 @@ export default function NewProductPage() {
         description: form.description.trim() || null,
         party:       form.party.trim() || null,
         notes:       form.notes.trim() || null,
+        is_catalogue_only: catalogueOnly,
         created_by: user?.id ?? null,
       })
       .select('id').single()
@@ -213,6 +215,11 @@ export default function NewProductPage() {
           <datalist id="opt-description">{options.description.map(o => <option key={o} value={o} />)}</datalist>
           <datalist id="opt-purity">{options.purity.map(o => <option key={o} value={o} />)}</datalist>
           <datalist id="opt-party">{options.party.map(o => <option key={o} value={o} />)}</datalist>
+
+          <label className="flex items-start gap-2 text-sm text-gray-700 pt-1">
+            <input type="checkbox" checked={catalogueOnly} onChange={e => setCatalogueOnly(e.target.checked)} className="mt-0.5" />
+            <span>Catalogue product <span className="text-gray-400">(design only — not a physical in-stock piece; kept out of inventory)</span></span>
+          </label>
         </div>
 
         <button onClick={save} disabled={saving} className="btn-primary w-full disabled:opacity-60">

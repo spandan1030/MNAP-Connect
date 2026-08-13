@@ -8,13 +8,14 @@ import { syncProductToApp, removeProductFromApp } from '@/lib/catalogue-sync'
 //
 // Supported actions (v1):
 //   sold        { sold: boolean }            → flip is_sold      (re-sync published: stock status)
+//   catalogue   { catalogue: boolean }       → flip is_catalogue_only (re-sync published: inStock)
 //   review      { review: boolean }          → flip needs_review (no app impact)
 //   publish     { publish: boolean, makingPercent?: number|null }
 //                                            → flip show_in_app  (publish/unpublish + sync each)
 //   set_party   { party: string }            → set party         (party is never sent to the app → no sync)
 //   set_making  { makingPercent: number }    → set making_percent(re-sync published: price input)
 //   delete      {}                           → remove from app + delete photos/storage + delete rows
-type Action = 'sold' | 'review' | 'publish' | 'set_party' | 'set_making' | 'delete'
+type Action = 'sold' | 'catalogue' | 'review' | 'publish' | 'set_party' | 'set_making' | 'delete'
 
 type ProductRow = { id: string; show_in_app: boolean | null }
 
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest) {
 
   const body = (await req.json()) as {
     ids?: unknown; action?: unknown
-    sold?: unknown; review?: unknown; publish?: unknown
+    sold?: unknown; catalogue?: unknown; review?: unknown; publish?: unknown
     makingPercent?: unknown; party?: unknown
   }
 
@@ -55,6 +56,14 @@ export async function POST(req: NextRequest) {
           .update({ is_sold: sold, updated_at: now }).in('id', ids)
         if (error) throw new Error(error.message)
         await resync(publishedIds) // stock status changes what the app shows
+        return Response.json({ ok: true, updated: rows.length })
+      }
+      case 'catalogue': {
+        const catalogue = Boolean(body.catalogue)
+        const { error } = await supabase.from('wa_products')
+          .update({ is_catalogue_only: catalogue, updated_at: now }).in('id', ids)
+        if (error) throw new Error(error.message)
+        await resync(publishedIds) // catalogue flag flips inStock + catalogueOnly in the app
         return Response.json({ ok: true, updated: rows.length })
       }
       case 'review': {
