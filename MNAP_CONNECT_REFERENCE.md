@@ -98,11 +98,15 @@ Photos are added on `/catalogue/new` and `/catalogue/[id]` via 📷 camera, 🖼
 Every product photo is presented at **4:5 (portrait)**. The **original upload is kept
 untouched** (`wa_product_images.image_url` / `thumb_url`); a derived **4:5 crop** is
 stored alongside it (`display_url` / `display_thumb_url`) plus the normalized crop rect
-(`crop` JSONB, `{x,y,w,h}` in 0..1). On upload a **centred** 4:5 crop is generated
-automatically, so every photo has a valid display image even if never manually cropped.
-The **Crop** button opens `components/catalogue/ImageCropper.tsx` — a fixed 4:5 frame the
-user pans/zooms (Instagram-style); re-cropping regenerates only the display files
-(original is never touched) and re-syncs if the photo is primary + published.
+(`crop` JSONB, `{x,y,w,h}` in 0..1 **plus optional `rotate` 0/90/180/270**). On upload a
+**centred** 4:5 crop is generated automatically, so every photo has a valid display image
+even if never manually cropped. The **Crop** button opens
+`components/catalogue/ImageCropper.tsx` — a fixed 4:5 frame the user pans/zooms **and can
+rotate 90° at a time** (Instagram-style). Rotation is baked into the exported 4:5 image by
+`renderCrop` (`crop.rotate` → `rotateImageToCanvas` before cropping); the crop rect is
+normalized to the **rotated** image, and the cropper hands back the **original** image so
+both the new-upload and re-crop paths apply rotation uniformly. Re-cropping regenerates only
+the display files (original is never touched) and re-syncs if the photo is primary + published.
 - The **customer app is fed the crop**: `catalogue-sync.buildDoc` sends
   `display_url ?? image_url` (and `display_thumb_url ?? thumb_url ?? image_url`).
 - **Latest upload = primary by default:** on both `/catalogue/new` (save loop) and

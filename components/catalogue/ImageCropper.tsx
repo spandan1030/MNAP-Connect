@@ -1,16 +1,32 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { CROP_RATIO, type CropRect } from '@/lib/image'
+import { CROP_RATIO, rotateImageToCanvas, type CropRect, type Rotation } from '@/lib/image'
 
-// Fixed-4:5 cropper. The frame is fixed; the user pans/zooms the image behind it,
-// and whatever fills the frame becomes the crop (Instagram-style). Returns the
-// normalized crop rect plus the decoded image so the caller can render without
-// re-fetching. Source is a File (new upload) or an image URL (existing photo).
+// Fixed-4:5 cropper. The frame is fixed; the user pans/zooms (and can rotate) the
+// image behind it, and whatever fills the frame becomes the crop (Instagram-style).
+// Rotation is baked into a working image for preview + crop math; on confirm we hand
+// back the ORIGINAL image plus the chosen `rotate` so renderCrop reproduces it.
+// Source is a File (new upload) or an image URL (existing photo).
 
 const FRAME_W = 300
 const FRAME_H = Math.round(FRAME_W / CROP_RATIO) // 375
 const MAX_ZOOM = 4
+
+// Draw `base` rotated by `deg` and decode it back into an <img> for display + math.
+function loadRotated(base: HTMLImageElement, deg: number): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    if (!(deg % 360)) { resolve(base); return }
+    const canvas = rotateImageToCanvas(base, deg)
+    if (!canvas) { reject(new Error('rotate failed')); return }
+    try {
+      const im = new Image()
+      im.onload = () => resolve(im)
+      im.onerror = () => reject(new Error('rotate failed'))
+      im.src = canvas.toDataURL('image/jpeg', 0.92)
+    } catch { reject(new Error('rotate failed')) }
+  })
+}
 
 export default function ImageCropper({
   source, initial, onConfirm, onCancel,
@@ -20,7 +36,9 @@ export default function ImageCropper({
   onConfirm: (crop: CropRect, img: HTMLImageElement) => void
   onCancel: () => void
 }) {
-  const [img, setImg] = useState<HTMLImageElement | null>(null)
+  const [baseImg, setBaseImg] = useState<HTMLImageElement | null>(null) // original, unrotated
+  const [img, setImg] = useState<HTMLImageElement | null>(null)         // working (rotated) preview
+  const [rotate, setRotate] = useState<Rotation>(0)
   const [err, setErr] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [off, setOff] = useState({ tx: 0, ty: 0 }) // image top-left within the frame, px
@@ -43,18 +61,24 @@ export default function ImageCropper({
     let objUrl: string | null = null
     const el = new Image()
     if (typeof source === 'string') el.crossOrigin = 'anonymous'
-    el.onload = () => {
-      const bs = Math.max(FRAME_W / el.width, FRAME_H / el.height)
+    el.onload = async () => {
+      setBaseImg(el)
+      const r0 = (initial?.rotate ?? 0) as Rotation
+      let working = el
+      let applied: Rotation = 0
+      try { working = await loadRotated(el, r0); applied = r0 } catch { working = el; applied = 0 }
+      const bs = Math.max(FRAME_W / working.width, FRAME_H / working.height)
       if (initial && initial.w > 0) {
-        const s = FRAME_W / (initial.w * el.width)
-        const w = el.width * s, h = el.height * s
+        const s = FRAME_W / (initial.w * working.width)
+        const w = working.width * s, h = working.height * s
         setZoom(Math.min(MAX_ZOOM, Math.max(1, s / bs)))
-        setOff(clamp(-initial.x * el.width * s, -initial.y * el.height * s, w, h))
+        setOff(clamp(-initial.x * working.width * s, -initial.y * working.height * s, w, h))
       } else {
-        const w = el.width * bs, h = el.height * bs
+        const w = working.width * bs, h = working.height * bs
         setOff(clamp((FRAME_W - w) / 2, (FRAME_H - h) / 2, w, h))
       }
-      setImg(el)
+      setRotate(applied)
+      setImg(working)
     }
     el.onerror = () => setErr(true)
     if (typeof source === 'string') el.src = source
@@ -62,6 +86,20 @@ export default function ImageCropper({
     return () => { if (objUrl) URL.revokeObjectURL(objUrl) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Rotate 90° clockwise: rebuild the working image and re-centre (rotation changes framing).
+  async function rotate90() {
+    if (!baseImg) return
+    const next = (((rotate + 90) % 360)) as Rotation
+    let working: HTMLImageElement
+    try { working = await loadRotated(baseImg, next) } catch { return } // rotation unavailable → leave as-is
+    const bs = Math.max(FRAME_W / working.width, FRAME_H / working.height)
+    const w = working.width * bs, h = working.height * bs
+    setRotate(next)
+    setImg(working)
+    setZoom(1)
+    setOff(clamp((FRAME_W - w) / 2, (FRAME_H - h) / 2, w, h))
+  }
 
   function onPointerDown(e: React.PointerEvent) {
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -92,14 +130,17 @@ export default function ImageCropper({
   }
 
   function confirm() {
-    if (!img) return
+    if (!img || !baseImg) return
+    // Crop is normalized to the ROTATED image; `rotate` + the ORIGINAL image go back so
+    // renderCrop rotates then crops (matching both the new-upload and re-crop paths).
     const crop: CropRect = {
       x: Math.max(0, Math.min(1, -off.tx / dispW)),
       y: Math.max(0, Math.min(1, -off.ty / dispH)),
       w: Math.min(1, FRAME_W / dispW),
       h: Math.min(1, FRAME_H / dispH),
+      rotate,
     }
-    onConfirm(crop, img)
+    onConfirm(crop, baseImg)
   }
 
   return (
@@ -145,13 +186,20 @@ export default function ImageCropper({
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
+              <button onClick={rotate90} disabled={!img} title="Rotate 90°"
+                className="flex items-center gap-1 text-xs font-medium text-gray-600 border border-gray-300 rounded-lg px-2.5 py-1.5 active:bg-gray-50 disabled:opacity-50">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M4 9a9 9 0 108-5" />
+                </svg>
+                Rotate
+              </button>
               <span className="text-xs text-gray-400">Zoom</span>
               <input type="range" min={1} max={MAX_ZOOM} step={0.01} value={zoom}
                 onChange={e => onZoom(Number(e.target.value))}
                 className="flex-1 accent-green-600" />
             </div>
-            <p className="text-[11px] text-gray-400 text-center">Drag to reposition · this 4:5 area is what customers see.</p>
+            <p className="text-[11px] text-gray-400 text-center">Drag to reposition · Rotate to straighten · this 4:5 area is what customers see.</p>
 
             <div className="flex gap-2">
               <button onClick={onCancel} className="btn-secondary flex-1">Cancel</button>

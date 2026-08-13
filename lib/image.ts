@@ -69,7 +69,27 @@ export async function compressWithThumb(file: File): Promise<{ full: File; thumb
 // original upload and derive a cropped 4:5 image (full + thumb) from it. The
 // crop rect is stored normalized (0..1) so the cropper can reopen in place.
 
-export type CropRect = { x: number; y: number; w: number; h: number }
+export type Rotation = 0 | 90 | 180 | 270
+// Crop rect is normalized (0..1) relative to the image AFTER `rotate` is applied.
+export type CropRect = { x: number; y: number; w: number; h: number; rotate?: Rotation }
+
+// Rotate an image/canvas clockwise by a multiple of 90° into a new canvas (90/270
+// swap width & height). Used to bake the cropper's rotation into the exported 4:5
+// image and to pre-rotate a source before applying a stored crop rect.
+export function rotateImageToCanvas(src: HTMLImageElement | HTMLCanvasElement, deg: number): HTMLCanvasElement | null {
+  const d = ((deg % 360) + 360) % 360
+  const swap = d === 90 || d === 270
+  const sw = src.width, sh = src.height
+  const canvas = document.createElement('canvas')
+  canvas.width = swap ? sh : sw
+  canvas.height = swap ? sw : sh
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  ctx.translate(canvas.width / 2, canvas.height / 2)
+  ctx.rotate((d * Math.PI) / 180)
+  ctx.drawImage(src, -sw / 2, -sh / 2)
+  return canvas
+}
 
 export const CROP_RATIO = 4 / 5      // width / height (portrait)
 const CROP_W = 1280                  // cropped full image, px
@@ -93,7 +113,7 @@ export function centerCrop(imgW: number, imgH: number): CropRect {
   return { x: 0, y: (1 - h) / 2, w: 1, h }
 }
 
-async function drawCrop(img: HTMLImageElement, crop: CropRect, outW: number, outH: number, quality: number, name: string): Promise<File | null> {
+async function drawCrop(img: HTMLImageElement | HTMLCanvasElement, crop: CropRect, outW: number, outH: number, quality: number, name: string): Promise<File | null> {
   const sx = crop.x * img.width
   const sy = crop.y * img.height
   const sw = crop.w * img.width
@@ -114,8 +134,11 @@ async function drawCrop(img: HTMLImageElement, crop: CropRect, outW: number, out
 // 4:5 region is used. Returns null if the source can't be decoded.
 export async function renderCrop(source: File | HTMLImageElement, crop?: CropRect | null): Promise<{ display: File; thumb: File } | null> {
   try {
-    const img = source instanceof HTMLImageElement ? source : await loadImage(source)
+    const img0 = source instanceof HTMLImageElement ? source : await loadImage(source)
     const base = source instanceof HTMLImageElement ? 'photo' : (source.name.replace(/\.[^.]+$/, '') || 'photo')
+    // Bake in the chosen rotation first; the crop rect is relative to the rotated image.
+    const rotate = crop?.rotate ?? 0
+    const img = rotate ? (rotateImageToCanvas(img0, rotate) ?? img0) : img0
     const rect = crop ?? centerCrop(img.width, img.height)
     const display = await drawCrop(img, rect, CROP_W, CROP_H, CROP_QUALITY, `${base}-4x5`)
     const thumb = await drawCrop(img, rect, CROP_THUMB_W, CROP_THUMB_H, CROP_THUMB_QUALITY, `${base}-4x5-thumb`)
