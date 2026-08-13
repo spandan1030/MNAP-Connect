@@ -70,6 +70,51 @@ export default function CataloguePage() {
   const [resyncing, setResyncing] = useState(false)
   const [resyncNote, setResyncNote] = useState<string | null>(null)
 
+  // ── Bulk selection ────────────────────────────────────────────────────────
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected]     = useState<Set<string>>(new Set())
+  const [sheetView, setSheetView]   = useState<null | 'menu' | 'party' | 'making' | 'publish' | 'delete'>(null)
+  const [bulkBusy, setBulkBusy]     = useState(false)
+  const [bulkNote, setBulkNote]     = useState<string | null>(null)
+  const [partyPick, setPartyPick]   = useState('')
+  const [makingInput, setMakingInput] = useState('')
+
+  function toggleSelect(id: string) {
+    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function clearSelection() { setSelected(new Set()) }
+  const allLoadedSelected = products.length > 0 && products.every(p => selected.has(p.id))
+  function toggleSelectAll() {
+    setSelected(allLoadedSelected ? new Set() : new Set(products.map(p => p.id)))
+  }
+  function exitSelect() { setSelectMode(false); setSelected(new Set()); setSheetView(null) }
+
+  // Run a bulk action against the selected ids, then refetch so the list reflects
+  // the new state (a piece marked Sold while viewing "In stock" should drop out).
+  async function applyBulk(action: string, extra: Record<string, unknown> = {}, verb = 'Updated') {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    setBulkBusy(true); setBulkNote(null)
+    try {
+      const res = await fetch('/api/catalogue/bulk', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, action, ...extra }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Bulk action failed')
+      const n = data.deleted ?? data.updated ?? ids.length
+      setBulkNote(`${verb} ${n} item${n === 1 ? '' : 's'} ✓`)
+      setSheetView(null); setSelected(new Set()); setSelectMode(false)
+      setLoading(true)
+      await fetchPage(0, true).finally(() => setLoading(false))
+    } catch (e) {
+      setBulkNote(e instanceof Error ? e.message : 'Bulk action failed')
+    } finally {
+      setBulkBusy(false)
+      setTimeout(() => setBulkNote(null), 4000)
+    }
+  }
+
   async function resyncApp() {
     setResyncing(true); setResyncNote(null)
     try {
@@ -279,7 +324,21 @@ export default function CataloguePage() {
           ))}
         </div>
 
-        {!loading && <p className="text-xs text-gray-400">{total ?? products.length} item{(total ?? products.length) !== 1 ? 's' : ''}</p>}
+        {!loading && (
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-gray-400">{total ?? products.length} item{(total ?? products.length) !== 1 ? 's' : ''}</p>
+            {products.length > 0 && (
+              selectMode ? (
+                <button onClick={exitSelect} className="text-xs font-semibold text-gray-500 active:text-gray-700">Cancel</button>
+              ) : (
+                <button onClick={() => setSelectMode(true)} className="text-xs font-semibold text-green-600 active:text-green-700">Select</button>
+              )
+            )}
+          </div>
+        )}
+        {bulkNote && (
+          <p className={`text-[11px] ${bulkNote.includes('✓') ? 'text-green-700' : 'text-amber-600'}`}>{bulkNote}</p>
+        )}
 
         {loading ? (
           <div className="flex justify-center pt-10"><div className="w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full animate-spin" /></div>
@@ -288,8 +347,12 @@ export default function CataloguePage() {
         ) : (
           <>
             <div className="grid grid-cols-2 gap-3">
-              {products.map(p => (
-                <Link key={p.id} href={`/catalogue/${p.id}`} className="card overflow-hidden active:bg-gray-50">
+              {products.map(p => {
+                const sel = selected.has(p.id)
+                return (
+                <Link key={p.id} href={`/catalogue/${p.id}`}
+                  onClick={selectMode ? (e => { e.preventDefault(); toggleSelect(p.id) }) : undefined}
+                  className={`card overflow-hidden active:bg-gray-50 ${sel ? 'ring-2 ring-green-500' : ''}`}>
                   <div className="relative aspect-[4/5] bg-gray-100 flex items-center justify-center">
                     {thumbs[p.id] ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -299,24 +362,41 @@ export default function CataloguePage() {
                         <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 18h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v10.5a1.5 1.5 0 001.5 1.5z" />
                       </svg>
                     )}
-                    {p.is_sold && (
-                      <span className="absolute top-1.5 left-1.5 text-[10px] font-bold text-white bg-red-600 px-1.5 py-0.5 rounded">SOLD</span>
+                    {selectMode ? (
+                      <>
+                        <span className={`absolute top-1.5 left-1.5 w-6 h-6 rounded-full flex items-center justify-center border-2 ${
+                          sel ? 'bg-green-600 border-green-600 text-white' : 'bg-white/80 border-gray-300 text-transparent'
+                        }`}>
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </span>
+                        {p.is_sold && (
+                          <span className="absolute top-1.5 right-1.5 text-[10px] font-bold text-white bg-red-600 px-1.5 py-0.5 rounded">SOLD</span>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {p.is_sold && (
+                          <span className="absolute top-1.5 left-1.5 text-[10px] font-bold text-white bg-red-600 px-1.5 py-0.5 rounded">SOLD</span>
+                        )}
+                        <button onClick={e => { e.preventDefault(); e.stopPropagation(); setPreview(p) }} title="Preview"
+                          className="absolute bottom-1.5 left-1.5 w-6 h-6 rounded-full bg-white/80 text-gray-600 flex items-center justify-center active:bg-white">
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                          </svg>
+                        </button>
+                        <button onClick={e => toggleReview(e, p)} title="Mark for review"
+                          className={`absolute top-1.5 right-1.5 w-6 h-6 rounded-full flex items-center justify-center ${
+                            p.needs_review ? 'bg-amber-500 text-white' : 'bg-white/80 text-gray-400'
+                          }`}>
+                          <svg className="w-3.5 h-3.5" fill={p.needs_review ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 21v-4m0 0V5a2 2 0 012-2h6.5l1 2H21l-3 6 3 6h-8.5l-1-2H5a2 2 0 00-2 2z" />
+                          </svg>
+                        </button>
+                      </>
                     )}
-                    <button onClick={e => { e.preventDefault(); e.stopPropagation(); setPreview(p) }} title="Preview"
-                      className="absolute bottom-1.5 left-1.5 w-6 h-6 rounded-full bg-white/80 text-gray-600 flex items-center justify-center active:bg-white">
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                      </svg>
-                    </button>
-                    <button onClick={e => toggleReview(e, p)} title="Mark for review"
-                      className={`absolute top-1.5 right-1.5 w-6 h-6 rounded-full flex items-center justify-center ${
-                        p.needs_review ? 'bg-amber-500 text-white' : 'bg-white/80 text-gray-400'
-                      }`}>
-                      <svg className="w-3.5 h-3.5" fill={p.needs_review ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 21v-4m0 0V5a2 2 0 012-2h6.5l1 2H21l-3 6 3 6h-8.5l-1-2H5a2 2 0 00-2 2z" />
-                      </svg>
-                    </button>
                   </div>
                   <div className="p-2.5">
                     <p className="font-semibold text-gray-900 text-sm truncate">{p.item_name || 'Untitled'}</p>
@@ -326,16 +406,25 @@ export default function CataloguePage() {
                         {p.purity && <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-100 px-1.5 py-0.5 rounded-full">{p.purity}</span>}
                         {p.weight != null && <span className="text-[10px] bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded-full">{p.weight} g</span>}
                       </div>
-                      <button onClick={e => toggleSold(e, p)}
-                        className={`flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      {selectMode ? (
+                        <span className={`flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                           p.is_sold ? 'bg-red-50 text-red-600 border-red-200' : 'bg-green-50 text-green-700 border-green-200'
                         }`}>
-                        {p.is_sold ? 'Sold' : 'In stock'}
-                      </button>
+                          {p.is_sold ? 'Sold' : 'In stock'}
+                        </span>
+                      ) : (
+                        <button onClick={e => toggleSold(e, p)}
+                          className={`flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            p.is_sold ? 'bg-red-50 text-red-600 border-red-200' : 'bg-green-50 text-green-700 border-green-200'
+                          }`}>
+                          {p.is_sold ? 'Sold' : 'In stock'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </Link>
-              ))}
+                )
+              })}
             </div>
 
             {/* Infinite-scroll sentinel + footer */}
@@ -347,8 +436,159 @@ export default function CataloguePage() {
         )}
       </main>
 
+      {/* Sticky selection bar */}
+      {selectMode && (
+        <div className="fixed bottom-0 inset-x-0 z-40 border-t border-gray-200 bg-white/95 backdrop-blur px-4 py-2.5">
+          <div className="max-w-lg mx-auto flex items-center gap-3">
+            <span className="text-sm font-semibold text-gray-900">{selected.size} selected</span>
+            <button onClick={toggleSelectAll} className="text-xs font-medium text-green-600 active:text-green-700">
+              {allLoadedSelected ? 'Deselect all' : 'Select all'}
+            </button>
+            {selected.size > 0 && (
+              <button onClick={clearSelection} className="text-xs font-medium text-gray-400 active:text-gray-600">Clear</button>
+            )}
+            <button onClick={() => setSheetView('menu')} disabled={selected.size === 0}
+              className="ml-auto text-sm font-semibold bg-green-600 text-white px-4 py-1.5 rounded-lg disabled:opacity-40">
+              Actions
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk action sheet */}
+      {sheetView && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center" onClick={() => !bulkBusy && setSheetView(null)}>
+          <div className="absolute inset-0 bg-black/30" />
+          <div className="relative w-full max-w-lg bg-white rounded-t-2xl p-4 pb-6 space-y-3 max-h-[85vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-bold text-gray-900">
+                {sheetView === 'menu' ? `${selected.size} product${selected.size === 1 ? '' : 's'}`
+                  : sheetView === 'party' ? 'Set party'
+                  : sheetView === 'making' ? 'Set making %'
+                  : sheetView === 'publish' ? 'Publish to customer app'
+                  : 'Delete products'}
+              </h2>
+              <button onClick={() => setSheetView(sheetView === 'menu' ? null : 'menu')} disabled={bulkBusy}
+                className="text-sm font-medium text-gray-400 active:text-gray-600 disabled:opacity-50">
+                {sheetView === 'menu' ? 'Close' : '‹ Back'}
+              </button>
+            </div>
+
+            {sheetView === 'menu' && (
+              <div className="space-y-3">
+                <BulkGroup label="Stock">
+                  <SheetBtn onClick={() => applyBulk('sold', { sold: false }, 'Marked in stock')} disabled={bulkBusy}
+                    className="bg-green-50 text-green-700 border-green-200">In stock</SheetBtn>
+                  <SheetBtn onClick={() => applyBulk('sold', { sold: true }, 'Marked sold')} disabled={bulkBusy}
+                    className="bg-red-50 text-red-600 border-red-200">Sold</SheetBtn>
+                </BulkGroup>
+                <BulkGroup label="Review">
+                  <SheetBtn onClick={() => applyBulk('review', { review: true }, 'Flagged')} disabled={bulkBusy}
+                    className="bg-amber-50 text-amber-700 border-amber-200">Needs review</SheetBtn>
+                  <SheetBtn onClick={() => applyBulk('review', { review: false }, 'Cleared review on')} disabled={bulkBusy}
+                    className="bg-white text-gray-600 border-gray-300">Clear review</SheetBtn>
+                </BulkGroup>
+                <BulkGroup label="Customer app">
+                  <SheetBtn onClick={() => { setMakingInput(''); setSheetView('publish') }} disabled={bulkBusy}
+                    className="bg-green-50 text-green-700 border-green-200">Publish…</SheetBtn>
+                  <SheetBtn onClick={() => applyBulk('publish', { publish: false }, 'Unpublished')} disabled={bulkBusy}
+                    className="bg-white text-gray-600 border-gray-300">Unpublish</SheetBtn>
+                </BulkGroup>
+                <BulkGroup label="Edit">
+                  <SheetBtn onClick={() => { setPartyPick(''); setSheetView('party') }} disabled={bulkBusy}
+                    className="bg-white text-gray-700 border-gray-300">Set party…</SheetBtn>
+                  <SheetBtn onClick={() => { setMakingInput(''); setSheetView('making') }} disabled={bulkBusy}
+                    className="bg-white text-gray-700 border-gray-300">Set making %…</SheetBtn>
+                </BulkGroup>
+                <BulkGroup label="Danger zone">
+                  <SheetBtn onClick={() => setSheetView('delete')} disabled={bulkBusy}
+                    className="bg-red-600 text-white border-red-600">Delete…</SheetBtn>
+                </BulkGroup>
+              </div>
+            )}
+
+            {sheetView === 'publish' && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">Publishes {selected.size} product{selected.size === 1 ? '' : 's'} to the customer app. Set a making % to apply to all of them, or leave blank to keep each product’s current value.</p>
+                <input type="number" inputMode="decimal" placeholder="Making % (optional)" value={makingInput}
+                  onChange={e => setMakingInput(e.target.value)} className="input w-full" />
+                <button onClick={() => applyBulk('publish', { publish: true, makingPercent: makingInput.trim() === '' ? null : Number(makingInput) }, 'Published')}
+                  disabled={bulkBusy} className="btn-primary w-full disabled:opacity-50">
+                  {bulkBusy ? 'Publishing…' : `Publish ${selected.size} product${selected.size === 1 ? '' : 's'}`}
+                </button>
+              </div>
+            )}
+
+            {sheetView === 'making' && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">Sets the making % on {selected.size} product{selected.size === 1 ? '' : 's'}. Published pieces re-sync so the app’s live price updates.</p>
+                <input type="number" inputMode="decimal" placeholder="Making %" value={makingInput}
+                  onChange={e => setMakingInput(e.target.value)} className="input w-full" autoFocus />
+                <button onClick={() => applyBulk('set_making', { makingPercent: Number(makingInput) }, 'Set making % on')}
+                  disabled={bulkBusy || makingInput.trim() === ''} className="btn-primary w-full disabled:opacity-50">
+                  {bulkBusy ? 'Saving…' : 'Apply'}
+                </button>
+              </div>
+            )}
+
+            {sheetView === 'party' && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">Assigns a party to {selected.size} product{selected.size === 1 ? '' : 's'}. Manage the list on the Values page.</p>
+                <div className="max-h-56 overflow-y-auto rounded-xl border border-gray-300 divide-y divide-gray-100">
+                  {options.party.length === 0 ? (
+                    <p className="px-3 py-2 text-xs text-gray-400">No parties yet — add one on the Values page.</p>
+                  ) : options.party.map(o => (
+                    <label key={o} className="flex items-center gap-2.5 px-3 py-2 text-sm cursor-pointer active:bg-gray-50">
+                      <input type="radio" name="bulk-party" checked={partyPick === o} onChange={() => setPartyPick(o)}
+                        className="w-4 h-4 accent-green-600 flex-shrink-0" />
+                      <span className={partyPick === o ? 'text-gray-900 font-medium' : 'text-gray-600'}>{o}</span>
+                    </label>
+                  ))}
+                </div>
+                <button onClick={() => applyBulk('set_party', { party: partyPick }, 'Set party on')}
+                  disabled={bulkBusy || !partyPick} className="btn-primary w-full disabled:opacity-50">
+                  {bulkBusy ? 'Saving…' : 'Apply'}
+                </button>
+              </div>
+            )}
+
+            {sheetView === 'delete' && (
+              <div className="space-y-3">
+                <p className="text-sm text-gray-700">Permanently delete <b>{selected.size}</b> product{selected.size === 1 ? '' : 's'}, including their photos. Published pieces are removed from the customer app. This cannot be undone.</p>
+                <button onClick={() => applyBulk('delete', {}, 'Deleted')} disabled={bulkBusy}
+                  className="w-full py-2.5 rounded-xl bg-red-600 text-white font-semibold text-sm disabled:opacity-50">
+                  {bulkBusy ? 'Deleting…' : `Yes, delete ${selected.size}`}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {preview && <PreviewModal product={preview} onClose={() => setPreview(null)} />}
     </div>
+  )
+}
+
+// A labelled row of bulk-action buttons in the action sheet.
+function BulkGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">{label}</p>
+      <div className="flex gap-2">{children}</div>
+    </div>
+  )
+}
+
+function SheetBtn({ onClick, disabled, className, children }: {
+  onClick: () => void; disabled?: boolean; className: string; children: React.ReactNode
+}) {
+  return (
+    <button onClick={onClick} disabled={disabled}
+      className={`flex-1 text-sm font-semibold px-3 py-2.5 rounded-xl border disabled:opacity-50 ${className}`}>
+      {children}
+    </button>
   )
 }
 

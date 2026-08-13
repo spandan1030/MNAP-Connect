@@ -129,6 +129,24 @@ Each catalogue product **is one barcoded piece**, with `wa_products.is_sold` (wa
   like a normal in-stock one. Existing published products only pick up the new flag on their
   next sync — hit **↻ Re-sync customer app** on the catalogue list to backfill.
 
+### Bulk actions on selected products
+The catalogue list (`/catalogue`) has a **Select** mode (toggle next to the item count): tap
+cards to tick them, **Select all** ticks every loaded card, and the sticky bottom bar opens an
+**Actions** sheet. All actions run against the ticked ids via `POST /api/catalogue/bulk`
+`{ ids, action, ...args }`; afterwards the list **refetches page 0** so status/filter changes are
+reflected (e.g. a piece marked Sold drops out of the "In stock" view). Actions (v1):
+- **Stock** — `sold {sold}` flips `is_sold`; re-syncs published pieces (stock status).
+- **Review** — `review {review}` flips `needs_review`; not sent to the app.
+- **Customer app** — `publish {publish, makingPercent?}` flips `show_in_app` and syncs each
+  (publish upserts, unpublish removes the Firestore doc). Making % is only overwritten when
+  supplied on the Publish sub-sheet; otherwise each row keeps its own.
+- **Set party** — `set_party {party}` (chosen from existing Values); party is never published → no sync.
+- **Set making %** — `set_making {makingPercent}`; re-syncs published pieces (feeds the app's live price).
+- **Delete** — removes published pieces from the app (`removeProductFromApp`), deletes their
+  `wa_product_images` + storage objects, then the rows. (Note: this closes a gap in the single
+  `/catalogue/[id]` delete, which drops only the row and leaves the Firestore doc + storage behind.)
+No migration — reuses existing columns.
+
 ### Multi-photo publishing (gallery)
 A product can publish **several photos** to the customer app, not just the primary.
 Each photo has an **`in_app`** flag (migration `wa_027`); the product page shows a

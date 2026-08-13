@@ -119,6 +119,11 @@ export async function syncProductToApp(productId: string): Promise<{ action: 'up
   return { action: 'upserted', priceHidden: doc.priceHidden }
 }
 
+/** Remove a product from the customer catalogue (used when the source row is deleted). */
+export async function removeProductFromApp(productId: string): Promise<void> {
+  await customerDb().collection('catalogue').doc(productId).delete().catch(() => {})
+}
+
 /** Re-push every currently-published product (safety net / bulk re-sync). */
 export async function resyncAllPublished(): Promise<{ count: number }> {
   const { data } = await supabaseAdmin.from('wa_products').select('id').eq('show_in_app', true)
