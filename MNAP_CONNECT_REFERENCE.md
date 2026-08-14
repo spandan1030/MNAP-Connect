@@ -98,15 +98,25 @@ Photos are added on `/catalogue/new` and `/catalogue/[id]` via 📷 camera, 🖼
 Every product photo is presented at **4:5 (portrait)**. The **original upload is kept
 untouched** (`wa_product_images.image_url` / `thumb_url`); a derived **4:5 crop** is
 stored alongside it (`display_url` / `display_thumb_url`) plus the normalized crop rect
-(`crop` JSONB, `{x,y,w,h}` in 0..1 **plus optional `rotate` 0/90/180/270**). On upload a
-**centred** 4:5 crop is generated automatically, so every photo has a valid display image
-even if never manually cropped. The **Crop** button opens
-`components/catalogue/ImageCropper.tsx` — a fixed 4:5 frame the user pans/zooms **and can
-rotate 90° at a time** (Instagram-style). Rotation is baked into the exported 4:5 image by
+(`crop` JSONB, `{x,y,w,h}` in 0..1, **optional `rotate` 0/90/180/270**, and **optional
+`logo` watermark placement**). On upload a **centred** 4:5 crop is generated automatically,
+so every photo has a valid display image even if never manually cropped. The **Crop** button
+opens `components/catalogue/ImageCropper.tsx` — a fixed 4:5 frame the user pans/zooms **and
+can rotate 90° at a time** (Instagram-style). Rotation is baked into the exported 4:5 image by
 `renderCrop` (`crop.rotate` → `rotateImageToCanvas` before cropping); the crop rect is
 normalized to the **rotated** image, and the cropper hands back the **original** image so
 both the new-upload and re-crop paths apply rotation uniformly. Re-cropping regenerates only
 the display files (original is never touched) and re-syncs if the photo is primary + published.
+
+**Logo watermark (baked in):** the cropper has a **Logo** option — a transparent PNG at
+`public/watermark.png` (drop the file to enable; the option is disabled + labelled if absent,
+and rendering silently skips it). The user drags it in the 4:5 frame and sets **size + opacity**;
+placement is stored as `crop.logo = {cx, cy, scale, opacity}` (all normalized to the 4:5 frame,
+cx/cy = centre) and **remembered in `localStorage` (`mnap_crop_logo`) as the default for the next
+photo**. `renderCrop` loads the watermark (`loadWatermark`, `WATERMARK_SRC`) and `drawImage`s it
+onto both the full + thumb canvases before export, so the **customer app receives the already-
+combined photo — no app-side change**. Only photos taken through the cropper get the logo (an
+auto-centred crop with no `logo` field is un-watermarked).
 - The **customer app is fed the crop**: `catalogue-sync.buildDoc` sends
   `display_url ?? image_url` (and `display_thumb_url ?? thumb_url ?? image_url`).
 - **Latest upload = primary by default:** on both `/catalogue/new` (save loop) and

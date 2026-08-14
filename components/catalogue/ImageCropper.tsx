@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { CROP_RATIO, rotateImageToCanvas, type CropRect, type Rotation } from '@/lib/image'
+import { CROP_RATIO, rotateImageToCanvas, loadWatermark, type CropRect, type Rotation, type LogoPlacement } from '@/lib/image'
 
 // Fixed-4:5 cropper. The frame is fixed; the user pans/zooms (and can rotate) the
 // image behind it, and whatever fills the frame becomes the crop (Instagram-style).
@@ -12,6 +12,19 @@ import { CROP_RATIO, rotateImageToCanvas, type CropRect, type Rotation } from '@
 const FRAME_W = 300
 const FRAME_H = Math.round(FRAME_W / CROP_RATIO) // 375
 const MAX_ZOOM = 4
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
+
+// Last-used watermark placement is remembered so it stays consistent across photos.
+const LOGO_KEY = 'mnap_crop_logo'
+const DEFAULT_LOGO: LogoPlacement = { cx: 0.5, cy: 0.9, scale: 0.32, opacity: 1 }
+function readLogoPref(): { on: boolean; cfg: LogoPlacement } {
+  if (typeof window === 'undefined') return { on: false, cfg: DEFAULT_LOGO }
+  try {
+    const raw = window.localStorage.getItem(LOGO_KEY)
+    if (raw) { const j = JSON.parse(raw); return { on: !!j.on, cfg: { ...DEFAULT_LOGO, ...(j.cfg ?? {}) } } }
+  } catch { /* ignore */ }
+  return { on: false, cfg: DEFAULT_LOGO }
+}
 
 // Draw `base` rotated by `deg` and decode it back into an <img> for display + math.
 function loadRotated(base: HTMLImageElement, deg: number): Promise<HTMLImageElement> {
@@ -43,6 +56,12 @@ export default function ImageCropper({
   const [zoom, setZoom] = useState(1)
   const [off, setOff] = useState({ tx: 0, ty: 0 }) // image top-left within the frame, px
   const drag = useRef<{ x: number; y: number } | null>(null)
+
+  // Watermark overlay
+  const [logoImg, setLogoImg] = useState<HTMLImageElement | null>(null)
+  const [logoOn, setLogoOn]   = useState(false)
+  const [logo, setLogo]       = useState<LogoPlacement>(DEFAULT_LOGO)
+  const logoDrag = useRef<{ x: number; y: number } | null>(null)
 
   const baseScale = img ? Math.max(FRAME_W / img.width, FRAME_H / img.height) : 1
   const scale = baseScale * zoom
@@ -86,6 +105,41 @@ export default function ImageCropper({
     return () => { if (objUrl) URL.revokeObjectURL(objUrl) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Load the watermark + seed the logo placement (from this photo's saved crop, else the
+  // remembered last-used placement). Runs once.
+  useEffect(() => {
+    loadWatermark().then(setLogoImg)
+    const pref = readLogoPref()
+    if (initial && 'logo' in initial) {
+      setLogoOn(!!initial.logo)
+      setLogo(initial.logo ?? pref.cfg)
+    } else {
+      setLogoOn(pref.on)
+      setLogo(pref.cfg)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Drag the watermark within the frame (separate from image panning).
+  function onLogoDown(e: React.PointerEvent) {
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    logoDrag.current = { x: e.clientX, y: e.clientY }
+  }
+  function onLogoMove(e: React.PointerEvent) {
+    if (!logoDrag.current) return
+    e.stopPropagation()
+    const dx = (e.clientX - logoDrag.current.x) / FRAME_W
+    const dy = (e.clientY - logoDrag.current.y) / FRAME_H
+    logoDrag.current = { x: e.clientX, y: e.clientY }
+    setLogo(l => ({ ...l, cx: clamp01(l.cx + dx), cy: clamp01(l.cy + dy) }))
+  }
+  function onLogoUp(e: React.PointerEvent) {
+    e.stopPropagation()
+    logoDrag.current = null
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+  }
 
   // Rotate 90° clockwise: rebuild the working image and re-centre (rotation changes framing).
   async function rotate90() {
@@ -139,7 +193,10 @@ export default function ImageCropper({
       w: Math.min(1, FRAME_W / dispW),
       h: Math.min(1, FRAME_H / dispH),
       rotate,
+      logo: logoOn ? logo : null,
     }
+    // Remember this placement (and on/off) as the default for the next photo.
+    try { window.localStorage.setItem(LOGO_KEY, JSON.stringify({ on: logoOn, cfg: logo })) } catch { /* ignore */ }
     onConfirm(crop, baseImg)
   }
 
@@ -183,6 +240,25 @@ export default function ImageCropper({
                   <div className="absolute left-2/3 inset-y-0 w-px bg-white/30" />
                   <div className="absolute inset-0 ring-1 ring-white/60 rounded-lg" />
                 </div>
+                {/* watermark overlay — drag to place */}
+                {logoOn && logoImg && (() => {
+                  const lw = logo.scale * FRAME_W
+                  const lh = lw * (logoImg.height / logoImg.width)
+                  return (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={logoImg.src}
+                      alt=""
+                      draggable={false}
+                      onPointerDown={onLogoDown}
+                      onPointerMove={onLogoMove}
+                      onPointerUp={onLogoUp}
+                      onPointerCancel={onLogoUp}
+                      className="absolute touch-none cursor-move ring-1 ring-white/40"
+                      style={{ left: logo.cx * FRAME_W - lw / 2, top: logo.cy * FRAME_H - lh / 2, width: lw, opacity: logo.opacity }}
+                    />
+                  )
+                })()}
               </div>
             </div>
 
@@ -199,7 +275,33 @@ export default function ImageCropper({
                 onChange={e => onZoom(Number(e.target.value))}
                 className="flex-1 accent-green-600" />
             </div>
-            <p className="text-[11px] text-gray-400 text-center">Drag to reposition · Rotate to straighten · this 4:5 area is what customers see.</p>
+
+            {/* Watermark controls */}
+            <div className="space-y-2 border-t border-gray-100 pt-3">
+              <button onClick={() => setLogoOn(o => !o)} disabled={!logoImg}
+                className={`w-full flex items-center justify-center gap-1.5 text-xs font-semibold rounded-lg px-3 py-2 border transition-colors disabled:opacity-50 ${
+                  logoOn ? 'bg-green-50 text-green-700 border-green-300' : 'bg-white text-gray-600 border-gray-300'
+                }`}>
+                {logoImg ? (logoOn ? '✓ Logo on — drag it to place' : '+ Add logo') : 'Add watermark.png to public/ to enable'}
+              </button>
+              {logoOn && logoImg && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 w-12 flex-shrink-0">Size</span>
+                    <input type="range" min={0.1} max={0.8} step={0.01} value={logo.scale}
+                      onChange={e => setLogo(l => ({ ...l, scale: Number(e.target.value) }))}
+                      className="flex-1 accent-green-600" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 w-12 flex-shrink-0">Opacity</span>
+                    <input type="range" min={0.2} max={1} step={0.01} value={logo.opacity}
+                      onChange={e => setLogo(l => ({ ...l, opacity: Number(e.target.value) }))}
+                      className="flex-1 accent-green-600" />
+                  </div>
+                </>
+              )}
+            </div>
+            <p className="text-[11px] text-gray-400 text-center">Drag to reposition · Rotate to straighten{logoOn ? ' · drag the logo to place it' : ''} · this 4:5 area is what customers see.</p>
 
             <div className="flex gap-2">
               <button onClick={onCancel} className="btn-secondary flex-1">Cancel</button>

@@ -70,8 +70,28 @@ export async function compressWithThumb(file: File): Promise<{ full: File; thumb
 // crop rect is stored normalized (0..1) so the cropper can reopen in place.
 
 export type Rotation = 0 | 90 | 180 | 270
+// Brand-logo overlay baked onto the exported 4:5 image. cx/cy = logo CENTRE, and
+// scale = logo width, all normalized (0..1) to the 4:5 output frame; opacity 0..1.
+export type LogoPlacement = { cx: number; cy: number; scale: number; opacity: number }
 // Crop rect is normalized (0..1) relative to the image AFTER `rotate` is applied.
-export type CropRect = { x: number; y: number; w: number; h: number; rotate?: Rotation }
+export type CropRect = { x: number; y: number; w: number; h: number; rotate?: Rotation; logo?: LogoPlacement | null }
+
+// Transparent-PNG watermark baked into the exported 4:5 image. Drop the file at this
+// path in mnap-connect/public to enable it; rendering silently skips it if absent.
+export const WATERMARK_SRC = '/watermark.png'
+let _watermark: Promise<HTMLImageElement | null> | null = null
+export function loadWatermark(): Promise<HTMLImageElement | null> {
+  if (_watermark) return _watermark
+  const p = new Promise<HTMLImageElement | null>(resolve => {
+    const im = new Image()
+    im.onload = () => resolve(im)
+    im.onerror = () => resolve(null) // file not placed yet → no watermark, no error
+    im.src = WATERMARK_SRC
+  })
+  _watermark = p
+  p.then(r => { if (!r) _watermark = null }) // let a later call retry if the file appears
+  return p
+}
 
 // Rotate an image/canvas clockwise by a multiple of 90° into a new canvas (90/270
 // swap width & height). Used to bake the cropper's rotation into the exported 4:5
@@ -113,7 +133,7 @@ export function centerCrop(imgW: number, imgH: number): CropRect {
   return { x: 0, y: (1 - h) / 2, w: 1, h }
 }
 
-async function drawCrop(img: HTMLImageElement | HTMLCanvasElement, crop: CropRect, outW: number, outH: number, quality: number, name: string): Promise<File | null> {
+async function drawCrop(img: HTMLImageElement | HTMLCanvasElement, crop: CropRect, outW: number, outH: number, quality: number, name: string, logo?: { img: HTMLImageElement; cfg: LogoPlacement }): Promise<File | null> {
   const sx = crop.x * img.width
   const sy = crop.y * img.height
   const sw = crop.w * img.width
@@ -124,6 +144,15 @@ async function drawCrop(img: HTMLImageElement | HTMLCanvasElement, crop: CropRec
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
   ctx.drawImage(img, sx, sy, sw, sh, 0, 0, outW, outH)
+  // Bake the watermark on top, positioned/sized relative to the 4:5 output frame.
+  if (logo) {
+    const { img: lg, cfg } = logo
+    const lw = Math.max(1, cfg.scale * outW)
+    const lh = lw * (lg.height / Math.max(1, lg.width))
+    ctx.globalAlpha = Math.max(0, Math.min(1, cfg.opacity))
+    ctx.drawImage(lg, cfg.cx * outW - lw / 2, cfg.cy * outH - lh / 2, lw, lh)
+    ctx.globalAlpha = 1
+  }
   const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', quality))
   if (!blob) return null
   return new File([blob], `${name}.jpg`, { type: 'image/jpeg' })
@@ -140,8 +169,12 @@ export async function renderCrop(source: File | HTMLImageElement, crop?: CropRec
     const rotate = crop?.rotate ?? 0
     const img = rotate ? (rotateImageToCanvas(img0, rotate) ?? img0) : img0
     const rect = crop ?? centerCrop(img.width, img.height)
-    const display = await drawCrop(img, rect, CROP_W, CROP_H, CROP_QUALITY, `${base}-4x5`)
-    const thumb = await drawCrop(img, rect, CROP_THUMB_W, CROP_THUMB_H, CROP_THUMB_QUALITY, `${base}-4x5-thumb`)
+    // Load the watermark only if this crop asks for one (and the file exists).
+    const logoCfg = crop?.logo ?? null
+    const logoImg = logoCfg ? await loadWatermark() : null
+    const logo = logoImg && logoCfg ? { img: logoImg, cfg: logoCfg } : undefined
+    const display = await drawCrop(img, rect, CROP_W, CROP_H, CROP_QUALITY, `${base}-4x5`, logo)
+    const thumb = await drawCrop(img, rect, CROP_THUMB_W, CROP_THUMB_H, CROP_THUMB_QUALITY, `${base}-4x5-thumb`, logo)
     if (!display || !thumb) return null
     return { display, thumb }
   } catch {
