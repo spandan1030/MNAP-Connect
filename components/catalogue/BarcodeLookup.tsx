@@ -43,6 +43,12 @@ export default function BarcodeLookup({
   const [active, setActive] = useState(0)
   const reqId = useRef(0)
   const boxRef = useRef<HTMLDivElement>(null)
+  // Barcode we've already auto-prefilled (or that arrived as the initial value), so an
+  // exact match auto-fills exactly once and never re-fires or loops.
+  const pickedRef = useRef(value.trim().toLowerCase())
+  // Latest onPick without making it an effect dependency (parent passes a fresh fn each render).
+  const onPickRef = useRef(onPick)
+  useEffect(() => { onPickRef.current = onPick })
 
   // Debounced fetch on value change. All state updates happen inside the async timer
   // callback (never synchronously in the effect body).
@@ -59,7 +65,17 @@ export default function BarcodeLookup({
         const res = await fetch(`/api/inventory/lookup?q=${encodeURIComponent(q)}`)
         const json = await res.json()
         if (id !== reqId.current) return // a newer keystroke superseded this
-        setResults((json.results ?? []) as LookupResult[])
+        const rows = (json.results ?? []) as LookupResult[]
+        // Auto-prefill when the typed/scanned value IS a full barcode (unique match) —
+        // users (and scanners) don't click the row. Fire once per barcode.
+        const exact = rows.find(r => r.barcode.toLowerCase() === q.toLowerCase())
+        if (exact && pickedRef.current !== exact.barcode.toLowerCase()) {
+          pickedRef.current = exact.barcode.toLowerCase()
+          onPickRef.current(exact)
+          setResults([]); setOpen(false); setLoading(false)
+          return
+        }
+        setResults(rows)
         setActive(0)
         setOpen(true)
       } catch { if (id === reqId.current) setResults([]) }
@@ -76,6 +92,7 @@ export default function BarcodeLookup({
   }, [])
 
   function pick(row: LookupResult) {
+    pickedRef.current = row.barcode.toLowerCase()
     onPick(row)
     setOpen(false)
     setResults([])

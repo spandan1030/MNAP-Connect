@@ -256,6 +256,9 @@ export default function NewProductPage() {
           <Field label="Design"><input list="opt-design" value={form.design} onChange={e => set('design', e.target.value)} className="input" placeholder="Pick or type a new one" /></Field>
           <Field label="Description"><input list="opt-description" value={form.description} onChange={e => set('description', e.target.value)} className="input" placeholder="Pick or type a new one" /></Field>
           <Field label="Party (supplier)"><input list="opt-party" value={form.party} onChange={e => set('party', e.target.value)} className="input" placeholder="Pick or type a new one" /></Field>
+          {inv?.partyId != null && (
+            <p className="text-[11px] text-gray-400 -mt-1.5">From inventory · supplier id <span className="font-mono text-gray-600">#{inv.partyId}</span> — saved with the piece (name mapping later).</p>
+          )}
           <Field label="Notes"><textarea value={form.notes} onChange={e => set('notes', e.target.value)} rows={2} className="input resize-none" placeholder="Anything else…" /></Field>
 
           {/* Dropdown value sources (typeable — new values are added on save) */}

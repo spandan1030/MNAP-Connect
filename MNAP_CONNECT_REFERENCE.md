@@ -244,8 +244,10 @@ The software's item names are messy (aliases/shortforms/`[DELETED]`/`(22CT)` jun
   returning each match with the **resolved clean name** (via `wa_item_name_map`), **clean purity**
   (via `wa_purity_map`, falls back to raw), weight, `party_id`, mapped `stockStatus`, and whether the
   barcode is **already a product card** (`existsAsProduct`/`productId`).
-- **`components/catalogue/BarcodeLookup.tsx`** — barcode field with a live dropdown (debounced 200 ms,
-  scanner-friendly: full code + Enter picks the exact match). Hands the resolved row to the parent.
+- **`components/catalogue/BarcodeLookup.tsx`** — barcode field with a live dropdown (debounced 200 ms).
+  **Auto-prefills the moment the typed/scanned value is a full barcode** (unique exact match — no click
+  needed; fires once per barcode via a ref guard, so it never loops or re-fires an edit page's initial
+  barcode). Clicking a row or Enter also picks. Hands the resolved row to the parent.
 - **Add+ (`/catalogue/new`)** — picking a barcode prefills weight, purity, item name, stores `party_id`
   and (from the piece's status) `stock_status`/`is_sold`. Warns if the barcode is already a card.
 - **Attach on edit (`/catalogue/[id]`)** — same field; fills only **empty** detail fields so it never
