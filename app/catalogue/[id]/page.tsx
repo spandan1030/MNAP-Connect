@@ -39,17 +39,21 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [cropImg, setCropImg] = useState<WaProductImage | null>(null) // existing photo being re-cropped
-  // Attach-barcode: picking a barcode from inventory fills EMPTY detail fields only.
+  // Attach-barcode: picking a barcode from inventory REFRESHES the detail fields from
+  // the real piece — overwriting any placeholder/dummy weight & purity.
   const [inv, setInv] = useState<{ itmId: number | null; partyId: number | null; cleanNameAtPick: string | null; itemNameRaw: string | null } | null>(null)
   const [existingOther, setExistingOther] = useState<string | null>(null) // another product already owns this barcode
 
   function onPickBarcode(r: LookupResult) {
+    // Overwrite weight & purity with the scanned piece's real values (the whole point
+    // of attaching a barcode to a dummy/placeholder product). Name only overwrites when
+    // the item type is mapped; otherwise keep what's there and learn it on save.
     setForm(f => ({
       ...f,
       barcode: r.barcode,
-      weight: f.weight || (r.weight != null ? String(r.weight) : ''),
-      purity: f.purity || (r.cleanPurity ?? ''),
-      item_name: f.item_name || (r.cleanName ?? ''),
+      weight: r.weight != null ? String(r.weight) : f.weight,
+      purity: r.cleanPurity ?? f.purity,
+      item_name: r.cleanName || f.item_name,
     }))
     setInv({ itmId: r.itmId, partyId: r.partyId, cleanNameAtPick: r.cleanName, itemNameRaw: r.itemNameRaw })
     setExistingOther(r.existsAsProduct && r.productId && r.productId !== id ? r.productId : null)
@@ -434,7 +438,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
               value={form.barcode}
               onChange={v => { set('barcode', v); setInv(null); setExistingOther(null) }}
               onPick={onPickBarcode}
-              placeholder="Type or scan — fills empty details from inventory"
+              placeholder="Type or scan — fills weight, purity & name from inventory"
             />
             {inv && !existingOther && (
               <p className="text-[11px] text-green-700 mt-1">

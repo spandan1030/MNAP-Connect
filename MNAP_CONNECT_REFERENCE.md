@@ -250,8 +250,10 @@ The software's item names are messy (aliases/shortforms/`[DELETED]`/`(22CT)` jun
   barcode). Clicking a row or Enter also picks. Hands the resolved row to the parent.
 - **Add+ (`/catalogue/new`)** — picking a barcode prefills weight, purity, item name, stores `party_id`
   and (from the piece's status) `stock_status`/`is_sold`. Warns if the barcode is already a card.
-- **Attach on edit (`/catalogue/[id]`)** — same field; fills only **empty** detail fields so it never
-  clobbers existing data, records `party_id`. Warns if another product owns the barcode.
+- **Attach on edit (`/catalogue/[id]`)** — same field; **overwrites** weight & purity from the scanned
+  piece (the point of attaching a real barcode to a dummy/placeholder product), and overwrites the name
+  only when the item type is mapped (else keeps it and learns on save). Records `party_id`. Warns if
+  another product owns the barcode.
 - **Learn-on-save** — on both pages, if the picked `itm_id` had no clean name (or the salesman changed
   it), the chosen name is upserted into `wa_item_name_map` as `source='manual'`, so it prefills next time.
 
