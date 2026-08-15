@@ -27,9 +27,10 @@ export default function InventoryPage() {
 
   useEffect(() => {
     async function load() {
-      // In-stock only: active, not sold, and a real physical piece (not a catalogue/design-only product)
+      // In-stock only: active, physically in stock (not sold/deleted), and a real
+      // physical piece (not a catalogue/design-only product).
       const { data } = await supabase.from('wa_products').select('*')
-        .eq('is_active', true).eq('is_sold', false).eq('is_catalogue_only', false)
+        .eq('is_active', true).eq('stock_status', 'in_stock').eq('is_catalogue_only', false)
       setProducts((data ?? []) as WaProduct[])
       setLoading(false)
     }
@@ -87,6 +88,12 @@ export default function InventoryPage() {
         <div className="flex items-center gap-3">
           <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700">←</button>
           <h1 className="text-lg font-bold text-gray-900">Inventory</h1>
+          <Link href="/catalogue/mappings" className="ml-auto text-xs font-medium text-gray-600 bg-gray-100 px-2.5 py-1 rounded-full hover:bg-gray-200">
+            Mappings
+          </Link>
+          <Link href="/catalogue/import" className="text-xs font-medium text-green-700 bg-green-50 px-2.5 py-1 rounded-full hover:bg-green-100">
+            ⬆ Import
+          </Link>
         </div>
         <p className="text-xs text-gray-400">In-stock pieces grouped by item → design → description &amp; purity. Live from the catalogue.</p>
 

@@ -43,3 +43,6 @@ next-env.d.ts
 # parity harness build output (scripts/parity-check.mjs)
 .parity-build/
 tsconfig.parity.json
+
+# Sensitive inventory import samples (do not commit)
+/sample-data/

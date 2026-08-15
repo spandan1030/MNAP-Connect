@@ -71,16 +71,18 @@
 A product can be **published to the customer app** (a separate Firebase project,
 `mnap-customer`) from its product page. Toggle **"Show in customer app"** + set a
 **making charge %**; connect then writes a **sanitized** doc (title, description,
-category, barcode, weight, purity→karat, makingPercent, **published photo gallery (4:5 crops)**, active)
+category, weight, purity→karat, makingPercent, **published photo gallery (4:5 crops)**, active)
 into the customer app's `catalogue/{id}` Firestore collection via the Firebase Admin SDK.
 The doc carries `image`/`thumb` (the cover) **and** `images: string[]` (the full gallery,
 cover first) — the customer app's `PhotoViewer` swipes through `images`.
-Never sends party/cost/notes (barcode IS sent — note `catalogue` is public-read). Price is **not** sent — the customer app computes
-it live from its own daily rate. Unmapped purity → still published, `priceHidden:true`
-(app shows "Enquire"). The doc also carries **`inStock: !is_sold && !is_catalogue_only`**
-and **`catalogueOnly: is_catalogue_only`**. Inactive/unpublished → doc updated/removed
-automatically; **sold pieces stay published** (visible) with `inStock:false` so the app can
-show a "Sold" treatment. Recommended app branching order: **catalogueOnly → inStock → normal**.
+Never sends party/cost/notes. **The raw `barcode` is NOT sent** (sensitive) — instead the doc
+carries **`designCode`** (`MN000001…`, per-piece, wa_058); the app displays that. Price is
+**not** sent — the customer app computes it live from its own daily rate. Unmapped purity →
+still published, `priceHidden:true` (app shows "Enquire"). The doc also carries a richer
+**`status: 'in_stock'|'sold'|'deleted'|'catalogue'`**, plus **`inStock` (= status==='in_stock')**
+and **`catalogueOnly`**. Inactive/unpublished → doc updated/removed automatically; **sold or
+deleted pieces stay published** (visible) carrying their status so the app can show a
+"Sold"/updated treatment. Recommended app branching order: **catalogueOnly → status → normal**.
 
 - Files: `lib/firebase/admin.ts` (Admin init), `lib/catalogue-sync.ts` (`resolveKarat`,
   `syncProductToApp`, `removeProductFromApp`, `resyncAllPublished`), `app/api/catalogue/publish/route.ts`
@@ -135,10 +137,10 @@ Each catalogue product **is one barcoded piece**, with `wa_products.is_sold` (wa
   returns `{ updated, unchanged, matched, notFound[] }`. Linked from the catalogue list
   ("Stock" chip). No migration — reuses `is_sold`.
 - **Published to the app:** sold pieces **no longer vanish**. `catalogue-sync` sets
-  `active = show_in_app && is_active` and adds **`inStock = !is_sold && !is_catalogue_only`**
-  to the doc (see Catalogue products below — this **replaced** the earlier "no barcode →
-  out-of-stock" rule). The app keeps the piece visible and shows a "Sold" treatment on
-  `inStock:false`.
+  `active = show_in_app && is_active` and adds **`status`** + **`inStock = status==='in_stock'
+  && !is_catalogue_only`** to the doc (status comes from `stock_status`, wa_058; see Catalogue
+  products below — this **replaced** the earlier "no barcode → out-of-stock" rule). The app
+  keeps the piece visible and shows a "Sold" treatment on `inStock:false`.
   ⚠ Until the customer app branches on `inStock`, an `inStock:false` published piece shows
   like a normal in-stock one. Existing published products only pick up the new flag on their
   next sync — hit **↻ Re-sync customer app** on the catalogue list to backfill.
@@ -150,8 +152,8 @@ not physically stock** as a barcoded piece.
   `/catalogue/new`, or the bulk **Type → Catalogue / Stock piece** action.
 - **Backfill (wa_057):** every existing product **without a barcode** was flagged
   catalogue-only (they're designs, not pieces). Reversible per-product.
-- **Inventory** (`/catalogue/inventory`) counts **`is_active && !is_sold && !is_catalogue_only`**
-  — catalogue products are excluded. The list's **"In stock"** chip matches; a **"Catalogue"**
+- **Inventory** (`/catalogue/inventory`) counts **`is_active && stock_status='in_stock' && !is_catalogue_only`**
+  — sold/deleted and catalogue products are excluded. The list's **"In stock"** chip matches; a **"Catalogue"**
   status chip filters `is_catalogue_only=true`. Cards show an indigo **CATALOGUE** badge.
 - **Published to the app:** catalogue products still publish as a **normal product with a live
   price**, carrying **`catalogueOnly:true`** and **`inStock:false`** (they're not physical stock).
@@ -178,6 +180,64 @@ reflected (e.g. a piece marked Sold drops out of the "In stock" view). Actions (
   now routes through this same endpoint** (`{ ids:[id], action:'delete' }`), so it also cleans
   up the Firestore doc + storage (previously it dropped only the row).
 Reuses existing columns (the `catalogue` action needs wa_057).
+
+### Inventory import — software item-status export (wa_058)
+Simplifies data entry by ingesting the store software's full item-status **xlsx export** into a
+master reference table. **It does NOT create product cards** — cards are still made only via Add+.
+
+- **`wa_inventory`** (one row per software barcode) — the master. Columns mirror the export:
+  `barcode` (PK), `itm_id`, `item_name_raw`, `party_id`, `dsgn_id`, `design_raw`, `purt_id`,
+  `purity_raw`, `grd_id`, `grade_raw`, `net_weight`, `bcm_creation_date`, `bcm_status`,
+  `sold_date`, `deleted_date`, `source_file`, `imported_at`, `updated_at`. Prefix index on
+  `lower(barcode)` for Add+ autocomplete. Sample export: **32,899 rows**, all barcodes unique.
+- **Parser** `lib/inventory-import.ts` (`parseInventoryWorkbook`, `mapStatus`, `STATUS_MAP`):
+  reads the first sheet, matches columns by header name (case-insensitive), de-dupes by barcode
+  (last wins), drops rows with no barcode. The software exports empties as the literal text
+  **`"NULL"`** (in the date columns) — `blank()` treats that + blanks as empty everywhere.
+- **Status mapping** (`BCM_STATUS` → `wa_products.stock_status`): **New→`in_stock`, Sale→`sold`,
+  Deleted→`deleted`**. Other raw statuses (Estm/Approval/Remove) are stored on the master for
+  lookup but **never change a product card**.
+- **Upload UI** `/catalogue/import` (linked from `/catalogue/inventory` header): pick file →
+  **Preview** (parse + report row counts, status breakdown, and the exact product-card status
+  changes, with a sample) → **Apply**. `POST /api/inventory/import` multipart `{ file, mode }`:
+  - `preview` — no writes; returns the summary + impact.
+  - `apply` — upserts `wa_inventory` (chunked, onConflict `barcode`), updates matched cards'
+    `stock_status` (+ `is_sold` in lockstep) for the three mapped statuses, then re-syncs the
+    **published** changed ones so their app doc carries the new status.
+- **Publishing is never touched** — the import only writes `stock_status`; `show_in_app`/`is_active`
+  are left exactly as-is (a deleted/sold published piece stays published, carrying its new status).
+
+### Design code & stock status (wa_058)
+- **`design_code`** — app-facing per-piece code `MN######`, auto-assigned by a BEFORE INSERT
+  trigger (`wa_assign_design_code` off `wa_design_code_seq`) and backfilled oldest-first. It is
+  **the only code sent to the customer app** (raw `barcode` is withheld as sensitive); in Connect
+  it shows alongside the barcode.
+- **`stock_status`** (`in_stock|sold|deleted`, default `in_stock`) — richer than the old `is_sold`
+  boolean, fed by the import. `is_sold` is kept in lockstep (`is_sold = stock_status==='sold'`).
+  **Informational only** — it does not gate app visibility.
+- **`party_id`** (int) — numeric supplier id from the software; party name mapping is a later phase.
+- **XMNAP backfill** — catalogue-only pieces with no barcode get an internal `XMNAP#####` barcode
+  (`wa_xmnap_seq`) so every piece is keyed. Never leaks to the app (design code is sent instead).
+
+### Name & purity mapping (wa_059)
+The software's item names are messy (aliases/shortforms/`[DELETED]`/`(22CT)` junk). We map the
+**stable `ITM_ID` → one clean Connect item name**, and only the clean name is shown/fed to the app.
+- **`wa_item_name_map`** (`itm_id` PK → `clean_name`, `source` seed/learned/manual, `sample_raw`, `hits`).
+  Seeded by **majority vote**: `POST /api/inventory/rebuild-name-map` joins barcoded products →
+  `wa_inventory` (by barcode) to get their `itm_id`, and for each `itm_id` the most-frequent curated
+  `item_name` wins (ties → longer name). **Owner-set (`manual`) rows are never overwritten** by a rebuild.
+- **`wa_purity_map`** (`raw_key` = lower(raw) → `clean`). Seeded with 4 confident mappings
+  (`22K (91.6)`→22K, `18K (750)`→18K, `24 Carat`→24K, `0.925`→925); ambiguous silver grades / %
+  ranges / bare decimals are left for the owner to set (guessing wrong is worse than blank).
+- **Fuzzy fallback** (`lib/inventory-maps.ts` `similarity`/`suggestName`): for an unmapped item it
+  suggests a clean name by **token containment** (item-type word dominates: `LC RING`→RING,
+  `CB PAYAL`→PAYAL, `MS LOCKET`→LOCKET) with a down-weighted char edit ratio; min score 0.34.
+- **Review UI** `/catalogue/mappings` (linked from `/catalogue/inventory`): two tabs (Item names /
+  Purity) listing what's in the master (via security-invoker views `wa_inventory_items` /
+  `wa_inventory_purities`) with its current mapping, count, and source badge. Edit any row (upserts
+  `source='manual'`); "↻ Rebuild from barcoded products" runs the majority vote. Unmapped item rows
+  show a fuzzy **Suggest:** chip. **Learning also happens on Add+** (later phase) when a salesman
+  picks a name for an unmapped `itm_id`.
 
 ### Multi-photo publishing (gallery)
 A product can publish **several photos** to the customer app, not just the primary.
@@ -773,6 +833,8 @@ https://wa.me/91{phone}?text={url_encoded_message}
 | `supabase/migrations/wa_027_image_in_app.sql` | `in_app` flag on `wa_product_images` for multi-photo publishing (backfills `is_primary`→`in_app`) |
 | `supabase/migrations/wa_056_app_interest_topic.sql` | Seeds the **App Product Interest** topic (key `app_interest`) so piece-interest chats are tagged like offers/designs |
 | `supabase/migrations/wa_057_catalogue_only.sql` | Adds `wa_products.is_catalogue_only` (design-only products, excluded from inventory); backfills all no-barcode products to catalogue |
+| `supabase/migrations/wa_058_inventory_import.sql` | `wa_inventory` master table; `wa_products.stock_status`/`party_id`/`design_code` (+ auto-assign trigger, backfill); XMNAP barcodes for catalogue-only pieces |
+| `supabase/migrations/wa_059_inventory_maps.sql` | `wa_item_name_map` (ITM_ID→clean name, majority-vote/manual) + `wa_purity_map` (raw→clean, 4 seeds); review views `wa_inventory_items`/`wa_inventory_purities` |
 | `INTERVENTION_STRATEGY.md` | Full business rules, segment definitions, profiling architecture |
 | `INTERVENTION_MODULE_DISCUSSION.md` | Session-by-session decision log |
 

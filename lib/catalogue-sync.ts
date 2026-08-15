@@ -28,7 +28,7 @@ interface CatalogueDoc {
   title: string
   description: string
   category: string
-  barcode: string | null
+  designCode: string | null  // app-facing per-piece code (MN000001…). The raw barcode is NEVER sent.
   design: string | null
   weightG: number | null
   purity: string | null
@@ -39,7 +39,8 @@ interface CatalogueDoc {
   thumb: string | null
   images: string[]        // full gallery (primary first) shown in the customer app viewer
   active: boolean
-  inStock: boolean        // physically in stock: unsold AND not a catalogue/design-only product
+  status: 'in_stock' | 'sold' | 'deleted' | 'catalogue' // richer per-piece status the app renders
+  inStock: boolean        // convenience: status === 'in_stock' (kept for the app's current branching)
   catalogueOnly: boolean  // design-only product (not physical stock) — app can give it its own treatment
   source: 'connect'
   updatedAt: number
@@ -57,11 +58,17 @@ function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: 
   const karat = resolveKarat(p.purity)
   const gallery = publishedImages(imgs)
   const cover = gallery[0] ?? null
+  // Physical stock status from the inventory import. Fall back to the legacy is_sold
+  // flag for rows imported before wa_058. A catalogue/design-only piece reports its
+  // own 'catalogue' status regardless of stock.
+  const stock = p.stock_status ?? (p.is_sold ? 'sold' : 'in_stock')
+  const status: CatalogueDoc['status'] = p.is_catalogue_only ? 'catalogue' : stock
   return {
     title: (p.app_title?.trim() || p.item_name || 'Jewellery').toString(),
     description: (p.app_description?.trim() || p.description || '').toString(),
     category: (p.item_name || '').toString(),
-    barcode: p.barcode ?? null,
+    // App-facing code only. The raw barcode is intentionally never sent (sensitive).
+    designCode: p.design_code ?? null,
     design: p.design ?? null,
     weightG: p.weight ?? null,
     purity: p.purity ?? null,
@@ -73,16 +80,15 @@ function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: 
     image: cover?.display_url ?? cover?.image_url ?? null,
     thumb: cover?.display_thumb_url ?? cover?.thumb_url ?? cover?.image_url ?? null,
     images: gallery.map(i => i.display_url ?? i.image_url).filter(Boolean) as string[],
-    // Stays in the customer catalogue while published + active. Sold pieces are NOT
-    // hidden anymore — they remain visible and carry `inStock:false` so the app can
-    // show a "Sold" treatment (different info) instead of dropping the piece.
+    // Stays in the customer catalogue while published + active. Sold/deleted pieces are
+    // NOT hidden — they remain visible carrying their status so the app can show a
+    // "Sold"/updated treatment instead of dropping the piece. Publishing is toggle-only.
     active: Boolean(p.show_in_app) && p.is_active,
-    // "In stock" = a physically available piece: unsold AND not a catalogue/design-only
-    // product (same definition inventory uses). Catalogue products still publish as a
-    // normal product with a live price — they just carry catalogueOnly:true below so the
-    // app can give them a dedicated "design / made to order" treatment.
-    // Recommended app branching order: catalogueOnly first, then inStock, then normal.
-    inStock: !p.is_sold && !p.is_catalogue_only,
+    // Richer status the app renders; branching order: catalogueOnly → status → normal.
+    status,
+    // "In stock" = physically available. Catalogue-only pieces still publish with a live
+    // price; they carry catalogueOnly:true so the app can give them a dedicated treatment.
+    inStock: stock === 'in_stock' && !p.is_catalogue_only,
     catalogueOnly: Boolean(p.is_catalogue_only),
     source: 'connect',
     updatedAt: Date.now(),

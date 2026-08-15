@@ -237,6 +237,10 @@ export interface WaBotMessage {
   updated_at: string
 }
 
+// Physical stock status of a piece, fed from the software inventory import (wa_058).
+// Informational only — it never gates app publishing (that's show_in_app alone).
+export type StockStatus = 'in_stock' | 'sold' | 'deleted'
+
 export interface WaProduct {
   id: string
   item_name: string | null
@@ -246,11 +250,14 @@ export interface WaProduct {
   design: string | null
   description: string | null
   party: string | null
+  party_id?: number | null    // numeric supplier id from the software (name mapped later) (wa_058)
   notes: string | null
   is_active: boolean
   is_sold: boolean
   needs_review: boolean
   is_catalogue_only?: boolean // design-only product, not physical stock (wa_057)
+  stock_status?: StockStatus  // in_stock | sold | deleted, from the inventory import (wa_058)
+  design_code?: string | null // app-facing per-piece code (MN000001…); raw barcode is never sent (wa_058)
   // Customer-app publishing (see wa_025_app_publish.sql)
   show_in_app?: boolean
   making_percent?: number | null
