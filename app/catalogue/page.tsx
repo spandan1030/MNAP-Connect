@@ -172,7 +172,7 @@ export default function CataloguePage() {
     if (f.published === 'yes') qb = qb.eq('show_in_app', true)
     else if (f.published === 'no') qb = qb.eq('show_in_app', false)
     const q = s.trim().replace(/[,%()]/g, ' ').trim()
-    if (q) qb = qb.or(`item_name.ilike.%${q}%,barcode.ilike.%${q}%,party.ilike.%${q}%,purity.ilike.%${q}%,design.ilike.%${q}%,description.ilike.%${q}%`)
+    if (q) qb = qb.or(`item_name.ilike.%${q}%,barcode.ilike.%${q}%,design_code.ilike.%${q}%,party.ilike.%${q}%,purity.ilike.%${q}%,design.ilike.%${q}%,description.ilike.%${q}%`)
 
     const from = pageIndex * PAGE_SIZE
     const { data, count } = await qb.order('created_at', { ascending: false }).range(from, from + PAGE_SIZE - 1)
@@ -271,7 +271,7 @@ export default function CataloguePage() {
         </div>
 
         <div className="flex gap-2">
-          <input type="search" placeholder="Search name, barcode, party…" value={search}
+          <input type="search" placeholder="Search name, barcode, design code…" value={search}
             onChange={e => setSearch(e.target.value)} className="input flex-1" />
           <button onClick={() => setPanelOpen(o => !o)}
             className={`flex-shrink-0 flex items-center gap-1 px-3 rounded-xl border text-sm font-medium ${
@@ -405,7 +405,11 @@ export default function CataloguePage() {
                   </div>
                   <div className="p-2.5">
                     <p className="font-semibold text-gray-900 text-sm truncate">{p.item_name || 'Untitled'}</p>
-                    <p className="text-xs text-gray-400 truncate">{p.barcode || 'No barcode'}</p>
+                    <p className="text-xs text-gray-400 truncate">
+                      {p.design_code && <span className="font-mono text-gray-500">{p.design_code}</span>}
+                      {p.design_code && p.barcode && <span className="text-gray-300"> · </span>}
+                      {p.barcode || (p.design_code ? '' : 'No barcode')}
+                    </p>
                     <div className="flex items-center justify-between gap-1 mt-1.5">
                       <div className="flex flex-wrap gap-1 min-w-0">
                         {p.purity && <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-100 px-1.5 py-0.5 rounded-full">{p.purity}</span>}

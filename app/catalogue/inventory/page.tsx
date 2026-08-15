@@ -42,7 +42,7 @@ export default function InventoryPage() {
 
   const groups = useMemo<ItemGroup[]>(() => {
     const pool = q
-      ? products.filter(p => [p.item_name, p.design, p.description, p.purity, p.barcode]
+      ? products.filter(p => [p.item_name, p.design, p.description, p.purity, p.barcode, p.design_code]
           .some(v => (v ?? '').toLowerCase().includes(q)))
       : products
 
@@ -97,7 +97,7 @@ export default function InventoryPage() {
         </div>
         <p className="text-xs text-gray-400">In-stock pieces grouped by item → design → description &amp; purity. Live from the catalogue.</p>
 
-        <input type="search" placeholder="Search item, design, purity…" value={search}
+        <input type="search" placeholder="Search item, design code, barcode, purity…" value={search}
           onChange={e => setSearch(e.target.value)} className="input" />
 
         {!loading && (
@@ -162,7 +162,10 @@ export default function InventoryPage() {
                                           {lf.products.map(p => (
                                             <Link key={p.id} href={`/catalogue/${p.id}`}
                                               className="flex items-center justify-between text-xs text-gray-600 py-1 active:text-green-700">
-                                              <span className="truncate">{p.barcode || 'No barcode'}{p.weight != null ? ` · ${p.weight} g` : ''}</span>
+                                              <span className="truncate">
+                                                {p.design_code && <span className="font-mono text-gray-500">{p.design_code} · </span>}
+                                                {p.barcode || 'No barcode'}{p.weight != null ? ` · ${p.weight} g` : ''}
+                                              </span>
                                               <span className="text-gray-300">›</span>
                                             </Link>
                                           ))}

@@ -446,6 +446,12 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
                 Another product already uses this barcode. <Link href={`/catalogue/${existingOther}`} className="underline font-medium">Open it</Link>.
               </p>
             )}
+            {product?.design_code && (
+              <p className="text-[11px] text-gray-400 mt-1">
+                App design code: <span className="font-mono text-gray-600">{product.design_code}</span>
+                <span className="text-gray-300"> · shown to customers instead of the barcode</span>
+              </p>
+            )}
           </Field>
           <div className="flex gap-3">
             <Field label="Weight (g)" className="flex-1"><input type="number" inputMode="decimal" step="0.001" value={form.weight} onChange={e => set('weight', e.target.value)} className="input" /></Field>

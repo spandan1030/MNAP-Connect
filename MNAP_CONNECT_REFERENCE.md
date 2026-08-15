@@ -211,7 +211,8 @@ master reference table. **It does NOT create product cards** — cards are still
 - **`design_code`** — app-facing per-piece code `MN######`, auto-assigned by a BEFORE INSERT
   trigger (`wa_assign_design_code` off `wa_design_code_seq`) and backfilled oldest-first. It is
   **the only code sent to the customer app** (raw `barcode` is withheld as sensitive); in Connect
-  it shows alongside the barcode.
+  it **shows alongside the barcode** on the catalogue grid, product page, and inventory leaves, and
+  is **searchable** (catalogue list `.or(design_code.ilike…)`; inventory client filter).
 - **`stock_status`** (`in_stock|sold|deleted`, default `in_stock`) — richer than the old `is_sold`
   boolean, fed by the import. `is_sold` is kept in lockstep (`is_sold = stock_status==='sold'`).
   **Informational only** — it does not gate app visibility.
