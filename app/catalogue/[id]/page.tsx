@@ -9,6 +9,8 @@ import Navbar from '@/components/ui/Navbar'
 import ShareSheet from '@/components/catalogue/ShareSheet'
 import AddToPlanSheet from '@/components/catalogue/AddToPlanSheet'
 import ImageCropper from '@/components/catalogue/ImageCropper'
+import Link from 'next/link'
+import BarcodeLookup, { type LookupResult } from '@/components/catalogue/BarcodeLookup'
 import type { WaProduct, WaProductImage } from '@/lib/types'
 
 export default function ProductPage({ params }: { params: Promise<{ id: string }> }) {
@@ -37,6 +39,21 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [cropImg, setCropImg] = useState<WaProductImage | null>(null) // existing photo being re-cropped
+  // Attach-barcode: picking a barcode from inventory fills EMPTY detail fields only.
+  const [inv, setInv] = useState<{ itmId: number | null; partyId: number | null; cleanNameAtPick: string | null; itemNameRaw: string | null } | null>(null)
+  const [existingOther, setExistingOther] = useState<string | null>(null) // another product already owns this barcode
+
+  function onPickBarcode(r: LookupResult) {
+    setForm(f => ({
+      ...f,
+      barcode: r.barcode,
+      weight: f.weight || (r.weight != null ? String(r.weight) : ''),
+      purity: f.purity || (r.cleanPurity ?? ''),
+      item_name: f.item_name || (r.cleanName ?? ''),
+    }))
+    setInv({ itmId: r.itmId, partyId: r.partyId, cleanNameAtPick: r.cleanName, itemNameRaw: r.itemNameRaw })
+    setExistingOther(r.existsAsProduct && r.productId && r.productId !== id ? r.productId : null)
+  }
 
   useEffect(() => {
     async function load() {
@@ -81,6 +98,8 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       is_active:   form.is_active,
       is_catalogue_only: catalogueOnly,
       making_percent: makingPercent.trim() ? Number(makingPercent) : null,
+      // When a barcode was just attached from inventory, record its supplier id too.
+      ...(inv ? { party_id: inv.partyId } : {}),
       updated_at: new Date().toISOString(),
     }).eq('id', id)
     setSaving(false)
@@ -89,6 +108,15 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       { field: 'item_name', value: form.item_name }, { field: 'design', value: form.design },
       { field: 'description', value: form.description }, { field: 'purity', value: form.purity }, { field: 'party', value: form.party },
     ])
+    // Learn the name for this ITM_ID if it was unmapped or the salesman changed it.
+    const chosen = form.item_name.trim()
+    if (inv?.itmId != null && chosen && chosen !== inv.cleanNameAtPick) {
+      const { data: { user } } = await supabase.auth.getUser()
+      await supabase.from('wa_item_name_map').upsert({
+        itm_id: inv.itmId, clean_name: chosen, source: 'manual',
+        sample_raw: inv.itemNameRaw, updated_by: user?.id ?? null, updated_at: new Date().toISOString(),
+      }, { onConflict: 'itm_id' }).then(({ error }) => { if (error) console.error('[catalogue] learn name failed', error) })
+    }
     setSaved(true); setTimeout(() => setSaved(false), 2000)
     // Keep the customer app in sync with the just-saved details (price/making/etc.)
     if (showInApp) syncToApp()
@@ -401,7 +429,24 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         {/* Details */}
         <div className="card p-4 space-y-3">
           <Field label="Item name"><input list="opt-item_name" value={form.item_name} onChange={e => set('item_name', e.target.value)} className="input" /></Field>
-          <Field label="Barcode"><input value={form.barcode} onChange={e => set('barcode', e.target.value)} className="input" /></Field>
+          <Field label="Barcode">
+            <BarcodeLookup
+              value={form.barcode}
+              onChange={v => { set('barcode', v); setInv(null); setExistingOther(null) }}
+              onPick={onPickBarcode}
+              placeholder="Type or scan — fills empty details from inventory"
+            />
+            {inv && !existingOther && (
+              <p className="text-[11px] text-green-700 mt-1">
+                ✓ Matched inventory{inv.itmId != null && !inv.cleanNameAtPick ? <span className="text-amber-700"> · name unmapped — the name you save will be learned</span> : ''}
+              </p>
+            )}
+            {existingOther && (
+              <p className="text-[11px] text-red-600 mt-1">
+                Another product already uses this barcode. <Link href={`/catalogue/${existingOther}`} className="underline font-medium">Open it</Link>.
+              </p>
+            )}
+          </Field>
           <div className="flex gap-3">
             <Field label="Weight (g)" className="flex-1"><input type="number" inputMode="decimal" step="0.001" value={form.weight} onChange={e => set('weight', e.target.value)} className="input" /></Field>
             <Field label="Purity" className="flex-1"><input list="opt-purity" value={form.purity} onChange={e => set('purity', e.target.value)} className="input" /></Field>

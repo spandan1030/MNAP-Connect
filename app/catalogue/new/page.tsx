@@ -7,6 +7,8 @@ import { compressWithThumb, renderCrop, type CropRect } from '@/lib/image'
 import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
 import ImageCropper from '@/components/catalogue/ImageCropper'
+import Link from 'next/link'
+import BarcodeLookup, { type LookupResult } from '@/components/catalogue/BarcodeLookup'
 
 export default function NewProductPage() {
   const supabase = createClient()
@@ -15,6 +17,22 @@ export default function NewProductPage() {
   const [form, setForm] = useState({ item_name: '', barcode: '', weight: '', purity: '22K', design: '', description: '', party: '', notes: '' })
   const [catalogueOnly, setCatalogueOnly] = useState(false)
   const [options, setOptions] = useState<Options>({ item_name: [], design: [], description: [], purity: [], party: [] })
+  // Set when a barcode was picked from the inventory master — drives party_id / stock_status
+  // on save and lets us learn the item name if the salesman names an unmapped item.
+  const [inv, setInv] = useState<{ itmId: number | null; partyId: number | null; stockStatus: LookupResult['stockStatus']; cleanNameAtPick: string | null; itemNameRaw: string | null } | null>(null)
+  const [existing, setExisting] = useState<string | null>(null) // productId if the picked barcode is already a card
+
+  function onPickBarcode(r: LookupResult) {
+    setForm(f => ({
+      ...f,
+      barcode: r.barcode,
+      weight: r.weight != null ? String(r.weight) : f.weight,
+      purity: r.cleanPurity || f.purity,
+      item_name: r.cleanName || f.item_name, // unmapped → leave whatever they typed; they'll name it (and we learn)
+    }))
+    setInv({ itmId: r.itmId, partyId: r.partyId, stockStatus: r.stockStatus, cleanNameAtPick: r.cleanName, itemNameRaw: r.itemNameRaw })
+    setExisting(r.existsAsProduct ? r.productId : null)
+  }
 
   useEffect(() => { fetchCatalogueOptions().then(setOptions) }, [])
   const [files, setFiles]     = useState<File[]>([])
@@ -78,8 +96,11 @@ export default function NewProductPage() {
         design:      form.design.trim() || null,
         description: form.description.trim() || null,
         party:       form.party.trim() || null,
+        party_id:    inv?.partyId ?? null,
         notes:       form.notes.trim() || null,
         is_catalogue_only: catalogueOnly,
+        // Reflect the piece's inventory status when it was added from a barcode.
+        ...(inv?.stockStatus ? { stock_status: inv.stockStatus, is_sold: inv.stockStatus === 'sold' } : {}),
         created_by: user?.id ?? null,
       })
       .select('id').single()
@@ -97,6 +118,16 @@ export default function NewProductPage() {
       { field: 'purity',      value: form.purity },
       { field: 'party',       value: form.party },
     ])
+
+    // Learn the item name: if this barcode's ITM_ID had no clean name (or the salesman
+    // changed it), remember their choice so it prefills next time (source='manual').
+    const chosen = form.item_name.trim()
+    if (inv?.itmId != null && chosen && chosen !== inv.cleanNameAtPick) {
+      await supabase.from('wa_item_name_map').upsert({
+        itm_id: inv.itmId, clean_name: chosen, source: 'manual',
+        sample_raw: inv.itemNameRaw, updated_by: user?.id ?? null, updated_at: new Date().toISOString(),
+      }, { onConflict: 'itm_id' }).then(({ error }) => { if (error) console.error('[catalogue] learn name failed', error) })
+    }
 
     // Upload photos under this product. We keep the original (full + thumb) AND a
     // 4:5-cropped display image (full + thumb) that the customer app is fed.
@@ -197,7 +228,25 @@ export default function NewProductPage() {
           <Field label="Item name">
             <input list="opt-item_name" value={form.item_name} onChange={e => set('item_name', e.target.value)} className="input" placeholder="Pick or type a new one" />
           </Field>
-          <Field label="Barcode"><input value={form.barcode} onChange={e => set('barcode', e.target.value)} className="input" placeholder="Type or scan into this field" /></Field>
+          <Field label="Barcode">
+            <BarcodeLookup
+              value={form.barcode}
+              onChange={v => { set('barcode', v); setInv(null); setExisting(null) }}
+              onPick={onPickBarcode}
+              placeholder="Type or scan — prefills from inventory"
+            />
+            {inv && !existing && (
+              <p className="text-[11px] text-green-700 mt-1">
+                ✓ Prefilled from inventory{inv.stockStatus ? ` · ${inv.stockStatus.replace('_', ' ')}` : ''}
+                {inv.itmId != null && !inv.cleanNameAtPick && <span className="text-amber-700"> · name unmapped — the name you enter will be learned</span>}
+              </p>
+            )}
+            {existing && (
+              <p className="text-[11px] text-red-600 mt-1">
+                This barcode is already a product. <Link href={`/catalogue/${existing}`} className="underline font-medium">Open it</Link> instead of adding a duplicate.
+              </p>
+            )}
+          </Field>
           <div className="flex gap-3">
             <Field label="Weight (g)" className="flex-1"><input type="number" inputMode="decimal" step="0.001" value={form.weight} onChange={e => set('weight', e.target.value)} className="input" placeholder="0.000" /></Field>
             <Field label="Purity" className="flex-1">

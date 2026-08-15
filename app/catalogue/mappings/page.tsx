@@ -34,7 +34,6 @@ export default function MappingsPage() {
   const [draft, setDraft] = useState<Record<string, string>>({}) // key → edited clean value
 
   async function load() {
-    setLoading(true)
     const [it, im, pu, pm, cand] = await Promise.all([
       supabase.from('wa_inventory_items').select('*'),
       supabase.from('wa_item_name_map').select('*'),
@@ -50,7 +49,9 @@ export default function MappingsPage() {
     setDraft({})
     setLoading(false)
   }
-  useEffect(() => { load() /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
+  // Mount fetch — a load-on-mount legitimately sets state once the data arrives.
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [])
 
   async function rebuild() {
     setBusy(true); setMsg(null)
