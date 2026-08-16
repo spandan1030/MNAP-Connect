@@ -18,18 +18,23 @@ export default function ThankYouPage() {
   const supabase = createClient()
   const router = useRouter()
 
-  const [tab, setTab] = useState<'recent' | 'send'>('recent')
+  const [tab, setTab] = useState<'recent' | 'send' | 'invoices'>('recent')
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // Both faces of this module draw from Templates: 'thankyou' feeds Recent
+    // buyers + manual; 'invoice' feeds the Invoices tab (dynamic bill links).
     supabase.from('wa_message_templates').select('*')
-      .eq('is_active', true).eq('category', 'thankyou')
+      .eq('is_active', true).in('category', ['thankyou', 'invoice'])
       .not('meta_template_name', 'is', null)
       .order('created_at', { ascending: false })
       .then(({ data }) => { setTemplates((data ?? []) as MessageTemplate[]); setLoading(false) })
   }, [supabase])
+
+  const thankyouTemplates = templates.filter(t => (t.category ?? '') === 'thankyou')
+  const invoiceTemplates = templates.filter(t => (t.category ?? '') === 'invoice')
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -45,12 +50,12 @@ export default function ThankYouPage() {
 
         {/* Tabs */}
         <div className="flex gap-2">
-          {(['recent', 'send'] as const).map(t => (
+          {(['recent', 'send', 'invoices'] as const).map(t => (
             <button key={t} onClick={() => { setTab(t); setError(null) }}
               className={`flex-1 py-2 rounded-lg text-sm font-semibold border transition-colors ${
                 tab === t ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
               }`}>
-              {t === 'recent' ? 'Recent buyers' : 'Send / test'}
+              {t === 'recent' ? 'Recent buyers' : t === 'send' ? 'Send / test' : 'Invoices'}
             </button>
           ))}
         </div>
@@ -59,7 +64,19 @@ export default function ThankYouPage() {
 
         {loading ? (
           <div className="flex justify-center pt-10"><div className="w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full animate-spin" /></div>
-        ) : templates.length === 0 ? (
+        ) : tab === 'invoices' ? (
+          invoiceTemplates.length === 0 ? (
+            <div className="card p-5 text-center space-y-1">
+              <p className="text-sm font-medium text-gray-700">No invoice-link template yet</p>
+              <p className="text-xs text-gray-500">
+                In <b>Templates</b>, link a Meta-approved <b>Utility</b> template with a dynamic URL button
+                (<code>…/i/&#123;&#123;1&#125;&#125;</code>) and set its <b>Message type</b> to <b>Invoice link</b>.
+              </p>
+            </div>
+          ) : (
+            <InvoicesTab templates={invoiceTemplates} setError={setError} />
+          )
+        ) : thankyouTemplates.length === 0 ? (
           <div className="card p-5 text-center space-y-1">
             <p className="text-sm font-medium text-gray-700">No thank-you templates yet</p>
             <p className="text-xs text-gray-500">
@@ -68,9 +85,9 @@ export default function ThankYouPage() {
             </p>
           </div>
         ) : tab === 'recent' ? (
-          <RecentBuyersTab templates={templates} setError={setError} />
+          <RecentBuyersTab templates={thankyouTemplates} setError={setError} />
         ) : (
-          <ManualSendTab templates={templates} setError={setError} />
+          <ManualSendTab templates={thankyouTemplates} setError={setError} />
         )}
       </main>
     </div>
@@ -339,6 +356,118 @@ function ManualSendTab({ templates, setError }: { templates: MessageTemplate[]; 
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ===========================================================================
+// INVOICES — send each imported-but-unsent bill as a personalised message with
+// a dynamic "View invoice" button. Per INVOICE (a customer with two new bills
+// gets two links). The send publishes the private page BEFORE messaging, so a
+// dead link never goes out; sent bills leave this queue and expire in 7 days.
+// ===========================================================================
+interface PendingInvoice { id: string; billNo: string; phone: string; name: string | null; date: string | null; payable: number | null; optedOut: boolean }
+
+function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; setError: (s: string | null) => void }) {
+  const [templateId, setTemplateId] = useState('')
+  const [cap, setCap] = useState<number | ''>('')
+  const [invoices, setInvoices] = useState<PendingInvoice[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [result, setResult] = useState<{ sent: number; failed: number; skippedDnc: number } | null>(null)
+  const [peekPhone, setPeekPhone] = useState<string | null>(null)
+
+  const template = templates.find(t => t.id === templateId) ?? null
+  const eligible = invoices.filter(i => !i.optedOut)
+  const toSend = cap === '' ? eligible : eligible.slice(0, Math.max(0, cap))
+
+  async function load() {
+    setError(null); setResult(null)
+    setLoading(true); setLoaded(false)
+    try {
+      const res = await fetch('/api/invoices/pending?limit=500')
+      const data = await res.json()
+      if (!res.ok) { setError(data.error ?? 'Could not load invoices'); setLoading(false); return }
+      setInvoices(data.invoices ?? [])
+      setLoaded(true)
+    } catch { setError('Network error') } finally { setLoading(false) }
+  }
+
+  async function send() {
+    if (!template || toSend.length === 0) return
+    setSending(true); setError(null)
+    try {
+      const res = await fetch('/api/invoices/send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceIds: toSend.map(i => i.id), templateId, cohortLabel: 'Invoice link' }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.error ?? 'Send failed'); setSending(false); return }
+      setResult(data)
+      await load()
+    } catch { setError('Network error during send') } finally { setSending(false) }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="card p-4 space-y-3">
+        <div>
+          <label className="text-xs font-medium text-gray-600">Invoice-link template</label>
+          <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="input mt-1 text-sm">
+            <option value="">Choose an invoice template…</option>
+            {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+        <div className="flex items-end justify-between gap-2">
+          <label className="text-xs font-medium text-gray-600 block">
+            Send at most (per batch)
+            <input type="number" min={1} inputMode="numeric" placeholder="all eligible"
+              value={cap} onChange={e => setCap(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value) || 0))}
+              className="input mt-1 text-sm w-32" />
+          </label>
+          <button onClick={load} disabled={loading} className="btn-primary disabled:opacity-60">
+            {loading ? 'Loading…' : 'Load unsent invoices'}
+          </button>
+        </div>
+        <p className="text-[10px] text-gray-400">Each bill sends once — sent bills drop off this list. The link opens a private invoice page that expires in 7 days.</p>
+      </div>
+
+      {result && (
+        <div className="text-xs bg-green-50 border border-green-100 rounded-lg px-3 py-2 text-green-800">
+          Sent {result.sent} · {result.skippedDnc} opted-out · {result.failed} failed.
+        </div>
+      )}
+
+      {loaded && (
+        <div className="card p-3 space-y-2">
+          <p className="text-xs font-semibold text-gray-700">
+            {invoices.length} unsent invoice{invoices.length !== 1 ? 's' : ''} · {eligible.length} eligible
+            {cap !== '' && eligible.length > toSend.length && <span className="text-gray-500 font-normal"> · sending {toSend.length} this batch</span>}
+          </p>
+          {invoices.length === 0 && (
+            <p className="text-[11px] text-gray-500">No unsent invoices. Import a sales file first (More → Import invoices).</p>
+          )}
+          <div className="space-y-1.5 max-h-[48vh] overflow-y-auto">
+            {invoices.map(i => (
+              <div key={i.id} className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 ${i.optedOut ? 'border-gray-100 bg-gray-50' : 'border-gray-200'}`}>
+                <button onClick={() => setPeekPhone(i.phone)} className="min-w-0 text-left">
+                  <span className="text-xs font-medium text-gray-800 truncate underline decoration-dotted underline-offset-2">{i.name || 'Unknown'}</span>
+                  <span className="text-[11px] text-gray-400 ml-1.5">{i.billNo}</span>
+                </button>
+                <span className="text-[10px] text-gray-400 flex-shrink-0">
+                  {i.optedOut ? 'opted out' : i.payable != null ? `₹${Math.round(i.payable).toLocaleString('en-IN')}` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+          <button onClick={send} disabled={sending || toSend.length === 0} className="btn-primary w-full disabled:opacity-60">
+            {sending ? 'Sending…' : `Send invoice link to ${toSend.length}`}
+          </button>
+        </div>
+      )}
+
+      <CustomerPeek phone={peekPhone} onClose={() => setPeekPhone(null)} />
     </div>
   )
 }
