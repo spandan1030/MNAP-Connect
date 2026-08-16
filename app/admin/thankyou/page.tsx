@@ -415,7 +415,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Test send failed'); setTesting(false); return }
-      setTestMsg(`Test sent to ${p}. Check WhatsApp — the button opens a test link (…/i/test-preview).`)
+      setTestMsg(`Test sent to ${p}. Check WhatsApp — tap the button to preview a sample Bill Summary.`)
     } catch { setError('Network error during test send') } finally { setTesting(false) }
   }
 

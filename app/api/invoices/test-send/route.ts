@@ -3,17 +3,33 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendTemplateMessage } from '@/lib/whatsapp/api'
+import { publishInvoice, type InvoiceSnapshot } from '@/lib/invoices/publish'
 
 // Test-send an invoice-link template to a single phone, using a TEST token in the
 // URL button and sample body values — so you can see exactly how the real message
 // (copy + dynamic "View invoice" button) lands in WhatsApp before broadcasting.
 //
-// No real invoice, no Firestore publish, no ledger: it's a preview. The button
-// points at …/i/<TEST_TOKEN>, which is a deliberately fake link (it won't open a
-// real bill). Opt-out is not consulted — you're testing your own number.
+// It publishes a SAMPLE bill (fake data — no real PII) under a fixed test token
+// first, so tapping the button opens a real rendered Bill Summary instead of
+// "not found". No ledger, no wa_invoices row; opt-out is not consulted (you're
+// testing your own number).
 //   POST { phone, templateId }
 
-const TEST_TOKEN = 'test-preview'   // fake token → …/i/test-preview
+const TEST_TOKEN = 'test-preview'   // fixed token → …/i/test-preview (sample bill)
+
+// A fake bill shown when the test button is tapped. Republished on every test so
+// its 7-day clock refreshes.
+const DEMO_INVOICE: InvoiceSnapshot = {
+  bill_no: 'RSL/TEST/PREVIEW',
+  invoice_date: new Date().toISOString().slice(0, 10),
+  customer_name: 'Valued Customer',
+  amount_before_tax: 48500, tax_amount: 1500, net_amount: 50000,
+  old_metal_amount: 0, advance_amount: 0, payable: 50000,
+  line_items: [
+    { item: 'Gold Ring', purity: '22CT (91.66%)', net_wt: 4.0, barcode: 'TEST-01', amount: 30000 },
+    { item: 'Gold Earrings', purity: '22CT (91.66%)', net_wt: 3.2, barcode: 'TEST-02', amount: 20000 },
+  ],
+}
 
 function tenDigit(raw: string): string {
   const d = (raw ?? '').replace(/\D/g, '')
@@ -60,9 +76,21 @@ export async function POST(req: NextRequest) {
   if (bodyParams.length) comps.push({ type: 'body', parameters: bodyParams })
   comps.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: TEST_TOKEN }] })
 
+  // Publish the sample bill so the test button opens a real Bill Summary. Best-
+  // effort: if publishing isn't configured we still send (message preview works),
+  // the link just shows "not found".
+  const expiresAt = new Date(Date.now() + 7 * 86400_000).toISOString()
+  let published = true
+  try {
+    await publishInvoice(TEST_TOKEN, DEMO_INVOICE, expiresAt)
+  } catch (err) {
+    published = false
+    console.error('test-send demo publish failed (non-fatal):', err)
+  }
+
   try {
     const wamid = await sendTemplateMessage(p, template.meta_template_name, template.meta_template_lang ?? 'en', comps)
-    return Response.json({ ok: true, wamid })
+    return Response.json({ ok: true, wamid, published })
   } catch (err) {
     return Response.json({ error: (err as Error).message }, { status: 400 })
   }
