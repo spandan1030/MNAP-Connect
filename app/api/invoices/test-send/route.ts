@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   const vars = (template.meta_variables as string[] | null) ?? []
   const bodyParams = vars.map(v => {
     const k = v.toLowerCase()
-    if (k === 'name') return { type: 'text', parameter_name: 'customer_name', text: 'there' }
+    if (k === 'name') return { type: 'text', text: 'there' }
     if (k === 'bill_no' || k === 'bill') return { type: 'text', text: 'RSL/TEST/000' }
     if (k === 'payable' || k === 'amount') return { type: 'text', text: '9999' }
     return { type: 'text', text: '' }

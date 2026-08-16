@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
     const name = (inv.customer_name || '').trim() || 'there'
     return vars.map(v => {
       const k = v.toLowerCase()
-      if (k === 'name') return { type: 'text', parameter_name: 'customer_name', text: name }
+      if (k === 'name') return { type: 'text', text: name }
       if (k === 'bill_no' || k === 'bill') return { type: 'text', text: inv.bill_no }
       if (k === 'payable' || k === 'amount') return { type: 'text', text: inv.payable != null ? String(inv.payable) : '' }
       return { type: 'text', text: '' }
