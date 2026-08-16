@@ -5,8 +5,9 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 
 // Invoices imported but not yet sent — the queue the invoice-link send draws from.
 // Each row is decorated with the unified opt-out flag so the UI can grey out
-// anyone who can't be messaged. Newest bills first.
-//   GET /api/invoices/pending?limit=200
+// anyone who can't be messaged. Newest bills first. Optional `days` keeps only
+// bills dated within the last N days (thank buyers from the last N days only).
+//   GET /api/invoices/pending?limit=200&days=14
 
 function tenDigit(raw: string): string {
   const d = (raw ?? '').replace(/\D/g, '')
@@ -24,11 +25,18 @@ export async function GET(req: NextRequest) {
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const limit = Math.max(1, Math.min(1000, parseInt(req.nextUrl.searchParams.get('limit') ?? '200') || 200))
+  const daysRaw = req.nextUrl.searchParams.get('days')
+  const days = daysRaw ? Math.max(1, Math.min(365, parseInt(daysRaw) || 0)) : null
 
-  const { data, error } = await supabaseAdmin
+  let q = supabaseAdmin
     .from('wa_invoices')
     .select('id, bill_no, phone, customer_name, invoice_date, payable, net_amount')
     .is('sent_at', null)
+  if (days) {
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days)
+    q = q.gte('invoice_date', cutoff.toLocaleDateString('en-CA'))  // YYYY-MM-DD
+  }
+  const { data, error } = await q
     .order('invoice_date', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
     .limit(limit)

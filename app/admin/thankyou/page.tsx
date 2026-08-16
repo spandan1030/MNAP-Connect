@@ -24,17 +24,15 @@ export default function ThankYouPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    // Both faces of this module draw from Templates: 'thankyou' feeds Recent
-    // buyers + manual; 'invoice' feeds the Invoices tab (dynamic bill links).
+    // One source of truth: templates tagged Thank-you. All three tabs (Recent
+    // buyers, Send/test, Invoices) draw from the same list — an invoice-link
+    // send just adds the dynamic button on top of the chosen thank-you template.
     supabase.from('wa_message_templates').select('*')
-      .eq('is_active', true).in('category', ['thankyou', 'invoice'])
+      .eq('is_active', true).eq('category', 'thankyou')
       .not('meta_template_name', 'is', null)
       .order('created_at', { ascending: false })
       .then(({ data }) => { setTemplates((data ?? []) as MessageTemplate[]); setLoading(false) })
   }, [supabase])
-
-  const thankyouTemplates = templates.filter(t => (t.category ?? '') === 'thankyou')
-  const invoiceTemplates = templates.filter(t => (t.category ?? '') === 'invoice')
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -64,19 +62,7 @@ export default function ThankYouPage() {
 
         {loading ? (
           <div className="flex justify-center pt-10"><div className="w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full animate-spin" /></div>
-        ) : tab === 'invoices' ? (
-          invoiceTemplates.length === 0 ? (
-            <div className="card p-5 text-center space-y-1">
-              <p className="text-sm font-medium text-gray-700">No invoice-link template yet</p>
-              <p className="text-xs text-gray-500">
-                In <b>Templates</b>, link a Meta-approved <b>Utility</b> template with a dynamic URL button
-                (<code>…/i/&#123;&#123;1&#125;&#125;</code>) and set its <b>Message type</b> to <b>Invoice link</b>.
-              </p>
-            </div>
-          ) : (
-            <InvoicesTab templates={invoiceTemplates} setError={setError} />
-          )
-        ) : thankyouTemplates.length === 0 ? (
+        ) : templates.length === 0 ? (
           <div className="card p-5 text-center space-y-1">
             <p className="text-sm font-medium text-gray-700">No thank-you templates yet</p>
             <p className="text-xs text-gray-500">
@@ -84,10 +70,12 @@ export default function ThankYouPage() {
               It&apos;ll appear here automatically.
             </p>
           </div>
+        ) : tab === 'invoices' ? (
+          <InvoicesTab templates={templates} setError={setError} />
         ) : tab === 'recent' ? (
-          <RecentBuyersTab templates={thankyouTemplates} setError={setError} />
+          <RecentBuyersTab templates={templates} setError={setError} />
         ) : (
-          <ManualSendTab templates={thankyouTemplates} setError={setError} />
+          <ManualSendTab templates={templates} setError={setError} />
         )}
       </main>
     </div>
@@ -370,6 +358,7 @@ interface PendingInvoice { id: string; billNo: string; phone: string; name: stri
 
 function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; setError: (s: string | null) => void }) {
   const [templateId, setTemplateId] = useState('')
+  const [days, setDays] = useState(14)
   const [cap, setCap] = useState<number | ''>('')
   const [invoices, setInvoices] = useState<PendingInvoice[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -377,6 +366,10 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<{ sent: number; failed: number; skippedDnc: number } | null>(null)
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
+  // Test send
+  const [testPhone, setTestPhone] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [testMsg, setTestMsg] = useState('')
 
   const template = templates.find(t => t.id === templateId) ?? null
   const eligible = invoices.filter(i => !i.optedOut)
@@ -386,7 +379,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
     setError(null); setResult(null)
     setLoading(true); setLoaded(false)
     try {
-      const res = await fetch('/api/invoices/pending?limit=500')
+      const res = await fetch(`/api/invoices/pending?limit=500&days=${days}`)
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Could not load invoices'); setLoading(false); return }
       setInvoices(data.invoices ?? [])
@@ -400,7 +393,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
     try {
       const res = await fetch('/api/invoices/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoiceIds: toSend.map(i => i.id), templateId, cohortLabel: 'Invoice link' }),
+        body: JSON.stringify({ invoiceIds: toSend.map(i => i.id), templateId, cohortLabel: `Invoice link (≤${days}d)` }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Send failed'); setSending(false); return }
@@ -409,28 +402,52 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
     } catch { setError('Network error during send') } finally { setSending(false) }
   }
 
+  async function testSend() {
+    setTestMsg(''); setError(null)
+    if (!templateId) { setError('Pick a template first.'); return }
+    const p = testPhone.replace(/\D/g, '').replace(/^91/, '')
+    if (p.length !== 10) { setError('Enter a valid 10-digit phone number.'); return }
+    setTesting(true)
+    try {
+      const res = await fetch('/api/invoices/test-send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: p, templateId }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.error ?? 'Test send failed'); setTesting(false); return }
+      setTestMsg(`Test sent to ${p}. Check WhatsApp — the button opens a test link (…/i/test-preview).`)
+    } catch { setError('Network error during test send') } finally { setTesting(false) }
+  }
+
   return (
     <div className="space-y-3">
       <div className="card p-4 space-y-3">
         <div>
-          <label className="text-xs font-medium text-gray-600">Invoice-link template</label>
+          <label className="text-xs font-medium text-gray-600">Thank-you template (with invoice button)</label>
           <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="input mt-1 text-sm">
-            <option value="">Choose an invoice template…</option>
+            <option value="">Choose a template…</option>
             {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
         </div>
-        <div className="flex items-end justify-between gap-2">
-          <label className="text-xs font-medium text-gray-600 block">
-            Send at most (per batch)
-            <input type="number" min={1} inputMode="numeric" placeholder="all eligible"
-              value={cap} onChange={e => setCap(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value) || 0))}
-              className="input mt-1 text-sm w-32" />
+        <div className="flex items-end gap-2">
+          <label className="text-xs font-medium text-gray-600">
+            Billed in the last
+            <input type="number" min={1} max={365} value={days}
+              onChange={e => { setDays(Math.max(1, Math.min(365, parseInt(e.target.value) || 14))); setLoaded(false) }}
+              className="input mt-1 text-sm w-20" />
           </label>
-          <button onClick={load} disabled={loading} className="btn-primary disabled:opacity-60">
-            {loading ? 'Loading…' : 'Load unsent invoices'}
+          <span className="text-xs text-gray-500 pb-2.5">days</span>
+          <button onClick={load} disabled={loading} className="btn-primary ml-auto disabled:opacity-60">
+            {loading ? 'Loading…' : 'Load invoices'}
           </button>
         </div>
-        <p className="text-[10px] text-gray-400">Each bill sends once — sent bills drop off this list. The link opens a private invoice page that expires in 7 days.</p>
+        <label className="text-xs font-medium text-gray-600 block">
+          Send at most (per batch)
+          <input type="number" min={1} inputMode="numeric" placeholder="all eligible"
+            value={cap} onChange={e => setCap(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value) || 0))}
+            className="input mt-1 text-sm w-32" />
+        </label>
+        <p className="text-[10px] text-gray-400">Thanks only buyers billed in the last {days} days. Each bill sends once — sent bills drop off. The link opens a private invoice page that expires in 7 days.</p>
       </div>
 
       {result && (
@@ -446,7 +463,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
             {cap !== '' && eligible.length > toSend.length && <span className="text-gray-500 font-normal"> · sending {toSend.length} this batch</span>}
           </p>
           {invoices.length === 0 && (
-            <p className="text-[11px] text-gray-500">No unsent invoices. Import a sales file first (More → Import invoices).</p>
+            <p className="text-[11px] text-gray-500">No unsent invoices billed in the last {days} days. Widen the days, or import a sales file (More → Import invoices).</p>
           )}
           <div className="space-y-1.5 max-h-[48vh] overflow-y-auto">
             {invoices.map(i => (
@@ -466,6 +483,20 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
           </button>
         </div>
       )}
+
+      {/* Test send — the real template to one number, with a fake test link. */}
+      <div className="card p-4 space-y-2">
+        <p className="text-xs font-semibold text-gray-700">Test send</p>
+        <p className="text-[10px] text-gray-400">Sends the selected template to one number with sample values and a test link, so you can preview exactly how it lands in WhatsApp. No real invoice is used.</p>
+        <div className="flex items-center gap-2">
+          <input value={testPhone} onChange={e => setTestPhone(e.target.value)} inputMode="numeric"
+            placeholder="Phone number (10 digits)" className="input text-sm flex-1" />
+          <button onClick={testSend} disabled={testing || !templateId} className="btn-secondary disabled:opacity-60 whitespace-nowrap">
+            {testing ? 'Sending…' : 'Send test'}
+          </button>
+        </div>
+        {testMsg && <p className="text-[11px] text-green-700 bg-green-50 border border-green-100 rounded-lg px-2.5 py-1.5">{testMsg}</p>}
+      </div>
 
       <CustomerPeek phone={peekPhone} onClose={() => setPeekPhone(null)} />
     </div>
