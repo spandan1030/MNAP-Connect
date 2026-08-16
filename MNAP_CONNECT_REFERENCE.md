@@ -160,6 +160,19 @@ not physically stock** as a barcoded piece.
   The customer app should branch **catalogueOnly first** (its own "design / made to order"
   treatment), then `inStock` (sold), then normal — app-side rendering is a later change.
 
+### Catalogue list filters (`/catalogue`)
+Status pills (single-choice): **All · In stock · Sold · Deleted · Catalogue · Review**.
+- **In stock** = `is_sold=false AND is_catalogue_only=false AND stock_status<>'deleted'` — the
+  `stock_status<>'deleted'` clause fixes a leak where software-deleted pieces (`stock_status='deleted'`
+  but `is_sold=false`) previously showed as In stock. **Deleted** = `stock_status='deleted'`; those
+  cards get a grey **DELETED** badge + a non-interactive **Deleted** chip (no sold/in-stock toggle).
+  Manual sold/in-stock toggling still writes `is_sold` only — `stock_status` just adds the deleted axis.
+- Filter panel (saved to `localStorage`): Item name / Design / Description / Purity / Party (multi),
+  Weight range, and single-choice **Barcode** (Any/Has/None), **Photo** (Any/Has/None, backed by
+  `wa_products.has_photo` — wa_060), **Catalogue-only** (Any/Only/Exclude — combinable, unlike the
+  exclusive Catalogue pill), **Customer app** (Any/Published/Not published). Catalogue-only pieces
+  carry an internal XMNAP barcode, so they read as **Has barcode**; the Catalogue-only filter separates them.
+
 ### Bulk actions on selected products
 The catalogue list (`/catalogue`) has a **Select** mode (toggle next to the item count): tap
 cards to tick them, **Select all** ticks every loaded card, and the sticky bottom bar opens an

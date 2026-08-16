@@ -8,9 +8,11 @@ import Navbar from '@/components/ui/Navbar'
 import PreviewModal from '@/components/catalogue/PreviewModal'
 import type { WaProduct } from '@/lib/types'
 
-type Status = 'all' | 'instock' | 'sold' | 'catalogue' | 'review'
+type Status = 'all' | 'instock' | 'sold' | 'deleted' | 'catalogue' | 'review'
 
 type Published = 'all' | 'yes' | 'no'
+type Presence = 'any' | 'has' | 'no'          // barcode / photo presence
+type Catalogue = 'any' | 'only' | 'exclude'   // catalogue-only dimension (combinable)
 
 interface Filters {
   item_name: string[]
@@ -21,9 +23,12 @@ interface Filters {
   wMin: number | null
   wMax: number | null
   published: Published
+  barcode: Presence
+  photo: Presence
+  catalogue: Catalogue
 }
 
-const EMPTY_FILTERS: Filters = { item_name: [], design: [], description: [], purity: [], party: [], wMin: null, wMax: null, published: 'all' }
+const EMPTY_FILTERS: Filters = { item_name: [], design: [], description: [], purity: [], party: [], wMin: null, wMax: null, published: 'all', barcode: 'any', photo: 'any', catalogue: 'any' }
 const DEFAULT_FILTERS: Filters = { ...EMPTY_FILTERS, purity: ['22K'] }
 const STORAGE_KEY = 'mnap_catalogue_filters'
 const PAGE_SIZE = 48
@@ -43,6 +48,9 @@ function normalizeFilters(raw: Record<string, unknown>): Filters {
     wMin: typeof raw.wMin === 'number' ? raw.wMin : null,
     wMax: typeof raw.wMax === 'number' ? raw.wMax : null,
     published: raw.published === 'yes' || raw.published === 'no' ? raw.published : 'all',
+    barcode: raw.barcode === 'has' || raw.barcode === 'no' ? raw.barcode : 'any',
+    photo: raw.photo === 'has' || raw.photo === 'no' ? raw.photo : 'any',
+    catalogue: raw.catalogue === 'only' || raw.catalogue === 'exclude' ? raw.catalogue : 'any',
   }
 }
 
@@ -158,8 +166,10 @@ export default function CataloguePage() {
   const fetchPage = useCallback(async (pageIndex: number, reset: boolean) => {
     const { status: st, filters: f, search: s } = applied
     let qb = supabase.from('wa_products').select('*', { count: 'exact' })
-    if (st === 'instock') qb = qb.eq('is_sold', false).eq('is_catalogue_only', false)
+    // In stock excludes pieces the software deleted (stock_status='deleted' but is_sold=false).
+    if (st === 'instock') qb = qb.eq('is_sold', false).eq('is_catalogue_only', false).neq('stock_status', 'deleted')
     else if (st === 'sold') qb = qb.eq('is_sold', true)
+    else if (st === 'deleted') qb = qb.eq('stock_status', 'deleted')
     else if (st === 'catalogue') qb = qb.eq('is_catalogue_only', true)
     else if (st === 'review') qb = qb.eq('needs_review', true)
     if (f.item_name.length)   qb = qb.in('item_name', f.item_name)
@@ -171,6 +181,14 @@ export default function CataloguePage() {
     if (f.wMax != null) qb = qb.lte('weight', f.wMax)
     if (f.published === 'yes') qb = qb.eq('show_in_app', true)
     else if (f.published === 'no') qb = qb.eq('show_in_app', false)
+    // Note: catalogue-only pieces carry an internal XMNAP##### barcode, so they count
+    // as "has barcode" here — the separate Catalogue-only filter distinguishes them.
+    if (f.barcode === 'has') qb = qb.not('barcode', 'is', null)
+    else if (f.barcode === 'no') qb = qb.is('barcode', null)
+    if (f.photo === 'has') qb = qb.eq('has_photo', true)
+    else if (f.photo === 'no') qb = qb.eq('has_photo', false)
+    if (f.catalogue === 'only') qb = qb.eq('is_catalogue_only', true)
+    else if (f.catalogue === 'exclude') qb = qb.eq('is_catalogue_only', false)
     const q = s.trim().replace(/[,%()]/g, ' ').trim()
     if (q) qb = qb.or(`item_name.ilike.%${q}%,barcode.ilike.%${q}%,design_code.ilike.%${q}%,party.ilike.%${q}%,purity.ilike.%${q}%,design.ilike.%${q}%,description.ilike.%${q}%`)
 
@@ -245,7 +263,8 @@ export default function CataloguePage() {
   const activeCount =
     (filters.item_name.length ? 1 : 0) + (filters.design.length ? 1 : 0) + (filters.description.length ? 1 : 0) +
     (filters.purity.length ? 1 : 0) + (filters.party.length ? 1 : 0) +
-    (filters.wMin != null || filters.wMax != null ? 1 : 0) + (filters.published !== 'all' ? 1 : 0)
+    (filters.wMin != null || filters.wMax != null ? 1 : 0) + (filters.published !== 'all' ? 1 : 0) +
+    (filters.barcode !== 'any' ? 1 : 0) + (filters.photo !== 'any' ? 1 : 0) + (filters.catalogue !== 'any' ? 1 : 0)
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -293,19 +312,14 @@ export default function CataloguePage() {
             <MultiSelect label="Party"        value={filters.party}       opts={options.party}       onChange={v => setF('party', v)} />
             <WeightRange max={maxWeight} min={filters.wMin} maxV={filters.wMax}
               onChange={(lo, hi) => setFilters(f => ({ ...f, wMin: lo, wMax: hi }))} />
-            <div>
-              <label className="text-xs font-medium text-gray-600">Customer app</label>
-              <div className="flex gap-2 mt-1">
-                {([['all', 'Any'], ['yes', 'Published'], ['no', 'Not published']] as const).map(([v, l]) => (
-                  <button key={v} onClick={() => setF('published', v)}
-                    className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                      filters.published === v ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
-                    }`}>
-                    {l}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <Segmented label="Barcode" value={filters.barcode}
+              options={[['any', 'Any'], ['has', 'Has'], ['no', 'None']] as const} onChange={v => setF('barcode', v)} />
+            <Segmented label="Photo" value={filters.photo}
+              options={[['any', 'Any'], ['has', 'Has'], ['no', 'None']] as const} onChange={v => setF('photo', v)} />
+            <Segmented label="Catalogue-only" value={filters.catalogue}
+              options={[['any', 'Any'], ['only', 'Only'], ['exclude', 'Exclude']] as const} onChange={v => setF('catalogue', v)} />
+            <Segmented label="Customer app" value={filters.published}
+              options={[['all', 'Any'], ['yes', 'Published'], ['no', 'Not published']] as const} onChange={v => setF('published', v)} />
             <div className="flex gap-2 pt-1">
               <button onClick={resetFilters} className="btn-secondary flex-1">Reset</button>
               <button onClick={saveFilters} className="btn-primary flex-1">{savedNote ? '✓ Saved' : 'Save filter'}</button>
@@ -315,7 +329,7 @@ export default function CataloguePage() {
         )}
 
         <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-          {([['all', 'All'], ['instock', 'In stock'], ['sold', 'Sold'], ['catalogue', 'Catalogue'], ['review', 'Review']] as const).map(([f, label]) => (
+          {([['all', 'All'], ['instock', 'In stock'], ['sold', 'Sold'], ['deleted', 'Deleted'], ['catalogue', 'Catalogue'], ['review', 'Review']] as const).map(([f, label]) => (
             <button key={f} onClick={() => setStatus(f)}
               className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
                 status === f ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
@@ -374,6 +388,8 @@ export default function CataloguePage() {
                         </span>
                         {p.is_catalogue_only ? (
                           <span className="absolute top-1.5 right-1.5 text-[10px] font-bold text-white bg-indigo-500 px-1.5 py-0.5 rounded">CATALOGUE</span>
+                        ) : p.stock_status === 'deleted' ? (
+                          <span className="absolute top-1.5 right-1.5 text-[10px] font-bold text-white bg-gray-500 px-1.5 py-0.5 rounded">DELETED</span>
                         ) : p.is_sold ? (
                           <span className="absolute top-1.5 right-1.5 text-[10px] font-bold text-white bg-red-600 px-1.5 py-0.5 rounded">SOLD</span>
                         ) : null}
@@ -382,6 +398,8 @@ export default function CataloguePage() {
                       <>
                         {p.is_catalogue_only ? (
                           <span className="absolute top-1.5 left-1.5 text-[10px] font-bold text-white bg-indigo-500 px-1.5 py-0.5 rounded">CATALOGUE</span>
+                        ) : p.stock_status === 'deleted' ? (
+                          <span className="absolute top-1.5 left-1.5 text-[10px] font-bold text-white bg-gray-500 px-1.5 py-0.5 rounded">DELETED</span>
                         ) : p.is_sold ? (
                           <span className="absolute top-1.5 left-1.5 text-[10px] font-bold text-white bg-red-600 px-1.5 py-0.5 rounded">SOLD</span>
                         ) : null}
@@ -418,6 +436,10 @@ export default function CataloguePage() {
                       {p.is_catalogue_only ? (
                         <span className="flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-indigo-50 text-indigo-600 border-indigo-200">
                           Catalogue
+                        </span>
+                      ) : p.stock_status === 'deleted' ? (
+                        <span className="flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-gray-100 text-gray-500 border-gray-200">
+                          Deleted
                         </span>
                       ) : selectMode ? (
                         <span className={`flex-shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
@@ -608,6 +630,30 @@ function SheetBtn({ onClick, disabled, className, children }: {
       className={`flex-1 text-sm font-semibold px-3 py-2.5 rounded-xl border disabled:opacity-50 ${className}`}>
       {children}
     </button>
+  )
+}
+
+// A single-choice segmented control (Any / … row of pill buttons).
+function Segmented<T extends string>({ label, value, options, onChange }: {
+  label: string
+  value: T
+  options: readonly (readonly [T, string])[]
+  onChange: (v: T) => void
+}) {
+  return (
+    <div>
+      <label className="text-xs font-medium text-gray-600">{label}</label>
+      <div className="flex gap-2 mt-1">
+        {options.map(([v, l]) => (
+          <button key={v} onClick={() => onChange(v)}
+            className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+              value === v ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300'
+            }`}>
+            {l}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 

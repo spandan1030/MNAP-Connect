@@ -258,6 +258,7 @@ export interface WaProduct {
   is_catalogue_only?: boolean // design-only product, not physical stock (wa_057)
   stock_status?: StockStatus  // in_stock | sold | deleted, from the inventory import (wa_058)
   design_code?: string | null // app-facing per-piece code (MN000001…); raw barcode is never sent (wa_058)
+  has_photo?: boolean         // maintained flag: has ≥1 image (wa_060) — powers the catalogue Photo filter
   // Customer-app publishing (see wa_025_app_publish.sql)
   show_in_app?: boolean
   making_percent?: number | null
