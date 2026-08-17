@@ -84,5 +84,18 @@ export async function POST(req: NextRequest) {
     if (error) return Response.json({ error: error.message }, { status: 500 })
   }
 
+  // Per-bill engagement stamps on the invoice row itself, so the invoice report can
+  // show — per customer, per bill — reviewed? / birthday? / anniversary? Keyed by
+  // token (already validated above). Best-effort: a stamp failure never fails the
+  // feedback (the contact spine + feedback log are the source of truth).
+  const nowISO = new Date().toISOString()
+  const invStamp: Record<string, unknown> = {}
+  if (bMonth) invStamp.birthday_submitted_at = nowISO
+  if (aMonth) invStamp.anniversary_submitted_at = nowISO
+  if (hasRating) { invStamp.reviewed_at = nowISO; invStamp.review_rating = rating }
+  if (Object.keys(invStamp).length) {
+    await supabaseAdmin.from('wa_invoices').update(invStamp).eq('token', token)
+  }
+
   return Response.json({ ok: true })
 }

@@ -27,6 +27,22 @@ function tenDigit(raw: string): string {
   return d.length > 10 && d.startsWith('91') ? d.slice(-10) : d
 }
 
+// The single rolling "Invoice links" campaign (one row, all sends accumulate into
+// it). Reused across sends; created on the first ever invoice send. Fail-soft:
+// null just means this batch isn't linked into the report (the send still happens).
+async function getInvoiceCampaignId(
+  templateName: string | null, metaName: string | null, userId: string,
+): Promise<string | null> {
+  const { data: existing } = await supabaseAdmin.from('wa_campaigns')
+    .select('id').eq('category', 'invoice').order('created_at', { ascending: true }).limit(1).maybeSingle()
+  if (existing?.id) return existing.id as string
+  const { data: created } = await supabaseAdmin.from('wa_campaigns').insert({
+    name: 'Invoice links', cohort_label: 'Invoice links', category: 'invoice',
+    template_name: templateName, meta_template_name: metaName, is_dynamic: false, sent_by: userId,
+  }).select('id').single()
+  return (created?.id as string) ?? null
+}
+
 interface InvoiceRow {
   id: string; bill_no: string; token: string; phone: string; customer_name: string | null
   invoice_date: string | null; amount_before_tax: number | null; tax_amount: number | null
@@ -58,6 +74,13 @@ export async function POST(req: NextRequest) {
   if (!template.meta_template_name) {
     return Response.json({ error: 'This template has no Meta-approved template linked.' }, { status: 400 })
   }
+
+  // One rolling "Invoice links" campaign — every invoice send accumulates into it,
+  // so the send shows up in the Campaigns list + funnel (sent → delivered → read →
+  // replied) with the standard insights. Get-or-create by category='invoice'.
+  const invoiceCampaignId = await getInvoiceCampaignId(
+    (template.name as string) ?? null, (template.meta_template_name as string) ?? null, user.id,
+  )
 
   // Load the chosen invoices — server-authoritative (never trust client amounts),
   // and only those still unsent (guards against a double-send from a stale UI).
@@ -107,6 +130,7 @@ export async function POST(req: NextRequest) {
   const expiresAt = new Date(Date.now() + EXPIRY_DAYS * 86400_000).toISOString()
   const ledgerRows: Array<Record<string, unknown>> = []
   const results: Array<{ billNo: string; status: string; error?: string }> = []
+  const sentMembers = new Map<string, string | null>() // phone -> name, for wa_campaign_members
   let sent = 0, failed = 0, skippedDnc = 0
 
   for (const inv of invoices) {
@@ -148,12 +172,16 @@ export async function POST(req: NextRequest) {
         phone: p, template_id: template.id, meta_template_name: template.meta_template_name,
         suppression_key: `invoice:${inv.bill_no}`, category: 'invoice', status: 'sent',
         wa_message_id: wamid, cohort_label: cohortLabel ?? 'Invoice link', sent_by: user.id,
+        campaign_id: invoiceCampaignId,
       })
 
-      // 5. Stamp the lifecycle — this bill leaves the pending queue.
+      // 5. Stamp the lifecycle — this bill leaves the pending queue. Also record the
+      //    wamid (so delivery/read events attribute to this bill) + the campaign link.
       await supabaseAdmin.from('wa_invoices')
-        .update({ sent_at: now, published_at: now, expires_at: expiresAt }).eq('id', inv.id)
+        .update({ sent_at: now, published_at: now, expires_at: expiresAt, wa_message_id: wamid, campaign_id: invoiceCampaignId })
+        .eq('id', inv.id)
 
+      sentMembers.set(p, inv.customer_name || null)
       sent++; results.push({ billNo: inv.bill_no, status: 'sent' })
     } catch (err) {
       const msg = (err as Error).message
@@ -161,6 +189,7 @@ export async function POST(req: NextRequest) {
         phone: p, template_id: template.id, meta_template_name: template.meta_template_name,
         suppression_key: `invoice:${inv.bill_no}`, category: 'invoice', status: 'failed',
         cohort_label: cohortLabel ?? 'Invoice link', error: msg, sent_by: user.id,
+        campaign_id: invoiceCampaignId,
       })
       failed++; results.push({ billNo: inv.bill_no, status: 'failed', error: msg })
       // Leave sent_at null so a fixed template / transient error can be retried.
@@ -168,6 +197,23 @@ export async function POST(req: NextRequest) {
   }
 
   if (ledgerRows.length) await supabaseAdmin.from('wa_send_ledger').insert(ledgerRows)
+
+  // Roll this batch into the "Invoice links" campaign: add the recipients as
+  // members (deduped by phone) and bump the summary counts the list view shows.
+  // Fail-soft — a reporting hiccup must never fail a send that already happened.
+  if (invoiceCampaignId && sentMembers.size) {
+    const memberRows = [...sentMembers.entries()].map(([phone, name]) => ({ campaign_id: invoiceCampaignId, phone, name }))
+    await supabaseAdmin.from('wa_campaign_members').upsert(memberRows, { onConflict: 'campaign_id,phone' })
+  }
+  if (invoiceCampaignId && (sent || failed)) {
+    const { data: cur } = await supabaseAdmin.from('wa_campaigns')
+      .select('total, sent, failed').eq('id', invoiceCampaignId).maybeSingle()
+    await supabaseAdmin.from('wa_campaigns').update({
+      total:  ((cur?.total  as number) ?? 0) + sent + failed,
+      sent:   ((cur?.sent   as number) ?? 0) + sent,
+      failed: ((cur?.failed as number) ?? 0) + failed,
+    }).eq('id', invoiceCampaignId)
+  }
 
   return Response.json({ sent, failed, skippedDnc, total: invoices.length, results })
 }

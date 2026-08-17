@@ -356,6 +356,16 @@ function ManualSendTab({ templates, setError }: { templates: MessageTemplate[]; 
 // ===========================================================================
 interface PendingInvoice { id: string; billNo: string; phone: string; name: string | null; date: string | null; payable: number | null; optedOut: boolean }
 
+interface ReportRow {
+  billNo: string; name: string | null; phone: string; url: string
+  sentAt: string | null; delivered: boolean; read: boolean; opened: boolean
+  reviewed: boolean; rating: number | null; birthday: boolean; anniversary: boolean; visitedWebsite: boolean
+}
+interface ReportSummary {
+  total: number; delivered: number; read: number; opened: number
+  reviewed: number; birthday: number; anniversary: number; visitedWebsite: number
+}
+
 function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; setError: (s: string | null) => void }) {
   const [templateId, setTemplateId] = useState('')
   const [days, setDays] = useState(14)
@@ -370,6 +380,11 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
   const [testPhone, setTestPhone] = useState('')
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState('')
+  // Sent report (per-bill engagement)
+  const [report, setReport] = useState<{ summary: ReportSummary; rows: ReportRow[] } | null>(null)
+  const [showReport, setShowReport] = useState(false)
+  const [loadingReport, setLoadingReport] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
 
   const template = templates.find(t => t.id === templateId) ?? null
   const eligible = invoices.filter(i => !i.optedOut)
@@ -400,6 +415,20 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
       setResult(data)
       await load()
     } catch { setError('Network error during send') } finally { setSending(false) }
+  }
+
+  async function loadReport() {
+    setError(null); setLoadingReport(true); setShowReport(true)
+    try {
+      const res = await fetch('/api/invoices/report?limit=300')
+      const data = await res.json()
+      if (!res.ok) { setError(data.error ?? 'Could not load report'); return }
+      setReport(data)
+    } catch { setError('Network error loading report') } finally { setLoadingReport(false) }
+  }
+
+  async function copyUrl(url: string, billNo: string) {
+    try { await navigator.clipboard.writeText(url); setCopied(billNo); setTimeout(() => setCopied(c => c === billNo ? null : c), 1500) } catch { /* clipboard blocked */ }
   }
 
   async function testSend() {
@@ -496,6 +525,78 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
           </button>
         </div>
         {testMsg && <p className="text-[11px] text-green-700 bg-green-50 border border-green-100 rounded-lg px-2.5 py-1.5">{testMsg}</p>}
+      </div>
+
+      {/* Sent report — per-bill engagement (also in Campaigns as "Invoice links"). */}
+      <div className="card p-4 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-semibold text-gray-700">Sent report</p>
+            <p className="text-[10px] text-gray-400">Per bill: delivered / read, reviewed, and whether they shared a birthday or anniversary. The overall funnel also lives in Campaigns → “Invoice links”.</p>
+          </div>
+          <button onClick={loadReport} disabled={loadingReport} className="btn-secondary disabled:opacity-60 whitespace-nowrap">
+            {loadingReport ? 'Loading…' : report ? 'Refresh' : 'View report'}
+          </button>
+        </div>
+
+        {showReport && report && (
+          <>
+            <div className="flex flex-wrap gap-1.5 text-[10px]">
+              {[
+                ['Sent', report.summary.total],
+                ['Delivered', report.summary.delivered],
+                ['Read', report.summary.read],
+                ['Reviewed', report.summary.reviewed],
+                ['Birthday', report.summary.birthday],
+                ['Anniversary', report.summary.anniversary],
+              ].map(([label, n]) => (
+                <span key={label as string} className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-600">
+                  {label}: <span className="font-semibold text-gray-800">{n as number}</span>
+                </span>
+              ))}
+            </div>
+
+            {report.rows.length === 0 ? (
+              <p className="text-[11px] text-gray-500">No invoice links sent yet.</p>
+            ) : (
+              <div className="overflow-x-auto -mx-1">
+                <table className="w-full text-[11px] border-collapse">
+                  <thead>
+                    <tr className="text-gray-400 text-left">
+                      <th className="font-medium px-1.5 py-1">Customer</th>
+                      <th className="font-medium px-1.5 py-1">Bill</th>
+                      <th className="font-medium px-1.5 py-1">Link</th>
+                      <th className="font-medium px-1.5 py-1 text-center">Deliv.</th>
+                      <th className="font-medium px-1.5 py-1 text-center">Read</th>
+                      <th className="font-medium px-1.5 py-1 text-center">Review</th>
+                      <th className="font-medium px-1.5 py-1 text-center">Bday</th>
+                      <th className="font-medium px-1.5 py-1 text-center">Anniv.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.rows.map(r => (
+                      <tr key={r.billNo} className="border-t border-gray-100">
+                        <td className="px-1.5 py-1 text-gray-800 whitespace-nowrap">{r.name || 'Unknown'}</td>
+                        <td className="px-1.5 py-1 text-gray-400 whitespace-nowrap">{r.billNo}</td>
+                        <td className="px-1.5 py-1">
+                          <button onClick={() => copyUrl(r.url, r.billNo)} className="text-green-700 underline decoration-dotted underline-offset-2 whitespace-nowrap">
+                            {copied === r.billNo ? 'Copied ✓' : 'Copy link'}
+                          </button>
+                        </td>
+                        <td className="px-1.5 py-1 text-center">{r.delivered ? '✓' : '–'}</td>
+                        <td className="px-1.5 py-1 text-center">{r.read ? '✓' : '–'}</td>
+                        <td className="px-1.5 py-1 text-center">{r.reviewed ? (r.rating != null ? `★${r.rating}` : '✓') : '–'}</td>
+                        <td className="px-1.5 py-1 text-center">{r.birthday ? '✓' : '–'}</td>
+                        <td className="px-1.5 py-1 text-center">{r.anniversary ? '✓' : '–'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-[10px] text-gray-400 mt-1.5">“Opened the link” and “visited the website” tracking is coming in the next pass.</p>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <CustomerPeek phone={peekPhone} onClose={() => setPeekPhone(null)} />
