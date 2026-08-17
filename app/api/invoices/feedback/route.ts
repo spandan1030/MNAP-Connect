@@ -31,6 +31,13 @@ export async function POST(req: NextRequest) {
   const token = (body.token ?? '').toString()
   if (!token) return Response.json({ error: 'token required' }, { status: 400 })
 
+  // The test-send preview publishes a sample bill under this fixed token but
+  // intentionally has NO wa_invoices row (no ledger, fake PII) and lands on the
+  // admin's own number. Accept its feedback as a successful no-op so the preview
+  // UX completes instead of 404ing — there is no real customer to attribute a
+  // birthday / anniversary / review to, and we must not write it to a real contact.
+  if (token === 'test-preview') return Response.json({ ok: true, test: true })
+
   // Map token -> phone (+ name/bill for context). Unknown token = reject.
   const { data: inv } = await supabaseAdmin
     .from('wa_invoices').select('phone, bill_no, customer_name').eq('token', token).maybeSingle()
