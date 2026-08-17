@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  let body: { token?: string; birthdayMonth?: unknown; anniversaryMonth?: unknown; rating?: unknown; reason?: unknown }
+  let body: { token?: string; birthdayMonth?: unknown; anniversaryMonth?: unknown; rating?: unknown; reason?: unknown; opened?: unknown; visited?: unknown }
   try { body = await req.json() } catch { return Response.json({ error: 'Bad JSON' }, { status: 400 }) }
 
   const token = (body.token ?? '').toString()
@@ -95,6 +95,20 @@ export async function POST(req: NextRequest) {
   if (hasRating) { invStamp.reviewed_at = nowISO; invStamp.review_rating = rating }
   if (Object.keys(invStamp).length) {
     await supabaseAdmin.from('wa_invoices').update(invStamp).eq('token', token)
+  }
+
+  // Engagement pings from the Bill Summary page (Phase 2). WRITE-ONCE — the .is(...
+  // null) guard means a re-open / re-click never overwrites the first timestamp, so
+  // these can't be spammed into churning the row (ties into the security backlog's
+  // "feedback tampering/flood" note — first signal wins, later ones are a no-op).
+  //   · opened  — the page loaded (fired client-side post-hydration). WhatsApp gives
+  //               no button-tap callback, so this is our "clicked the link" proxy.
+  //   · visited — they tapped an Explore / scheme / contact link off the page.
+  if (body.opened === true) {
+    await supabaseAdmin.from('wa_invoices').update({ opened_at: nowISO }).eq('token', token).is('opened_at', null)
+  }
+  if (body.visited === true) {
+    await supabaseAdmin.from('wa_invoices').update({ website_visited_at: nowISO }).eq('token', token).is('website_visited_at', null)
   }
 
   return Response.json({ ok: true })

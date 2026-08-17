@@ -532,7 +532,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
         <div className="flex items-center justify-between gap-2">
           <div>
             <p className="text-xs font-semibold text-gray-700">Sent report</p>
-            <p className="text-[10px] text-gray-400">Per bill: delivered / read, reviewed, and whether they shared a birthday or anniversary. The overall funnel also lives in Campaigns → “Invoice links”.</p>
+            <p className="text-[10px] text-gray-400">Per bill: delivered / read / opened, reviewed, birthday or anniversary shared, and whether they visited the site. The overall funnel also lives in Campaigns → “Invoice links”.</p>
           </div>
           <button onClick={loadReport} disabled={loadingReport} className="btn-secondary disabled:opacity-60 whitespace-nowrap">
             {loadingReport ? 'Loading…' : report ? 'Refresh' : 'View report'}
@@ -546,9 +546,11 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
                 ['Sent', report.summary.total],
                 ['Delivered', report.summary.delivered],
                 ['Read', report.summary.read],
+                ['Opened', report.summary.opened],
                 ['Reviewed', report.summary.reviewed],
                 ['Birthday', report.summary.birthday],
                 ['Anniversary', report.summary.anniversary],
+                ['Visited site', report.summary.visitedWebsite],
               ].map(([label, n]) => (
                 <span key={label as string} className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-600">
                   {label}: <span className="font-semibold text-gray-800">{n as number}</span>
@@ -568,9 +570,11 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
                       <th className="font-medium px-1.5 py-1">Link</th>
                       <th className="font-medium px-1.5 py-1 text-center">Deliv.</th>
                       <th className="font-medium px-1.5 py-1 text-center">Read</th>
+                      <th className="font-medium px-1.5 py-1 text-center">Opened</th>
                       <th className="font-medium px-1.5 py-1 text-center">Review</th>
                       <th className="font-medium px-1.5 py-1 text-center">Bday</th>
                       <th className="font-medium px-1.5 py-1 text-center">Anniv.</th>
+                      <th className="font-medium px-1.5 py-1 text-center">Site</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -585,14 +589,16 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
                         </td>
                         <td className="px-1.5 py-1 text-center">{r.delivered ? '✓' : '–'}</td>
                         <td className="px-1.5 py-1 text-center">{r.read ? '✓' : '–'}</td>
+                        <td className="px-1.5 py-1 text-center">{r.opened ? '✓' : '–'}</td>
                         <td className="px-1.5 py-1 text-center">{r.reviewed ? (r.rating != null ? `★${r.rating}` : '✓') : '–'}</td>
                         <td className="px-1.5 py-1 text-center">{r.birthday ? '✓' : '–'}</td>
                         <td className="px-1.5 py-1 text-center">{r.anniversary ? '✓' : '–'}</td>
+                        <td className="px-1.5 py-1 text-center">{r.visitedWebsite ? '✓' : '–'}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <p className="text-[10px] text-gray-400 mt-1.5">“Opened the link” and “visited the website” tracking is coming in the next pass.</p>
+                <p className="text-[10px] text-gray-400 mt-1.5">“Opened” = the bill page loaded (WhatsApp reports no button tap, so this is the click proxy). “Site” = tapped an Explore / scheme / contact link.</p>
               </div>
             )}
           </>
