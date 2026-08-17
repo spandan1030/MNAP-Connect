@@ -31,9 +31,9 @@ export async function POST(req: NextRequest) {
   const token = (body.token ?? '').toString()
   if (!token) return Response.json({ error: 'token required' }, { status: 400 })
 
-  // Map token -> phone (+ bill for review context). Unknown token = reject.
+  // Map token -> phone (+ name/bill for context). Unknown token = reject.
   const { data: inv } = await supabaseAdmin
-    .from('wa_invoices').select('phone, bill_no').eq('token', token).maybeSingle()
+    .from('wa_invoices').select('phone, bill_no, customer_name').eq('token', token).maybeSingle()
   if (!inv?.phone) return Response.json({ error: 'Unknown token' }, { status: 404 })
   const phone = tenDigit(inv.phone)
 
@@ -42,13 +42,31 @@ export async function POST(req: NextRequest) {
   const rating = typeof body.rating === 'number' ? body.rating : parseInt(String(body.rating ?? ''), 10)
   const hasRating = Number.isInteger(rating) && rating >= 1 && rating <= 5
 
-  // Birthday / anniversary -> the contact spine (only overwrite provided fields).
+  // Birthday / anniversary -> the contact spine (the promotable customer book),
+  // keyed by phone. Normally the contact already exists (created by the Call
+  // Control sales import of the same file), so we just UPDATE the month fields —
+  // never touching the name / opt-out / provenance columns. If no contact exists
+  // yet, CREATE a minimal but NAMED, targetable one from the invoice identity
+  // (billing name + from_sales), so a birthday never lands on a nameless row.
   if (bMonth || aMonth) {
-    const patch: Record<string, unknown> = { phone }
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
     if (bMonth) patch.birthday_month = bMonth
     if (aMonth) patch.anniversary_month = aMonth
-    const { error } = await supabaseAdmin.from('contacts').upsert(patch, { onConflict: 'phone' })
-    if (error) return Response.json({ error: error.message }, { status: 500 })
+
+    const { data: updated, error: uErr } = await supabaseAdmin
+      .from('contacts').update(patch).eq('phone', phone).select('id')
+    if (uErr) return Response.json({ error: uErr.message }, { status: 500 })
+
+    if (!updated || updated.length === 0) {
+      const cleanName = inv.customer_name && inv.customer_name !== 'Unknown' ? inv.customer_name : null
+      const insert: Record<string, unknown> = {
+        phone, billing_name: inv.customer_name ?? null, name: cleanName, from_sales: true,
+      }
+      if (bMonth) insert.birthday_month = bMonth
+      if (aMonth) insert.anniversary_month = aMonth
+      const { error: iErr } = await supabaseAdmin.from('contacts').insert(insert)
+      if (iErr) return Response.json({ error: iErr.message }, { status: 500 })
+    }
   }
 
   // Review feedback -> its own log (one row per submission).

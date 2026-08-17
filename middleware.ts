@@ -24,7 +24,16 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const { pathname } = request.nextUrl
 
-  if (!user && pathname !== '/login' && pathname !== '/enroll' && pathname !== '/enroll/success' && !pathname.startsWith('/api/whatsapp/')) {
+  // Public, self-authenticating endpoints that must bypass the login redirect:
+  //  · /api/whatsapp/*          — Meta webhook (verified by signature)
+  //  · /api/invoices/feedback   — the customer app posts birthday/anniversary +
+  //                               review here server-to-server (no cookie), gated
+  //                               by the x-publish-secret shared secret. The other
+  //                               /api/invoices/* routes are admin and stay gated.
+  const isPublicApi =
+    pathname.startsWith('/api/whatsapp/') || pathname === '/api/invoices/feedback'
+
+  if (!user && pathname !== '/login' && pathname !== '/enroll' && pathname !== '/enroll/success' && !isPublicApi) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
