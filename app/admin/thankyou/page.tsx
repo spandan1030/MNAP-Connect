@@ -404,6 +404,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
   }
 
   async function send() {
+    if (!templateId) { setError('Pick a thank-you template first.'); return }
     if (!template || toSend.length === 0) return
     setSending(true); setError(null)
     try {
@@ -512,9 +513,10 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
               </div>
             ))}
           </div>
-          <button onClick={send} disabled={sending || toSend.length === 0} className="btn-primary w-full disabled:opacity-60">
+          <button onClick={send} disabled={sending || toSend.length === 0 || !templateId} className="btn-primary w-full disabled:opacity-60">
             {sending ? 'Sending…' : `Send invoice link to ${toSend.length}`}
           </button>
+          {!templateId && <p className="text-[11px] text-amber-600 text-center">Pick a thank-you template above to enable sending.</p>}
         </div>
       )}
 
