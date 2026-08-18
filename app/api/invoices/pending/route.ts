@@ -26,7 +26,10 @@ export async function GET(req: NextRequest) {
 
   const limit = Math.max(1, Math.min(1000, parseInt(req.nextUrl.searchParams.get('limit') ?? '200') || 200))
   const daysRaw = req.nextUrl.searchParams.get('days')
-  const days = daysRaw ? Math.max(1, Math.min(365, parseInt(daysRaw) || 0)) : null
+  // `days=all` (or missing) ⇒ no recency window — needed to surface historical bills.
+  const days = (daysRaw && daysRaw !== 'all')
+    ? Math.max(1, Math.min(365, parseInt(daysRaw) || 14))
+    : null
 
   let q = supabaseAdmin
     .from('wa_invoices')

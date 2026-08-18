@@ -369,6 +369,7 @@ interface ReportSummary {
 function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; setError: (s: string | null) => void }) {
   const [templateId, setTemplateId] = useState('')
   const [days, setDays] = useState(14)
+  const [allDates, setAllDates] = useState(false)   // ignore the recency window (historical bills)
   const [cap, setCap] = useState<number | ''>('')
   const [invoices, setInvoices] = useState<PendingInvoice[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -394,7 +395,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
     setError(null); setResult(null)
     setLoading(true); setLoaded(false)
     try {
-      const res = await fetch(`/api/invoices/pending?limit=500&days=${days}`)
+      const res = await fetch(`/api/invoices/pending?limit=500&days=${allDates ? 'all' : days}`)
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Could not load invoices'); setLoading(false); return }
       setInvoices(data.invoices ?? [])
@@ -408,7 +409,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
     try {
       const res = await fetch('/api/invoices/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoiceIds: toSend.map(i => i.id), templateId, cohortLabel: `Invoice link (≤${days}d)` }),
+        body: JSON.stringify({ invoiceIds: toSend.map(i => i.id), templateId, cohortLabel: allDates ? 'Invoice link (all dates)' : `Invoice link (≤${days}d)` }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Send failed'); setSending(false); return }
@@ -461,22 +462,26 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
         <div className="flex items-end gap-2">
           <label className="text-xs font-medium text-gray-600">
             Billed in the last
-            <input type="number" min={1} max={365} value={days}
+            <input type="number" min={1} max={365} value={days} disabled={allDates}
               onChange={e => { setDays(Math.max(1, Math.min(365, parseInt(e.target.value) || 14))); setLoaded(false) }}
-              className="input mt-1 text-sm w-20" />
+              className="input mt-1 text-sm w-20 disabled:opacity-40" />
           </label>
-          <span className="text-xs text-gray-500 pb-2.5">days</span>
+          <span className={`text-xs pb-2.5 ${allDates ? 'text-gray-300' : 'text-gray-500'}`}>days</span>
           <button onClick={load} disabled={loading} className="btn-primary ml-auto disabled:opacity-60">
             {loading ? 'Loading…' : 'Load invoices'}
           </button>
         </div>
+        <label className="flex items-center gap-2 text-xs font-medium text-gray-600">
+          <input type="checkbox" checked={allDates} onChange={e => { setAllDates(e.target.checked); setLoaded(false) }} className="accent-green-600" />
+          All dates (ignore recency — for historical bills)
+        </label>
         <label className="text-xs font-medium text-gray-600 block">
           Send at most (per batch)
           <input type="number" min={1} inputMode="numeric" placeholder="all eligible"
             value={cap} onChange={e => setCap(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value) || 0))}
             className="input mt-1 text-sm w-32" />
         </label>
-        <p className="text-[10px] text-gray-400">Thanks only buyers billed in the last {days} days. Each bill sends once — sent bills drop off. The link opens a private invoice page that expires in 7 days.</p>
+        <p className="text-[10px] text-gray-400">{allDates ? 'Includes bills of any date (recency ignored).' : `Thanks only buyers billed in the last ${days} days.`} Each bill sends once — sent bills drop off. The link opens a private invoice page that expires in 7 days.</p>
       </div>
 
       {result && (
@@ -492,7 +497,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
             {cap !== '' && eligible.length > toSend.length && <span className="text-gray-500 font-normal"> · sending {toSend.length} this batch</span>}
           </p>
           {invoices.length === 0 && (
-            <p className="text-[11px] text-gray-500">No unsent invoices billed in the last {days} days. Widen the days, or import a sales file (More → Import invoices).</p>
+            <p className="text-[11px] text-gray-500">{allDates ? 'No unsent invoices found. Import a sales file (More → Import invoices).' : `No unsent invoices billed in the last ${days} days. Widen the days or tick “All dates”, or import a sales file (More → Import invoices).`}</p>
           )}
           <div className="space-y-1.5 max-h-[48vh] overflow-y-auto">
             {invoices.map(i => (
