@@ -371,6 +371,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
   const [days, setDays] = useState(14)
   const [allDates, setAllDates] = useState(false)   // ignore the recency window (historical bills)
   const [cap, setCap] = useState<number | ''>('')
+  const [cfg, setCfg] = useState<{ base: string; isProd: boolean; configured: boolean; hasSecret: boolean } | null>(null)
   const [invoices, setInvoices] = useState<PendingInvoice[]>([])
   const [loaded, setLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -390,6 +391,13 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
   const template = templates.find(t => t.id === templateId) ?? null
   const eligible = invoices.filter(i => !i.optedOut)
   const toSend = cap === '' ? eligible : eligible.slice(0, Math.max(0, cap))
+
+  // One-time config health check — invoice links + snapshot publishing both come
+  // from CUSTOMER_APP_PUBLISH_URL, so warn loudly if it isn't the production app.
+  useEffect(() => {
+    fetch('/api/invoices/config').then(r => r.ok ? r.json() : null).then(d => { if (d) setCfg(d) }).catch(() => {})
+  }, [])
+  const cfgBad = cfg != null && (!cfg.configured || !cfg.isProd || !cfg.hasSecret)
 
   async function load() {
     setError(null); setResult(null)
@@ -452,6 +460,18 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
 
   return (
     <div className="space-y-3">
+      {cfgBad && cfg && (
+        <div className="card p-3 border-red-300 bg-red-50 space-y-1">
+          <p className="text-xs font-bold text-red-700">⚠ Invoice links are misconfigured — do not send</p>
+          <p className="text-[11px] text-red-600">
+            {!cfg.configured
+              ? <>CUSTOMER_APP_PUBLISH_URL isn’t set, so publishing the invoice page will fail.</>
+              : !cfg.isProd
+              ? <>Publishing to a non-production URL: <span className="font-mono break-all">{cfg.base}</span>. Links sent now go to the wrong place and the real customer page won’t have the bill. Set <span className="font-mono">CUSTOMER_APP_PUBLISH_URL</span> to <span className="font-mono break-all">https://gold.mnalankarpalace.com/api/invoices/publish</span> in Vercel (Connect → Production) and redeploy.</>
+              : <>CUSTOMER_APP_PUBLISH_SECRET isn’t set — publishing will fail.</>}
+          </p>
+        </div>
+      )}
       <div className="card p-4 space-y-3">
         <div>
           <label className="text-xs font-medium text-gray-600">Thank-you template (with invoice button)</label>
@@ -513,7 +533,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
               </div>
             ))}
           </div>
-          <button onClick={send} disabled={sending || toSend.length === 0 || !templateId} className="btn-primary w-full disabled:opacity-60">
+          <button onClick={send} disabled={sending || toSend.length === 0 || !templateId || cfgBad} className="btn-primary w-full disabled:opacity-60">
             {sending ? 'Sending…' : `Send invoice link to ${toSend.length}`}
           </button>
           {!templateId && <p className="text-[11px] text-amber-600 text-center">Pick a thank-you template above to enable sending.</p>}
