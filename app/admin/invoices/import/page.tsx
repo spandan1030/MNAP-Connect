@@ -27,9 +27,13 @@ export default function InvoiceImportPage() {
     if (!file) return
     setFileName(file.name); setResult(''); setError('')
     const buf = await file.arrayBuffer()
-    const wb = XLSX.read(buf, { type: 'array' })
+    // cellDates + dateNF is CRITICAL: without them SheetJS auto-detects an ISO date
+    // like "2018-09-14" and reformats it to "9/14/18" (2-digit year), which the
+    // server can't parse → every invoice_date lands as null. This keeps dates as
+    // clean YYYY-MM-DD while leaving every other column exactly as before.
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true, dateNF: 'yyyy-mm-dd' })
     const sheet = wb.Sheets[wb.SheetNames[0]]
-    const parsed = XLSX.utils.sheet_to_json<Row>(sheet, { defval: '', raw: false })
+    const parsed = XLSX.utils.sheet_to_json<Row>(sheet, { defval: '', raw: false, dateNF: 'yyyy-mm-dd' })
     setRows(parsed)
     setBillCount(new Set(parsed.map(r => (r.RI_VRNO ?? '').trim()).filter(Boolean)).size)
   }
@@ -56,7 +60,7 @@ export default function InvoiceImportPage() {
     if (rows.length === 0) return
     setImporting(true); setProgress(0); setResult(''); setError('')
     const batch = new Date().toISOString()
-    let imported = 0, already = 0, noPhone = 0, done = 0
+    let imported = 0, already = 0, noPhone = 0, done = 0, datesNull = 0
     try {
       const chunks = billChunks(rows)
       for (const chunk of chunks) {
@@ -70,13 +74,15 @@ export default function InvoiceImportPage() {
         imported += json.imported ?? 0
         already += json.alreadyPresent ?? 0
         noPhone += json.skippedNoPhone ?? 0
+        datesNull += json.datesNull ?? 0
         done += chunk.length
         setProgress(done)
       }
       setResult(
         `Imported ${imported} new invoice${imported === 1 ? '' : 's'}` +
         `${already ? ` · ${already} already present` : ''}` +
-        `${noPhone ? ` · ${noPhone} skipped (no phone)` : ''}.`,
+        `${noPhone ? ` · ${noPhone} skipped (no phone)` : ''}` +
+        `${datesNull ? ` · ⚠ ${datesNull} with no readable date` : ''}.`,
       )
       setRows([]); setFileName(''); setBillCount(0)
     } catch (err) {

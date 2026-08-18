@@ -46,16 +46,32 @@ function num(v: string | undefined): number | null {
   const n = Number(String(v).replace(/,/g, ''))
   return Number.isFinite(n) ? n : null
 }
-// ERP dates come as DD-MM-YYYY (sample: "14-09-2018"); accept ISO too. Returns
-// YYYY-MM-DD for a DATE column, or null if unparseable.
-function dateISO(v: string | undefined): string | null {
-  const s = (v ?? '').trim()
+const MONTHS: Record<string, string> = {
+  jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+  jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+}
+// The client sends ISO (YYYY-MM-DD) after the cellDates fix, but be liberal so a
+// format quirk never silently nulls a whole import: also accept DD-MM-YYYY /
+// DD.MM.YYYY, DD-Mon-YYYY, and Excel date serials. Returns YYYY-MM-DD or null.
+function dateISO(v: unknown): string | null {
+  if (v == null) return null
+  // Excel date serial (a bare number or numeric string in a sane range, ~1954–2119).
+  if (typeof v === 'number' || /^\d+(\.\d+)?$/.test(String(v).trim())) {
+    const n = Number(v)
+    if (n > 20000 && n < 80000) {
+      const d = new Date(Date.UTC(1899, 11, 30) + Math.round(n) * 86400000)
+      return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10)
+    }
+  }
+  const s = String(v).trim()
   if (!s) return null
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
-  const m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/)
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)                     // ISO (optionally with time)
+  let m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/)                     // DD-MM-YYYY / DD.MM.YYYY
+  if (m) { const [, d, mo, y] = m; return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}` }
+  m = s.match(/^(\d{1,2})[-/ ]([A-Za-z]{3,})[-/ ](\d{2,4})$/)                 // DD-Mon-YYYY
   if (m) {
-    const [, d, mo, y] = m
-    return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`
+    const mo = MONTHS[m[2].toLowerCase().slice(0, 3)]
+    if (mo) { const y = m[3].length === 2 ? '20' + m[3] : m[3]; return `${y}-${mo}-${m[1].padStart(2, '0')}` }
   }
   return null
 }
@@ -154,6 +170,11 @@ export async function POST(req: NextRequest) {
     }
   })
 
+  // Diagnostic: how many freshly-imported bills got a real date vs null. A high
+  // datesNull count means the date column didn't parse (surfaced in the UI).
+  const datesParsed = insertRows.filter(r => r.invoice_date != null).length
+  const datesNull = insertRows.length - datesParsed
+
   let imported = 0
   for (let i = 0; i < insertRows.length; i += 500) {
     const chunk = insertRows.slice(i, i + 500)
@@ -169,5 +190,7 @@ export async function POST(req: NextRequest) {
     bills: bills.length,
     alreadyPresent: bills.length - fresh.length,
     skippedNoPhone: noPhone,
+    datesParsed,
+    datesNull,
   })
 }
