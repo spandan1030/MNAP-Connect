@@ -356,8 +356,11 @@ function isStartKeyword(raw: string): boolean {
 }
 
 function isDesignKeyword(raw: string): boolean {
-  return /\b(design|designs|new design|necklace|ring|bangle|earring|chain|mangalsutra|pendant)\b/.test(raw.trim().toLowerCase())
-    || fuzzyHas(raw, ['design', 'designs', 'necklace', 'bangle', 'earring', 'mangalsutra', 'pendant', 'bracelet'])
+  const t = raw.trim().toLowerCase()
+  if (/\b(design|designs|new design|collection|jewell?ery)\b/.test(t)) return true
+  // Any category the customer names — in English, Hindi/Odia, or a near-typo
+  // (har, churi, kada, jhumka, tops, bali, mangalsutra…).
+  return canonicalCategory(raw) != null
 }
 
 // A product-interest message from the customer app: the app's "Share on WhatsApp"
@@ -447,14 +450,54 @@ function isPriceQuery(raw: string): boolean {
 function isMoreDesigns(raw: string): boolean {
   const t = raw.toLowerCase()
   return /\b(more|other|another|new|latest|show|send|aur|dusr[ae])\b/.test(t)
-    && /design|collection|jewell?ery|piece|photos?|pics?|catalog/.test(t)
+    && (/design|collection|jewell?ery|piece|photos?|pics?|catalog/.test(t) || canonicalCategory(t) != null)
 }
-// Which jewellery category a free-text message is about (for a targeted suggestion).
-const CATEGORY_WORDS = ['ring', 'necklace', 'bangle', 'earring', 'chain', 'mangalsutra', 'pendant', 'bracelet', 'locket', 'anklet', 'payal', 'nose pin']
-function guessCategory(raw: string): string | null {
-  const t = raw.toLowerCase()
-  for (const w of CATEGORY_WORDS) if (t.includes(w)) return w
+
+// ---------------------------------------------------------------------------
+// Category synonyms — the many ways a customer (or the store's own item_name)
+// names a piece: English + Hindi/Odia + common misspellings. Canonical keys are
+// grounded in the ACTUAL inventory item names (SHORT/LONG HAR, CHURI, KADA, BALA,
+// CHAIN, FOX CHAIN, EARRING, JHUMKA, TOPS, BALI, LADIES/GENTS RING, MANGALSUTRA,
+// MS LOCKET, GENTS BRACELET). Extend a list to teach the bot a new word.
+// ---------------------------------------------------------------------------
+const CATEGORY_SYNONYMS: Record<string, string[]> = {
+  necklace:    ['necklace', 'neckless', 'har', 'haar', 'rani haar', 'ranihaar', 'sita haar', 'sitahaar', 'mala', 'chik', 'guluband', 'short har', 'long har', 'set'],
+  bangle:      ['bangle', 'bangles', 'bangdi', 'churi', 'chudi', 'choodi', 'chudiyan', 'kada', 'kara', 'kadha', 'polla', 'pola', 'bala', 'kangan', 'gajra', 'sankha', 'noa'],
+  chain:       ['chain', 'chein', 'fox chain', 'rope chain', 'sikri', 'zanjeer'],
+  earring:     ['earring', 'earrings', 'ear ring', 'ear rings', 'tops', 'stud', 'studs', 'jhumka', 'jhumki', 'jhumke', 'jumka', 'bali', 'baali', 'kanphool', 'jhalar', 'latkan', 'dangler'],
+  ring:        ['ring', 'rings', 'anguthi', 'angoothi', 'angthi', 'mundi', 'mundri', 'finger ring', 'ladies ring', 'gents ring'],
+  mangalsutra: ['mangalsutra', 'mangal sutra', 'mangalsutr', 'mangalsutram', 'mangalya', 'black beads', 'kala moti'],
+  locket:      ['locket', 'loket', 'lockit', 'pendant', 'pendent', 'ms locket'],
+  bracelet:    ['bracelet', 'braclet', 'braslet', 'brasslet', 'brace let', 'hath phool', 'lotan'],
+}
+// The canonical category a free word or item_name belongs to (or null). Direct
+// word/phrase match first, then a typo-tolerant pass on synonyms of length ≥5
+// (so "ring" is exact-only — "bring" never becomes a ring — while "necklace",
+// "jhumka", "bracelet" etc. tolerate a one-character slip).
+function canonicalCategory(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const t = raw.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!t) return null
+  const toks = t.split(' ')
+  for (const [canon, syns] of Object.entries(CATEGORY_SYNONYMS)) {
+    for (const s of syns) {
+      if (s.includes(' ')) { if (t.includes(s)) return canon }
+      else if (toks.includes(s)) return canon
+    }
+  }
+  for (const tok of toks) {
+    if (tok.length < 5) continue
+    for (const [canon, syns] of Object.entries(CATEGORY_SYNONYMS)) {
+      for (const s of syns) {
+        if (!s.includes(' ') && s.length >= 5 && within1(tok, s)) return canon
+      }
+    }
+  }
   return null
+}
+// Free-text → canonical category (for targeting a suggestion).
+function guessCategory(raw: string): string | null {
+  return canonicalCategory(raw)
 }
 type Metal = 'gold' | 'silver' | 'diamond'
 function guessMetal(raw: string): Metal | null {
@@ -491,19 +534,20 @@ function productMetal(p: { item_name: string | null; description?: string | null
   if (karatOf(p.purity) != null || /gold|sona/.test(hay)) return 'gold'
   return null
 }
-// Category matcher for the requested item type. Broad SQL prefilter (ilike stem)
-// is narrowed here with a word-boundary test so "ring" doesn't match "earring"
-// but "rings"/"gold ring" still do.
+// Does a product's item_name belong to the requested category? Both sides are
+// mapped to a canonical category, so "har"/"short har"/"NECKLACE" all match a
+// customer's "necklace", and "churi"/"kada"/"bala" all match "bangle".
 function categoryMatches(itemName: string | null, categoryName: string): boolean {
-  if (!itemName) return false
-  const stem = categoryName.toLowerCase().trim().replace(/s$/, '')
-  if (!stem) return false
-  const esc = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`\\b${esc}s?\\b`, 'i').test(itemName)
+  const want = canonicalCategory(categoryName)
+  const got = canonicalCategory(itemName)
+  return want != null && got === want
 }
 
 const HUID_CHARGE = 50 // flat ₹ per piece (mirrors lib/price.ts)
 const GST_RATE = 0.03  // 3%
+// Default making charge when a piece has none set — mirrors catalogue-sync so the
+// chat quote matches the app's product page / calculator. Keep the two in sync.
+const DEFAULT_MAKING_PERCENT = 9
 type DailyRates = { rate_24kt: number | null; rate_22kt: number | null; rate_18kt: number | null }
 function ratePerGram(rates: DailyRates | null, karat: number | null): number | null {
   if (!rates || karat == null) return null
@@ -521,7 +565,7 @@ function computeBreakup(
   const w = p.weight ?? 0
   if (!w || !perGram) return { hidden: true, metal: 0, making: 0, huid: 0, gst: 0, total: 0 }
   const metal = w * perGram
-  const making = ((p.making_percent ?? 0) / 100) * metal
+  const making = ((p.making_percent ?? DEFAULT_MAKING_PERCENT) / 100) * metal
   const huid = HUID_CHARGE
   const taxable = metal + making + huid
   const gst = taxable * GST_RATE
@@ -735,38 +779,39 @@ type ProdRow = {
 async function suggestProducts(
   phone: string,
   threadId: string,
-  opts: { categoryName?: string | null; metal?: Metal | null } = {},
+  opts: { categoryName?: string | null; metal?: Metal | null; excludeIds?: string[]; intro?: string } = {},
 ): Promise<number> {
-  const { categoryName, metal } = opts
+  const { categoryName, metal, excludeIds, intro } = opts
+  const wantCat = categoryName ? canonicalCategory(categoryName) : null
+  const exclude = new Set(excludeIds ?? [])
   let sent = 0
   try {
+    // Fetch the published set (newest first) and match in JS on the CANONICAL
+    // category, because item names are local (HAR, CHURI, JHUMKA…) and won't
+    // contain the English stem. Catalogue is small, so this is cheap.
     const cols = 'id, item_name, app_title, weight, purity, description, stock_status, is_catalogue_only'
-    // Broad SQL prefilter (published + active, newest first). When a category is
-    // known, narrow by its stem so we don't scan the whole catalogue; precise
-    // category + metal filtering happens in JS below.
-    let q = supabaseAdmin.from('wa_products')
+    const { data } = await supabaseAdmin.from('wa_products')
       .select(cols).eq('show_in_app', true).eq('is_active', true)
-      .order('app_synced_at', { ascending: false, nullsFirst: false }).limit(40)
-    if (categoryName) {
-      const stem = categoryName.toLowerCase().trim().replace(/s$/, '')
-      if (stem) q = q.ilike('item_name', `%${stem}%`)
-    }
-    const { data } = await q
-    let list = (data ?? []) as ProdRow[]
+      .order('app_synced_at', { ascending: false, nullsFirst: false }).limit(200)
+    let list = ((data ?? []) as ProdRow[]).filter(p => !exclude.has(p.id))
 
-    // Precise matching to the demand.
-    if (categoryName) list = list.filter(p => categoryMatches(p.item_name, categoryName))
-    if (metal)        list = list.filter(p => productMetal(p) === metal)
+    if (categoryName) {
+      list = wantCat
+        ? list.filter(p => canonicalCategory(p.item_name) === wantCat)
+        : list.filter(p => categoryMatches(p.item_name, categoryName)) // unknown word → best effort
+    }
+    if (metal) list = list.filter(p => productMetal(p) === metal)
     // Prefer in-stock pieces over catalogue-only showcases (both are valid designs).
     list.sort((a, b) => {
       const ai = a.stock_status === 'in_stock' && !a.is_catalogue_only ? 0 : 1
       const bi = b.stock_status === 'in_stock' && !b.is_catalogue_only ? 0 : 1
       return ai - bi
     })
+    const shortlist = list.slice(0, 8)
 
-    if (list.length) {
+    if (shortlist.length) {
       // Primary/in-app image per candidate, in one query (no N+1).
-      const ids = list.map(p => p.id)
+      const ids = shortlist.map(p => p.id)
       const { data: imgs } = await supabaseAdmin.from('wa_product_images')
         .select('product_id, image_url, display_url, is_primary, in_app')
         .in('product_id', ids)
@@ -777,10 +822,14 @@ async function suggestProducts(
         if (!url) continue
         if (!byProduct.has(im.product_id) || im.is_primary) byProduct.set(im.product_id, url)
       }
-      for (const p of list) {
+      for (const p of shortlist) {
         if (sent >= 2) break
         const url = byProduct.get(p.id)
         if (!url) continue
+        if (sent === 0 && intro) { // lead-in, only once we know a card will follow
+          const iw = await sendTextMessage(phone, intro)
+          await logOutbound(threadId, iw, intro)
+        }
         const title = (p.app_title?.trim() || p.item_name || 'Jewellery')
         const specs = [p.weight != null ? `${p.weight} g` : null, p.purity || null].filter(Boolean).join(' · ')
         const caption = `✨ *${title}*${specs ? `\n${specs}` : ''}\n👉 View & enquire: ${APP_LINKS.product(p.id)}`
@@ -792,12 +841,12 @@ async function suggestProducts(
   } catch (err) {
     console.error('[webhook] suggestProducts failed (non-fatal):', err)
   }
-  // Close honestly: cards → browse all; a specific ask we couldn't match → tell
-  // them the team will share those designs (never paper over it with a random piece).
-  const label = categoryName ? `${categoryName.toLowerCase()} ` : ''
+  // Close honestly: cards → browse the full collection on the shop page; a specific
+  // ask we couldn't match → say the team will share those designs (never a random piece).
+  const label = wantCat ? `${wantCat} ` : ''
   const line = sent > 0
-    ? `Browse our full collection in the app 👉 ${APP_LINKS.shop()}`
-    : `Our team will share ${label}designs with you shortly 🙏 Meanwhile, explore 👉 ${APP_LINKS.shop()}`
+    ? `Browse our complete collection on the app 👉 ${APP_LINKS.shop()}`
+    : `Our team will share ${label}designs with you shortly 🙏 Browse our complete collection 👉 ${APP_LINKS.shop()}`
   const wamid = await sendTextMessage(phone, line)
   await logOutbound(threadId, wamid, line)
   return sent
@@ -873,30 +922,38 @@ async function handleProductEnquiry(
       }
       const wamid = await sendTextMessage(phone, body)
       await logOutbound(threadId, wamid, body)
-      return
+    } else {
+      // Multiple pieces — a line each + grand total of the priceable ones.
+      const lines: string[] = ['Here is the indicative pricing 🙏']
+      let grand = 0
+      let anyPriced = false
+      rows.forEach((p, i) => {
+        const b = computeBreakup(p, rates)
+        const title = (p.app_title?.trim() || p.item_name || 'Piece')
+        if (b.hidden) {
+          lines.push(`${i + 1}) ${title} — price on request`)
+        } else {
+          anyPriced = true
+          grand += b.total
+          lines.push(`${i + 1}) ${title} — *${inr(b.total)}*`)
+        }
+      })
+      if (anyPriced) lines.push(`\n*Grand total (indicative): ${inr(grand)}*`)
+      lines.push(`\n_Indicative at today's rate; final price confirmed in-store._`)
+      const body = lines.join('\n')
+      const wamid = await sendTextMessage(phone, body)
+      await logOutbound(threadId, wamid, body)
     }
 
-    // Multiple pieces — a line each + grand total of the priceable ones.
-    const lines: string[] = ['Here is the indicative pricing 🙏']
-    let grand = 0
-    let anyPriced = false
-    rows.forEach((p, i) => {
-      const b = computeBreakup(p, rates)
-      const title = (p.app_title?.trim() || p.item_name || 'Piece')
-      if (b.hidden) {
-        lines.push(`${i + 1}) ${title} — price on request`)
-      } else {
-        anyPriced = true
-        grand += b.total
-        lines.push(`${i + 1}) ${title} — *${inr(b.total)}*`)
-      }
+    // After pricing, suggest more designs of the SAME item type + metal (excluding
+    // the piece[s] they enquired about) — "customer showed interest → show similar".
+    const primary = rows[0]
+    await suggestProducts(phone, threadId, {
+      categoryName: primary.item_name,
+      metal: productMetal(primary),
+      excludeIds: rows.map(r => r.id),
+      intro: 'You may also like these designs 👇',
     })
-    if (anyPriced) lines.push(`\n*Grand total (indicative): ${inr(grand)}*`)
-    lines.push(`\n_Indicative at today's rate; final price confirmed in-store._`)
-    lines.push(`Browse more 👉 ${APP_LINKS.shop()}`)
-    const body = lines.join('\n')
-    const wamid = await sendTextMessage(phone, body)
-    await logOutbound(threadId, wamid, body)
   } catch (err) {
     console.error('[webhook] handleProductEnquiry failed:', err)
     const line = `Thank you! 🙏 Our team will share the price for this piece shortly.`
@@ -1123,15 +1180,25 @@ async function sendProductStep(phone: string, threadId: string, intent: string, 
   await logOutbound(threadId, wamid, content)
 }
 
-// Ask if they want designs sent — yes / no / talk to team
-async function sendDesignsStep(phone: string, threadId: string, intent: string, metal: string, topicId: string) {
-  const { content } = await getBotMessage('ask_designs')
-  const wamid = await sendInteractiveButtons(phone, content, [
-    { id: `dz:${intent}:${metal}:${topicId}:yes`, title: 'Yes, please' },
-    { id: `dz:${intent}:${metal}:${topicId}:no`,  title: 'No, thank you' },
-    { id: 'care',                                  title: 'Talk to our team' },
-  ])
-  await logOutbound(threadId, wamid, content)
+// They picked an item type — send matching designs straight away (no "shall we
+// send designs?" step). Tags interests, records the lead, flags a rep for curated
+// follow-up, then sends pieces matched to that category + metal.
+async function sendDesignsNow(phone: string, threadId: string, customer: { id: string } | null, intent: string, metal: string, topicId: string) {
+  let categoryName: string | null = null
+  if (topicId) {
+    const { data: t } = await supabaseAdmin.from('wa_interest_topics').select('name').eq('id', topicId).maybeSingle()
+    categoryName = (t?.name as string | undefined) ?? null
+  }
+  // Tag interests so the customer flows into the right broadcasts.
+  if (customer?.id) {
+    const newDesigns = await findTopicId('%new design%')
+    if (newDesigns) await addInterest(customer.id, newDesigns)
+    if (topicId)    await addInterest(customer.id, topicId)
+  }
+  await recordLead(threadId, customer?.id, { intent, metal, product_topic_id: topicId, wants_designs: true })
+  await flagAgent(threadId) // salesman still follows up with curated pictures
+  const m = (metal === 'gold' || metal === 'silver' || metal === 'diamond') ? metal : null
+  await suggestProducts(phone, threadId, { categoryName, metal: m, intro: 'Here are a few designs you may love 💛' })
 }
 
 async function sendCarePrompt(phone: string, threadId: string) {
@@ -1207,47 +1274,8 @@ async function handleFlowReply(
   }
   if (replyId.startsWith('pr:')) {
     const [, intent, metal, topicId] = replyId.split(':')
-    await sendDesignsStep(phone, threadId, intent, metal, topicId)
+    await sendDesignsNow(phone, threadId, customer, intent, metal, topicId)
     return
-  }
-  if (replyId.startsWith('dz:')) {
-    const [, intent, metal, topicId, ans] = replyId.split(':')
-    await handleDesignsAnswer(phone, threadId, customer, intent, metal, topicId, ans === 'yes')
-    return
-  }
-}
-
-async function handleDesignsAnswer(
-  phone: string,
-  threadId: string,
-  customer: { id: string } | null,
-  intent: string,
-  metal: string,
-  topicId: string,
-  wantsDesigns: boolean
-) {
-  // Tag interests so the customer flows into the right broadcasts
-  if (customer?.id) {
-    const newDesigns = await findTopicId('%new design%')
-    if (newDesigns) await addInterest(customer.id, newDesigns)
-    if (topicId)    await addInterest(customer.id, topicId)
-  }
-
-  await recordLead(threadId, customer?.id, { intent, metal, product_topic_id: topicId, wants_designs: wantsDesigns })
-
-  if (wantsDesigns) {
-    await flagAgent(threadId) // salesman will still follow up with curated pictures
-    // Send real pieces matched to BOTH the chosen category (the topic name) and the
-    // chosen metal — not any random product. suggestProducts owns the reply copy.
-    let categoryName: string | null = null
-    if (topicId) {
-      const { data: t } = await supabaseAdmin.from('wa_interest_topics').select('name').eq('id', topicId).maybeSingle()
-      categoryName = (t?.name as string | undefined) ?? null
-    }
-    const m = (metal === 'gold' || metal === 'silver' || metal === 'diamond') ? metal : null
-    await suggestProducts(phone, threadId, { categoryName, metal: m })
-  } else {
-    await sendBot(phone, threadId, 'closing')
   }
 }
 

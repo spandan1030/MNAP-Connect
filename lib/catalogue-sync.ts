@@ -12,6 +12,11 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { customerDb } from '@/lib/firebase/admin'
 import type { WaProduct, WaProductImage } from '@/lib/types'
 
+// Default making charge (% of metal value) when a piece has none set. Applied here
+// at sync time so the customer app's live price includes it, and mirrored by the
+// chat price responder (webhook route DEFAULT_MAKING_PERCENT) so the two agree.
+export const DEFAULT_MAKING_PERCENT = 9
+
 /** Map a free-text purity to a karat number, or null if unrecognised. */
 export function resolveKarat(purity: string | null): number | null {
   if (!purity) return null
@@ -75,7 +80,7 @@ function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: 
     karat,
     // Unmapped purity → we still publish, but the app shows "Enquire" instead of a price.
     priceHidden: karat === null,
-    makingPercent: p.making_percent ?? null,
+    makingPercent: p.making_percent ?? DEFAULT_MAKING_PERCENT,
     // Feed the 4:5 crop; fall back to the original for photos taken before cropping existed.
     image: cover?.display_url ?? cover?.image_url ?? null,
     thumb: cover?.display_thumb_url ?? cover?.thumb_url ?? cover?.image_url ?? null,

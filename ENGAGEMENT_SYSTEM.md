@@ -69,9 +69,11 @@ All in `webhook/route.ts`. **Stateless taps** (each button id encodes its path) 
 
 **Typo tolerance:** rate/offer/scheme/design/price matchers add a Levenshtein-≤1 fuzzy pass (`fuzzyHas`, tokens length ≥5 only, so "dear sir" never becomes an offers hit).
 
-**Live price responder (`handleProductEnquiry`):** resolves each `/product/<id>` link and `MN…` design code to OUR `wa_products` row (`show_in_app` only; message-pasted weights are never trusted), computes the breakup inline — `metal = weight × ₹/g(today's daily_rates); making = metal × making_percent; + ₹50 HUID; + 3% GST` (mirrors customer-app `lib/price.ts` so chat and app never disagree) — and replies with an itemised total. **Multiple** pieces → a line each + grand total. **14K/9K/silver/diamond** (no live per-gram rate) → "price on request" + handoff. Indicative-price disclaimer always appended.
+**Live price responder (`handleProductEnquiry`):** resolves each `/product/<id>` link and `MN…` design code to OUR `wa_products` row (`show_in_app` only; message-pasted weights are never trusted), computes the breakup inline — `metal = weight × ₹/g(today's daily_rates); making = metal × (making_percent ?? 9%); + ₹50 HUID; + 3% GST` (mirrors customer-app `lib/price.ts` so chat and app never disagree) — and replies with an itemised total. **Multiple** pieces → a line each + grand total. **14K/9K/silver/diamond** (no live per-gram rate) → "price on request" + handoff. Indicative-price disclaimer always appended. **After pricing, suggests similar designs** (same item type + metal, excluding the enquired piece[s]).
 
-**Matched suggestions (`suggestProducts({categoryName, metal})`):** broad SQL prefilter by category *stem* (`item_name ilike`), then precise JS filtering — `categoryMatches` (word-boundary, so "ring" ≠ "earring" but "rings"/"gold ring" match) + `productMetal` (gold via `karatOf`/keywords, silver/diamond via keywords, diamond wins its gold mount). In-stock ranked over catalogue-only; up to 2 cards. **Never sends an off-category piece** — an unmatched specific ask closes with "our team will share those designs shortly" + shop link, not a random product. Used by the designs "Yes" answer (category = topic, metal = chosen) and the "more designs" intent (category/metal guessed from text).
+**Default making = 9%** (`DEFAULT_MAKING_PERCENT`, in both `webhook/route.ts` and `lib/catalogue-sync.ts`): a piece with no `making_percent` is priced at 9% making — in the chat quote AND, via the sync default, on the app's product page/calculator (existing published rows need a **catalogue "Resync app"** to pick it up; new/edited ones auto-sync).
+
+**Matched suggestions (`suggestProducts({categoryName, metal, excludeIds, intro})`):** because item names are LOCAL (`SHORT HAR`, `CHURI`, `JHUMKA`, `TOPS`, `BALI`, `KADA`, `BALA`, `MS LOCKET`…), matching is by **canonical category**, not string stem. `CATEGORY_SYNONYMS` maps every category to its English + Hindi/Odia + misspelling variants; `canonicalCategory()` (exact word/phrase match, then a typo-tolerant pass on synonyms ≥5 chars — so "ring" is exact-only and "bring" never matches) resolves both the request and each product's `item_name` to the same canonical; `categoryMatches` compares them. `productMetal` filters gold/silver/diamond (diamond wins its gold mount). In-stock ranked over catalogue-only; up to 2 cards; **never an off-category piece** — an unmatched ask closes with "our team will share those designs" + complete-collection link. **To teach a new word, add it to a `CATEGORY_SYNONYMS` list.** Used by the designs pick (category = topic, metal = chosen), the "more designs" intent (category/metal guessed from text), and the post-enquiry "similar" suggestion.
 
 **App deep links (all PUBLIC, no login):** `APP_LINKS` builds `/shop`, `/product/<wa_products.id>`, `/gold-rate-in-rourkela`, `/calculator`, `/home?schemeIntro=1` off `CUSTOMER_APP_PUBLISH_URL` (fallback `gold.mnalankarpalace.com`). `sendBotWithCta()` appends the link line to editable copy so copy stays owner-editable while the link is always code-correct. Free-form/image sends are fine because every reply is inside WhatsApp's 24h service window.
 
@@ -89,15 +91,16 @@ Offers & Sale → [Offers] [Gold Exchange/Cash] [Talk to our team]
         Gold Exchange → exchange message  (flags a rep)
         Instant Cash  → cash message      (flags a rep)
 
-New Designs → metal [Gold/Silver/Diamond] → product (list) →
-              "Shall we send designs?" [Yes][No][Talk to our team]
-              Yes → sends up to 2 pieces MATCHED to that category+metal
-                    (photo + /product link), still flags a rep; no match → handoff line
+New Designs → metal [Gold/Silver/Diamond] → item type (list) →
+              (tap) → sends up to 2 pieces MATCHED to that category+metal
+              STRAIGHT AWAY (no "shall we send designs?" step), flags a rep;
+              no match → "team will share those designs" + complete-collection link
 
 Gold Savings Scheme → scheme message (flags a rep) + scheme page link
 
 Product enquiry (Enquire button link / MN-code, any time) →
-              live itemised price breakup (+ grand total for several), rep flagged
+              live itemised price breakup (+ grand total for several), rep flagged,
+              then "you may also like" → similar designs (same item type + metal)
 
 Talk to our team (on every step) → "type your question" → handed to a human, bot goes silent
 ```
