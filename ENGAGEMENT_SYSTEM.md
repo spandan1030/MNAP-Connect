@@ -52,14 +52,23 @@ All in `webhook/route.ts`. **Stateless taps** (each button id encodes its path) 
 
 ### Dispatch order (what an inbound message becomes)
 1. `bot_state = with_agent` → **stay silent** (a human owns the chat; even "hi" is ignored)
-2. interactive tap → `handleFlowReply`
-3. `bot_state = awaiting_care` → the typed message is their question → hand to a human
-4. greeting (`hi/hello/namaste/…`) → welcome menu
-5. `rate`/`bhav` → today's rate
-6. `offer`/`sale` → offers menu
-7. `scheme`/`savings` → Gold Savings Scheme
-8. `design`/product words → new-designs funnel
-9. **anything else → welcome menu** (we always reply; never leave a customer hanging)
+2. app product-interest (shared `gold.…` link / "interested") → note + hand to a human + shop link
+3. interactive tap → `handleFlowReply`
+4. `bot_state = awaiting_care` → the typed message is their question → hand to a human
+5. **PIN reset** (`isPinReset`, from the app's Forgot-PIN prefill) → warm ack + human handover (only the store can reset a PIN)
+6. **purchase query** (`isPurchaseQuery`, from the Bill Summary "Contact us" prefill "…about my purchase") → ack + human handover
+7. greeting (`hi/hello/namaste/…`) → welcome menu
+8. `rate`/`bhav` → today's rate (+ live-rate page link)
+9. **price/cost** (`isPriceQuery`, incl. `kitna`/`daam`) → today's rate + calculator + shop links + "send a photo to quote"
+10. `offer`/`sale` → offers menu
+11. `scheme`/`savings` → Gold Savings Scheme (+ scheme page link)
+12. **more/other/latest designs** (`isMoreDesigns`) → real product cards + shop link (skips the funnel)
+13. `design`/product words → new-designs funnel
+14. **anything else → `handleFallback`**: a real-looking question (has `?` or ≥6 words) → hand to a human + shop link; otherwise the welcome menu
+
+**Typo tolerance:** rate/offer/scheme/design/price matchers add a Levenshtein-≤1 fuzzy pass (`fuzzyHas`, tokens length ≥5 only, so "dear sir" never becomes an offers hit).
+
+**App deep links (all PUBLIC, no login):** `APP_LINKS` builds `/shop`, `/product/<wa_products.id>`, `/gold-rate-in-rourkela`, `/calculator`, `/home?schemeIntro=1` off `CUSTOMER_APP_PUBLISH_URL` (fallback `gold.mnalankarpalace.com`). `sendBotWithCta()` appends the link line to editable copy so copy stays owner-editable while the link is always code-correct. `suggestProducts()` sends up to 2 real published pieces (photo + `/product` link, queried from `wa_products` where `show_in_app`) then a browse link — used by the designs "Yes" answer and the "more designs" intent; free-form/image sends are fine because every reply is inside WhatsApp's 24h service window.
 
 ### The flow (built around 4 real customer needs)
 ```
@@ -77,9 +86,9 @@ Offers & Sale → [Offers] [Gold Exchange/Cash] [Talk to our team]
 
 New Designs → metal [Gold/Silver/Diamond] → product (list) →
               "Shall we send designs?" [Yes][No][Talk to our team]
-              Yes → flags a rep to send pictures
+              Yes → sends 2 real pieces (photo + /product link) + shop link, still flags a rep
 
-Gold Savings Scheme → scheme message (flags a rep)
+Gold Savings Scheme → scheme message (flags a rep) + scheme page link
 
 Talk to our team (on every step) → "type your question" → handed to a human, bot goes silent
 ```
@@ -87,7 +96,8 @@ Talk to our team (on every step) → "type your question" → handed to a human,
 ### Principles enforced
 - **Tapping, not typing** — every choice is a button (low-tech friendly).
 - **One message per step** — calm, not spammy.
-- **Always reply** — unrecognised text returns the menu.
+- **Self-serve first, not "team will get back"** — terminal replies carry an app deep link (and, where it fits, real product cards) so the customer can act now; the human handoff still fires in the background where a person adds value (scheme/exchange/cash/PIN/purchase).
+- **Always reply** — unrecognised text is triaged (`handleFallback`): a real question goes to a human, otherwise the menu.
 - **Human handover is sticky** — once `with_agent`, the bot stays out; greetings don't restart it.
 - **Staff control** — a `BOT ON/OFF` toggle in the chat header pauses/resumes auto-replies.
 - **Editable copy** — every message lives in `wa_bot_messages`, edited from the Engagement admin page (text + optional image where WhatsApp allows it).

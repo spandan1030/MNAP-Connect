@@ -272,21 +272,36 @@ async function handleInboundMessage(
     } else if (botState === 'awaiting_care') {
       // We asked them to type their question — this message is it. Hand to a human.
       await handleCareQuestion(phone, threadId)
+    } else if (isPinReset(text)) {
+      // Arrived from the app's "Forgot PIN" flow — acknowledge + hand to a human
+      // (only the store can reset a PIN). Checked before greeting: the prefill
+      // opens with "Hi …" but carries the real intent.
+      await handlePinReset(phone, threadId, customer)
+    } else if (isPurchaseQuery(text)) {
+      // Arrived from the Bill Summary "Contact us" ("…question about my purchase").
+      await handlePurchaseQuery(phone, threadId, customer)
     } else if (isGreeting(text)) {
       await sendWelcomeMenu(phone, threadId)
     } else if (isRateKeyword(text)) {
       await ensureRateInterest(customer?.id)
       await sendRate(phone, threadId, displayName)
+    } else if (isPriceQuery(text)) {
+      await handlePriceQuery(phone, threadId, displayName, customer)
     } else if (isOffersKeyword(text)) {
       await sendOffersMenu(phone, threadId)
     } else if (isSchemeKeyword(text)) {
       await handleScheme(phone, threadId, customer)
+    } else if (isMoreDesigns(text)) {
+      // "Send me more/other designs" — show real pieces from the catalogue + a
+      // browse link, instead of routing back through the metal→item funnel.
+      await suggestProducts(phone, threadId, { categoryName: guessCategory(text) })
     } else if (isDesignKeyword(text)) {
       await sendMetalStep(phone, threadId, 'designs')
     } else {
-      // Anything else (random text, an emoji, a photo) — always respond by
-      // showing the menu so the customer is never left without a reply.
-      await sendWelcomeMenu(phone, threadId)
+      // Anything else (random/unwanted text, an emoji, a photo): if it reads like a
+      // real question, hand it to a human so it isn't lost; otherwise show the menu.
+      // Either way, nudge towards the self-serve app.
+      await handleFallback(phone, threadId, text)
     }
   } catch (err) {
     console.error('[webhook] Automated response error:', err)
@@ -312,15 +327,17 @@ function isGreeting(raw: string): boolean {
 
 function isRateKeyword(raw: string): boolean {
   const t = raw.trim().toLowerCase()
-  return /\b(rate|rates|bhav|bhaav|gold rate|todays? rate)\b/.test(t)
+  return /\b(rate|rates|bhav|bhaav|gold rate|todays? rate)\b/.test(t) || fuzzyHas(raw, ['rates'])
 }
 
 function isOffersKeyword(raw: string): boolean {
   return /\b(offer|offers|sale|discount|deal|deals)\b/.test(raw.trim().toLowerCase())
+    || fuzzyHas(raw, ['offer', 'offers', 'discount'])
 }
 
 function isSchemeKeyword(raw: string): boolean {
   return /\b(scheme|schemes|saving|savings|sip|gold scheme|gold savings)\b/.test(raw.trim().toLowerCase())
+    || fuzzyHas(raw, ['scheme', 'schemes', 'savings'])
 }
 
 function isStopKeyword(raw: string): boolean {
@@ -333,6 +350,7 @@ function isStartKeyword(raw: string): boolean {
 
 function isDesignKeyword(raw: string): boolean {
   return /\b(design|designs|new design|necklace|ring|bangle|earring|chain|mangalsutra|pendant)\b/.test(raw.trim().toLowerCase())
+    || fuzzyHas(raw, ['design', 'designs', 'necklace', 'bangle', 'earring', 'mangalsutra', 'pendant', 'bracelet'])
 }
 
 // A product-interest message from the customer app: the app's "Share on WhatsApp"
@@ -342,6 +360,94 @@ function isAppProductInterest(raw: string): boolean {
   const t = (raw ?? '').toLowerCase()
   if (!t) return false
   return t.includes('gold.mnalankarpalace.com') || /\binterested\b/.test(t)
+}
+
+// ---------------------------------------------------------------------------
+// Customer-app deep links — power chat replies with self-serve app pages so a
+// message rarely dead-ends at "our team will get back". Same host the invoice
+// links use (overridable via CUSTOMER_APP_PUBLISH_URL); every path below is
+// PUBLIC (no login) so the link never lands on a sign-in wall.
+// ---------------------------------------------------------------------------
+function appBase(): string {
+  const pub = process.env.CUSTOMER_APP_PUBLISH_URL || ''
+  const stripped = pub.replace(/\/api\/.*$/, '').replace(/\/+$/, '')
+  return stripped || 'https://gold.mnalankarpalace.com'
+}
+function appUrl(path: string): string {
+  return appBase() + (path.startsWith('/') ? path : `/${path}`)
+}
+const APP_LINKS = {
+  shop:       () => appUrl('/shop'),
+  rate:       () => appUrl('/gold-rate-in-rourkela'),
+  calculator: () => appUrl('/calculator'),
+  scheme:     () => appUrl('/home?schemeIntro=1'),
+  product:    (id: string) => appUrl(`/product/${id}`),
+}
+
+// ---------------------------------------------------------------------------
+// Typo tolerance — Levenshtein ≤1 on a single token. Restricted to tokens of
+// length ≥5 so short, collision-prone words (rate/sale/deal) match only exactly
+// and we never re-route a greeting like "dear sir" into the offers menu.
+// ---------------------------------------------------------------------------
+function within1(a: string, b: string): boolean {
+  if (a === b) return true
+  const la = a.length, lb = b.length
+  if (Math.abs(la - lb) > 1) return false
+  let i = 0, j = 0, edits = 0
+  while (i < la && j < lb) {
+    if (a[i] === b[j]) { i++; j++; continue }
+    if (++edits > 1) return false
+    if (la > lb) i++
+    else if (lb > la) j++
+    else { i++; j++ }
+  }
+  if (i < la || j < lb) edits++
+  return edits <= 1
+}
+function fuzzyHas(raw: string, words: string[]): boolean {
+  const toks = raw.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean)
+  for (const t of toks) {
+    for (const w of words) {
+      if (t === w) return true
+      if (w.length >= 5 && t.length >= 5 && within1(t, w)) return true
+    }
+  }
+  return false
+}
+
+// The app's "Forgot PIN" flow pre-fills a WhatsApp message ("…I forgot my PIN…").
+// Only the store can reset a PIN (security), so this stays a human handoff — but
+// with a warm, informative acknowledgement instead of a bare "team will reply".
+function isPinReset(raw: string): boolean {
+  const t = raw.toLowerCase()
+  if (/\bpin\b/.test(t) && /\b(reset|forgot|forget|change|new|lost|unlock|recover|block)\b/.test(t)) return true
+  return /forgot my pin|reset my pin|pin reset|reset pin|change my pin/.test(t)
+}
+// The Bill Summary page's "Contact us" pre-fills "…a question about my purchase."
+function isPurchaseQuery(raw: string): boolean {
+  const t = raw.toLowerCase()
+  return /question about my purchase|\bmy (purchase|bill|order|invoice)\b|about my (purchase|order|bill|jewell?ery)/.test(t)
+}
+// A price/cost enquiry — distinct from the daily gold RATE (checked first). Gives
+// today's rate + the calculator/shop as self-serve, then invites a photo to quote.
+function isPriceQuery(raw: string): boolean {
+  const t = raw.toLowerCase()
+  if (/\b(price|cost|prise|coast|pricing)\b/.test(t)) return true
+  if (/\bhow much\b|\bkitn[ae]\b|\bdaam\b|\bkimat\b|\bkeemat\b/.test(t)) return true
+  return fuzzyHas(raw, ['price', 'pricing'])
+}
+// "Send me more / other / latest designs" — a request to see more of the catalogue.
+function isMoreDesigns(raw: string): boolean {
+  const t = raw.toLowerCase()
+  return /\b(more|other|another|new|latest|show|send|aur|dusr[ae])\b/.test(t)
+    && /design|collection|jewell?ery|piece|photos?|pics?|catalog/.test(t)
+}
+// Which jewellery category a free-text message is about (for a targeted suggestion).
+const CATEGORY_WORDS = ['ring', 'necklace', 'bangle', 'earring', 'chain', 'mangalsutra', 'pendant', 'bracelet', 'locket', 'anklet', 'payal', 'nose pin']
+function guessCategory(raw: string): string | null {
+  const t = raw.toLowerCase()
+  for (const w of CATEGORY_WORDS) if (t.includes(w)) return w
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -473,10 +579,12 @@ const BOT_DEFAULTS: Record<string, string> = {
   ask_metal:   'Which are you interested in?',
   ask_product: 'Which item would you like to see?',
   ask_designs: 'Shall we send you a few designs?',
-  designs_ack: 'Thank you! 🙏 Our team will send you a few designs shortly.',
+  designs_ack: 'Here are a few designs you may love 💛 Our team will also share more shortly.',
   care_prompt: 'Please type your question below. 🙏 Our team will reply to you shortly.',
   care_ack:    'Thank you! 🙏 Our team will reply to you shortly.',
   closing:     'Okay! 🙏 If you need anything, just message us anytime.',
+  pin_reset_ack: 'For your security, only our store can reset your PIN. 🙏 We will set a new one for you shortly — after that you can change it anytime from your Profile in the app.',
+  purchase_query_ack: 'Thank you for shopping with us! 🙏 Please share your question about your purchase and our team will help you right away.',
 }
 
 async function getBotMessage(key: string): Promise<{ content: string; image_url: string | null }> {
@@ -501,6 +609,82 @@ async function sendBot(phone: string, threadId: string, key: string) {
     const wamid = await sendTextMessage(phone, content)
     await logOutbound(threadId, wamid, content)
   }
+}
+
+// Same as sendBot, but appends a contextual call-to-action line (an app deep link).
+// Keeps the human copy owner-editable in wa_bot_messages while the code always
+// supplies the correct, env-derived link — so the two never drift apart.
+async function sendBotWithCta(phone: string, threadId: string, key: string, cta: string) {
+  const { content, image_url } = await getBotMessage(key)
+  const body = content ? `${content}\n\n${cta}` : cta
+  if (image_url) {
+    const wamid = await sendImageMessage(phone, image_url, body)
+    await logOutbound(threadId, wamid, body)
+  } else {
+    const wamid = await sendTextMessage(phone, body)
+    await logOutbound(threadId, wamid, body)
+  }
+}
+
+// Suggest up to 2 real published products from our own catalogue as cards (photo +
+// /product link), then a "browse all" shop link. This runs right after an inbound
+// message, so we're inside WhatsApp's 24h service window — free-form text + images
+// need no template. Best-effort: any DB hiccup still ends with the shop link, so
+// the customer is never left without a useful reply.
+async function suggestProducts(
+  phone: string,
+  threadId: string,
+  opts: { categoryName?: string | null } = {},
+): Promise<void> {
+  type Row = { id: string; item_name: string | null; app_title: string | null; weight: number | null; purity: string | null }
+  let sent = 0
+  try {
+    const cols = 'id, item_name, app_title, weight, purity'
+    const base = () => supabaseAdmin.from('wa_products')
+      .select(cols).eq('show_in_app', true).eq('is_active', true)
+      .order('app_synced_at', { ascending: false, nullsFirst: false }).limit(12)
+    let list: Row[] = []
+    if (opts.categoryName) {
+      const { data } = await base().ilike('item_name', `%${opts.categoryName}%`)
+      list = (data ?? []) as Row[]
+    }
+    if (list.length === 0) {
+      const { data } = await base()
+      list = (data ?? []) as Row[]
+    }
+    if (list.length) {
+      // Primary/in-app image per candidate, in one query (no N+1).
+      const ids = list.map(p => p.id)
+      const { data: imgs } = await supabaseAdmin.from('wa_product_images')
+        .select('product_id, image_url, display_url, is_primary, in_app')
+        .in('product_id', ids)
+      const byProduct = new Map<string, string>()
+      for (const im of (imgs ?? []) as Array<{ product_id: string; image_url: string | null; display_url: string | null; is_primary: boolean; in_app: boolean }>) {
+        if (!(im.is_primary || im.in_app)) continue
+        const url = im.display_url ?? im.image_url
+        if (!url) continue
+        if (!byProduct.has(im.product_id) || im.is_primary) byProduct.set(im.product_id, url)
+      }
+      for (const p of list) {
+        if (sent >= 2) break
+        const url = byProduct.get(p.id)
+        if (!url) continue
+        const title = (p.app_title?.trim() || p.item_name || 'Jewellery')
+        const specs = [p.weight != null ? `${p.weight} g` : null, p.purity || null].filter(Boolean).join(' · ')
+        const caption = `✨ *${title}*${specs ? `\n${specs}` : ''}\n👉 View & enquire: ${APP_LINKS.product(p.id)}`
+        const wamid = await sendImageMessage(phone, url, caption)
+        await logOutbound(threadId, wamid, `📷 ${title}`)
+        sent++
+      }
+    }
+  } catch (err) {
+    console.error('[webhook] suggestProducts failed (non-fatal):', err)
+  }
+  const line = sent > 0
+    ? `Browse our full collection in the app 👉 ${APP_LINKS.shop()}`
+    : `Explore our latest designs in the app 👉 ${APP_LINKS.shop()}`
+  const wamid = await sendTextMessage(phone, line)
+  await logOutbound(threadId, wamid, line)
 }
 
 // ---------------------------------------------------------------------------
@@ -572,7 +756,59 @@ async function handleAppProductInterest(
   await tagTopic(customer?.id, '%app product interest%')
   await recordLead(threadId, customer?.id, { intent: 'app_product' })
   await flagAgent(threadId)                       // "we will contact you with more details"
-  await sendBot(phone, threadId, 'app_interest_ack')
+  await sendBotWithCta(phone, threadId, 'app_interest_ack', `See more like it 👉 ${APP_LINKS.shop()}`)
+}
+
+// PIN reset — only the store can reset a PIN (security), so a human handles it.
+// Warmly acknowledge and explain what happens next, then hand over (with_agent
+// silences the bot so staff can take it from here without being talked over).
+async function handlePinReset(phone: string, threadId: string, customer: { id: string } | null) {
+  await recordLead(threadId, customer?.id, { intent: 'pin_reset' })
+  await flagAgent(threadId)
+  await setBotState(threadId, 'with_agent')
+  await sendBot(phone, threadId, 'pin_reset_ack')
+}
+
+// A question about an existing purchase (e.g. from the Bill Summary "Contact us").
+// Ack and hand to a human so they can answer the specific question.
+async function handlePurchaseQuery(phone: string, threadId: string, customer: { id: string } | null) {
+  await recordLead(threadId, customer?.id, { intent: 'purchase_query' })
+  await flagAgent(threadId)
+  await setBotState(threadId, 'with_agent')
+  await sendBot(phone, threadId, 'purchase_query_ack')
+}
+
+// A price/cost enquiry: send today's rate as an anchor, then the self-serve tools
+// (calculator + shop) and an invite to share a photo so staff can quote a piece.
+async function handlePriceQuery(
+  phone: string,
+  threadId: string,
+  displayName: string,
+  customer: { id: string } | null,
+) {
+  await handleAutoReply(phone, threadId, displayName) // today's rate (template or text)
+  await recordLead(threadId, customer?.id, { intent: 'price_query' })
+  const line =
+    `A piece's final price depends on its weight & making. 🙏\n` +
+    `• Estimate any piece 👉 ${APP_LINKS.calculator()}\n` +
+    `• Browse pieces with live prices 👉 ${APP_LINKS.shop()}\n\n` +
+    `Or reply with a photo of the design you like and our team will share the exact price.`
+  const wamid = await sendTextMessage(phone, line)
+  await logOutbound(threadId, wamid, line)
+  await flagAgent(threadId)
+}
+
+// Anything we didn't recognise. A message that reads like a real question is
+// handed to a human (so it isn't lost) with a self-serve nudge; a short/stray
+// message just gets the menu. Replaces the old "always re-show the menu".
+async function handleFallback(phone: string, threadId: string, text: string) {
+  const looksLikeQuestion = text.includes('?') || text.trim().split(/\s+/).filter(Boolean).length >= 6
+  if (looksLikeQuestion) {
+    await flagAgent(threadId)
+    await sendBotWithCta(phone, threadId, 'care_ack', `Meanwhile, explore our collection 👉 ${APP_LINKS.shop()}`)
+  } else {
+    await sendWelcomeMenu(phone, threadId)
+  }
 }
 
 // Gold Savings Scheme — note the interest and hand to a representative
@@ -583,19 +819,20 @@ async function handleScheme(phone: string, threadId: string, customer: { id: str
   }
   await recordLead(threadId, customer?.id, { intent: 'scheme' })
   await flagAgent(threadId)                  // representative will reach out
-  await sendBot(phone, threadId, 'scheme_info') // editable text + optional image
+  await sendBotWithCta(phone, threadId, 'scheme_info', `Learn more & get started 👉 ${APP_LINKS.scheme()}`)
 }
 
 // Today's rate, then one gentle follow-up with the next options
 async function sendRate(phone: string, threadId: string, displayName: string) {
   await handleAutoReply(phone, threadId, displayName) // sends today's rate (template or text)
   const { content } = await getBotMessage('rate_outro')
-  const wamid = await sendInteractiveButtons(phone, content, [
+  const body = `${content}\n\nSee live rates anytime 👉 ${APP_LINKS.rate()}`
+  const wamid = await sendInteractiveButtons(phone, body, [
     { id: 'i:offers',  title: 'Offers & Sale' },
     { id: 'i:designs', title: 'New Designs' },
     { id: 'care',      title: 'Talk to our team' },
   ])
-  await logOutbound(threadId, wamid, content)
+  await logOutbound(threadId, wamid, body)
 }
 
 // "Offers & Sale" → two choices: Offers, or Gold Exchange / Cash
@@ -630,21 +867,21 @@ async function tagTopic(customerId: string | undefined, namePattern: string) {
 async function sendOffer(phone: string, threadId: string, customer: { id: string } | null) {
   await tagTopic(customer?.id, '%discount%')   // "Sale & Discounts"
   await recordLead(threadId, customer?.id, { intent: 'offer' })
-  await sendBot(phone, threadId, 'offer') // owner's offer message (text and/or image)
+  await sendBotWithCta(phone, threadId, 'offer', `See our latest collection 👉 ${APP_LINKS.shop()}`)
 }
 
 async function sendExchangeInfo(phone: string, threadId: string, customer: { id: string } | null) {
   await tagTopic(customer?.id, '%exchange%')   // "Gold Exchange"
   await recordLead(threadId, customer?.id, { intent: 'exchange' })
   await flagAgent(threadId)
-  await sendBot(phone, threadId, 'exchange_info')
+  await sendBotWithCta(phone, threadId, 'exchange_info', `Estimate your gold's value 👉 ${APP_LINKS.calculator()}`)
 }
 
 async function sendCashInfo(phone: string, threadId: string, customer: { id: string } | null) {
   await tagTopic(customer?.id, '%cash%')       // "Instant Cash"
   await recordLead(threadId, customer?.id, { intent: 'cash' })
   await flagAgent(threadId)
-  await sendBot(phone, threadId, 'cash_info')
+  await sendBotWithCta(phone, threadId, 'cash_info', `Estimate your gold's value 👉 ${APP_LINKS.calculator()}`)
 }
 
 // Ask metal (gold / silver / diamond) — 3 buttons, carries the intent forward
@@ -781,8 +1018,16 @@ async function handleDesignsAnswer(
   await recordLead(threadId, customer?.id, { intent, metal, product_topic_id: topicId, wants_designs: wantsDesigns })
 
   if (wantsDesigns) {
-    await flagAgent(threadId) // salesman will send the actual design pictures
+    await flagAgent(threadId) // salesman will still follow up with curated pictures
+    // Instead of only "our team will send designs", send a couple of real pieces
+    // from that category now + a browse link. The topic name is the category.
+    let categoryName: string | null = null
+    if (topicId) {
+      const { data: t } = await supabaseAdmin.from('wa_interest_topics').select('name').eq('id', topicId).maybeSingle()
+      categoryName = (t?.name as string | undefined) ?? null
+    }
     await sendBot(phone, threadId, 'designs_ack')
+    await suggestProducts(phone, threadId, { categoryName })
   } else {
     await sendBot(phone, threadId, 'closing')
   }
