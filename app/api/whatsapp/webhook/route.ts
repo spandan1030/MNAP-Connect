@@ -260,6 +260,13 @@ async function handleInboundMessage(
     } else if (botState === 'with_agent') {
       // A human has taken over. Stay completely silent — even for "hi"/"hello" —
       // until staff resumes the bot from the chat. Don't talk over the salesman.
+    } else if (hasProductRef(text)) {
+      // A product enquiry: the app's "Enquire on WhatsApp" / Share button sent the
+      // piece's /product/<id> link (or the customer typed a design code). Answer
+      // with the live itemised price; human follow-up fires in the background.
+      // Checked before isAppProductInterest so the enquiry gets a price, not the
+      // generic "we'll contact you" (the prefill also contains "interested").
+      await handleProductEnquiry(phone, threadId, customer, text)
     } else if (isAppProductInterest(text)) {
       // They tapped "interested" / shared a gold.mnalankarpalace.com product link
       // from the app. Note the choice, hand to a human, and acknowledge. Checked
@@ -292,9 +299,9 @@ async function handleInboundMessage(
     } else if (isSchemeKeyword(text)) {
       await handleScheme(phone, threadId, customer)
     } else if (isMoreDesigns(text)) {
-      // "Send me more/other designs" — show real pieces from the catalogue + a
-      // browse link, instead of routing back through the metal→item funnel.
-      await suggestProducts(phone, threadId, { categoryName: guessCategory(text) })
+      // "Send me more/other designs" — show real pieces matched to any category +
+      // metal named in the message, instead of routing back through the funnel.
+      await suggestProducts(phone, threadId, { categoryName: guessCategory(text), metal: guessMetal(text) })
     } else if (isDesignKeyword(text)) {
       await sendMetalStep(phone, threadId, 'designs')
     } else {
@@ -448,6 +455,94 @@ function guessCategory(raw: string): string | null {
   const t = raw.toLowerCase()
   for (const w of CATEGORY_WORDS) if (t.includes(w)) return w
   return null
+}
+type Metal = 'gold' | 'silver' | 'diamond'
+function guessMetal(raw: string): Metal | null {
+  const t = raw.toLowerCase()
+  if (/diamond|heera/.test(t)) return 'diamond'
+  if (/silver|chandi/.test(t)) return 'silver'
+  if (/\bgold\b|sona|22k|24k|18k|916/.test(t)) return 'gold'
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Product matching + live price (mirrors the customer app: lib/catalogue-sync
+// resolveKarat + lib/price priceForProduct — kept inline so this hot webhook path
+// doesn't pull the Firebase admin module). The price is INDICATIVE, computed from
+// today's daily_rates exactly like the app's calculator + product page, so chat
+// and app never disagree.
+// ---------------------------------------------------------------------------
+function karatOf(purity: string | null | undefined): number | null {
+  if (!purity) return null
+  const p = purity.toLowerCase()
+  if (/(^|\D)(24|995|999)(\D|$)/.test(p) || p.includes('24k')) return 24
+  if (/(^|\D)(22|916)(\D|$)/.test(p) || p.includes('22k')) return 22
+  if (/(^|\D)(18|750)(\D|$)/.test(p) || p.includes('18k')) return 18
+  if (/(^|\D)(14|585)(\D|$)/.test(p) || p.includes('14k')) return 14
+  if (/(^|\D)(9|375)(\D|$)/.test(p) || p.includes('9k')) return 9
+  return null
+}
+// A piece's metal, for matching a "gold/silver/diamond" design request. Diamond
+// wins over its gold mount (a diamond ring is asked for as "diamond").
+function productMetal(p: { item_name: string | null; description?: string | null; purity: string | null }): Metal | null {
+  const hay = `${p.item_name ?? ''} ${p.description ?? ''} ${p.purity ?? ''}`.toLowerCase()
+  if (/diamond/.test(hay)) return 'diamond'
+  if (/silver|chandi/.test(hay)) return 'silver'
+  if (karatOf(p.purity) != null || /gold|sona/.test(hay)) return 'gold'
+  return null
+}
+// Category matcher for the requested item type. Broad SQL prefilter (ilike stem)
+// is narrowed here with a word-boundary test so "ring" doesn't match "earring"
+// but "rings"/"gold ring" still do.
+function categoryMatches(itemName: string | null, categoryName: string): boolean {
+  if (!itemName) return false
+  const stem = categoryName.toLowerCase().trim().replace(/s$/, '')
+  if (!stem) return false
+  const esc = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`\\b${esc}s?\\b`, 'i').test(itemName)
+}
+
+const HUID_CHARGE = 50 // flat ₹ per piece (mirrors lib/price.ts)
+const GST_RATE = 0.03  // 3%
+type DailyRates = { rate_24kt: number | null; rate_22kt: number | null; rate_18kt: number | null }
+function ratePerGram(rates: DailyRates | null, karat: number | null): number | null {
+  if (!rates || karat == null) return null
+  if (karat === 24) return rates.rate_24kt || null
+  if (karat === 22) return rates.rate_22kt || null
+  if (karat === 18) return rates.rate_18kt || null
+  return null // 14K/9K → no live per-gram rate → price on request
+}
+interface Breakup { hidden: boolean; metal: number; making: number; huid: number; gst: number; total: number }
+function computeBreakup(
+  p: { weight: number | null; purity: string | null; making_percent?: number | null },
+  rates: DailyRates | null,
+): Breakup {
+  const perGram = ratePerGram(rates, karatOf(p.purity))
+  const w = p.weight ?? 0
+  if (!w || !perGram) return { hidden: true, metal: 0, making: 0, huid: 0, gst: 0, total: 0 }
+  const metal = w * perGram
+  const making = ((p.making_percent ?? 0) / 100) * metal
+  const huid = HUID_CHARGE
+  const taxable = metal + making + huid
+  const gst = taxable * GST_RATE
+  return { hidden: false, metal, making, huid, gst, total: taxable + gst }
+}
+const inr = (n: number) => '₹' + Math.round(n).toLocaleString('en-IN')
+
+// Pull product references out of an inbound message: the app's "Enquire on
+// WhatsApp" / Share button pre-fills the piece's /product/<id> link, and some
+// customers type the app-facing design code (MN000123). Both let us answer with
+// the exact piece's price. De-duped, capped so a pasted wall of links can't fan out.
+function extractProductRefs(raw: string): { ids: string[]; codes: string[] } {
+  const ids = new Set<string>()
+  const codes = new Set<string>()
+  for (const m of raw.matchAll(/\/product\/([A-Za-z0-9_-]{6,})/g)) ids.add(m[1])
+  for (const m of raw.matchAll(/\bMN\d{4,}\b/gi)) codes.add(m[0].toUpperCase())
+  return { ids: [...ids].slice(0, 5), codes: [...codes].slice(0, 5) }
+}
+function hasProductRef(raw: string): boolean {
+  const { ids, codes } = extractProductRefs(raw)
+  return ids.length > 0 || codes.length > 0
 }
 
 // ---------------------------------------------------------------------------
@@ -626,32 +721,49 @@ async function sendBotWithCta(phone: string, threadId: string, key: string, cta:
   }
 }
 
-// Suggest up to 2 real published products from our own catalogue as cards (photo +
-// /product link), then a "browse all" shop link. This runs right after an inbound
-// message, so we're inside WhatsApp's 24h service window — free-form text + images
-// need no template. Best-effort: any DB hiccup still ends with the shop link, so
-// the customer is never left without a useful reply.
+// Suggest up to 2 real published products as cards (photo + /product link), then a
+// closing browse line. Matched to the customer's demand: when a category and/or
+// metal is known we only send pieces that actually match — never an off-category
+// "random" piece. Runs right after an inbound message, so we're inside WhatsApp's
+// 24h service window (free-form text + images need no template). Best-effort: a DB
+// hiccup still ends with a browse link. Returns how many cards were sent.
+type ProdRow = {
+  id: string; item_name: string | null; app_title: string | null
+  weight: number | null; purity: string | null; description: string | null
+  stock_status: string | null; is_catalogue_only: boolean | null
+}
 async function suggestProducts(
   phone: string,
   threadId: string,
-  opts: { categoryName?: string | null } = {},
-): Promise<void> {
-  type Row = { id: string; item_name: string | null; app_title: string | null; weight: number | null; purity: string | null }
+  opts: { categoryName?: string | null; metal?: Metal | null } = {},
+): Promise<number> {
+  const { categoryName, metal } = opts
   let sent = 0
   try {
-    const cols = 'id, item_name, app_title, weight, purity'
-    const base = () => supabaseAdmin.from('wa_products')
+    const cols = 'id, item_name, app_title, weight, purity, description, stock_status, is_catalogue_only'
+    // Broad SQL prefilter (published + active, newest first). When a category is
+    // known, narrow by its stem so we don't scan the whole catalogue; precise
+    // category + metal filtering happens in JS below.
+    let q = supabaseAdmin.from('wa_products')
       .select(cols).eq('show_in_app', true).eq('is_active', true)
-      .order('app_synced_at', { ascending: false, nullsFirst: false }).limit(12)
-    let list: Row[] = []
-    if (opts.categoryName) {
-      const { data } = await base().ilike('item_name', `%${opts.categoryName}%`)
-      list = (data ?? []) as Row[]
+      .order('app_synced_at', { ascending: false, nullsFirst: false }).limit(40)
+    if (categoryName) {
+      const stem = categoryName.toLowerCase().trim().replace(/s$/, '')
+      if (stem) q = q.ilike('item_name', `%${stem}%`)
     }
-    if (list.length === 0) {
-      const { data } = await base()
-      list = (data ?? []) as Row[]
-    }
+    const { data } = await q
+    let list = (data ?? []) as ProdRow[]
+
+    // Precise matching to the demand.
+    if (categoryName) list = list.filter(p => categoryMatches(p.item_name, categoryName))
+    if (metal)        list = list.filter(p => productMetal(p) === metal)
+    // Prefer in-stock pieces over catalogue-only showcases (both are valid designs).
+    list.sort((a, b) => {
+      const ai = a.stock_status === 'in_stock' && !a.is_catalogue_only ? 0 : 1
+      const bi = b.stock_status === 'in_stock' && !b.is_catalogue_only ? 0 : 1
+      return ai - bi
+    })
+
     if (list.length) {
       // Primary/in-app image per candidate, in one query (no N+1).
       const ids = list.map(p => p.id)
@@ -680,11 +792,117 @@ async function suggestProducts(
   } catch (err) {
     console.error('[webhook] suggestProducts failed (non-fatal):', err)
   }
+  // Close honestly: cards → browse all; a specific ask we couldn't match → tell
+  // them the team will share those designs (never paper over it with a random piece).
+  const label = categoryName ? `${categoryName.toLowerCase()} ` : ''
   const line = sent > 0
     ? `Browse our full collection in the app 👉 ${APP_LINKS.shop()}`
-    : `Explore our latest designs in the app 👉 ${APP_LINKS.shop()}`
+    : `Our team will share ${label}designs with you shortly 🙏 Meanwhile, explore 👉 ${APP_LINKS.shop()}`
   const wamid = await sendTextMessage(phone, line)
   await logOutbound(threadId, wamid, line)
+  return sent
+}
+
+// Answer a product enquiry with the live, itemised price. The app's "Enquire on
+// WhatsApp" / Share button already sends the piece's /product/<id> link; customers
+// may also type a design code (MN000123). We look each up in OUR catalogue (source
+// of truth — never trust weights pasted in the message), compute the breakup from
+// today's rate, and reply instantly. The human handoff still fires in the
+// background so staff can confirm/close. Bot stays active (no with_agent) so the
+// customer can keep asking.
+async function handleProductEnquiry(
+  phone: string,
+  threadId: string,
+  customer: { id: string } | null,
+  text: string,
+) {
+  const { ids, codes } = extractProductRefs(text)
+  // Background capture — same bookkeeping as an app product-interest tap.
+  await markAppProductInterest(phone).catch(() => {})
+  await tagTopic(customer?.id, '%app product interest%')
+  await recordLead(threadId, customer?.id, { intent: 'price_enquiry' })
+  await flagAgent(threadId) // human follow-up stays in the background
+
+  type Row = { id: string; item_name: string | null; app_title: string | null; weight: number | null; purity: string | null; making_percent: number | null; design_code: string | null }
+  const cols = 'id, item_name, app_title, weight, purity, making_percent, design_code'
+  const found = new Map<string, Row>()
+  try {
+    const [byId, byCode, rateRow] = await Promise.all([
+      ids.length
+        ? supabaseAdmin.from('wa_products').select(cols).eq('show_in_app', true).in('id', ids)
+        : Promise.resolve({ data: [] as Row[] }),
+      codes.length
+        ? supabaseAdmin.from('wa_products').select(cols).eq('show_in_app', true).in('design_code', codes)
+        : Promise.resolve({ data: [] as Row[] }),
+      supabaseAdmin.from('daily_rates')
+        .select('rate_24kt, rate_22kt, rate_18kt').eq('date', new Date().toLocaleDateString('en-CA')).maybeSingle(),
+    ])
+    for (const r of ((byId.data ?? []) as Row[])) found.set(r.id, r)
+    for (const r of ((byCode.data ?? []) as Row[])) found.set(r.id, r)
+    const rates = (rateRow.data as DailyRates | null) ?? null
+    const rows = [...found.values()]
+
+    if (rows.length === 0) {
+      // We recognised a link/code but don't have that (published) piece — hand off.
+      const line = `Thank you! 🙏 Let me get our team to share the price for this piece right away. Meanwhile, explore more 👉 ${APP_LINKS.shop()}`
+      const wamid = await sendTextMessage(phone, line)
+      await logOutbound(threadId, wamid, line)
+      return
+    }
+
+    if (rows.length === 1) {
+      const p = rows[0]
+      const b = computeBreakup(p, rates)
+      const title = (p.app_title?.trim() || p.item_name || 'This piece')
+      const specs = [p.weight != null ? `${p.weight} g` : null, p.purity || null].filter(Boolean).join(' · ')
+      let body: string
+      if (b.hidden) {
+        body =
+          `✨ *${title}*${specs ? `\n${specs}` : ''}\n\n` +
+          `This piece is *price on request* 🙏 Our team will share the exact price with you shortly.`
+      } else {
+        body =
+          `✨ *${title}*${specs ? `\n${specs}` : ''}\n\n` +
+          `Metal: ${inr(b.metal)}\n` +
+          `Making: ${inr(b.making)}\n` +
+          `HUID: ${inr(b.huid)}\n` +
+          `GST (3%): ${inr(b.gst)}\n` +
+          `*Total (indicative): ${inr(b.total)}*\n\n` +
+          `👉 View & save: ${APP_LINKS.product(p.id)}\n\n` +
+          `_Indicative price at today's rate; final price is confirmed in-store._`
+      }
+      const wamid = await sendTextMessage(phone, body)
+      await logOutbound(threadId, wamid, body)
+      return
+    }
+
+    // Multiple pieces — a line each + grand total of the priceable ones.
+    const lines: string[] = ['Here is the indicative pricing 🙏']
+    let grand = 0
+    let anyPriced = false
+    rows.forEach((p, i) => {
+      const b = computeBreakup(p, rates)
+      const title = (p.app_title?.trim() || p.item_name || 'Piece')
+      if (b.hidden) {
+        lines.push(`${i + 1}) ${title} — price on request`)
+      } else {
+        anyPriced = true
+        grand += b.total
+        lines.push(`${i + 1}) ${title} — *${inr(b.total)}*`)
+      }
+    })
+    if (anyPriced) lines.push(`\n*Grand total (indicative): ${inr(grand)}*`)
+    lines.push(`\n_Indicative at today's rate; final price confirmed in-store._`)
+    lines.push(`Browse more 👉 ${APP_LINKS.shop()}`)
+    const body = lines.join('\n')
+    const wamid = await sendTextMessage(phone, body)
+    await logOutbound(threadId, wamid, body)
+  } catch (err) {
+    console.error('[webhook] handleProductEnquiry failed:', err)
+    const line = `Thank you! 🙏 Our team will share the price for this piece shortly.`
+    const wamid = await sendTextMessage(phone, line)
+    await logOutbound(threadId, wamid, line)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1019,15 +1237,15 @@ async function handleDesignsAnswer(
 
   if (wantsDesigns) {
     await flagAgent(threadId) // salesman will still follow up with curated pictures
-    // Instead of only "our team will send designs", send a couple of real pieces
-    // from that category now + a browse link. The topic name is the category.
+    // Send real pieces matched to BOTH the chosen category (the topic name) and the
+    // chosen metal — not any random product. suggestProducts owns the reply copy.
     let categoryName: string | null = null
     if (topicId) {
       const { data: t } = await supabaseAdmin.from('wa_interest_topics').select('name').eq('id', topicId).maybeSingle()
       categoryName = (t?.name as string | undefined) ?? null
     }
-    await sendBot(phone, threadId, 'designs_ack')
-    await suggestProducts(phone, threadId, { categoryName })
+    const m = (metal === 'gold' || metal === 'silver' || metal === 'diamond') ? metal : null
+    await suggestProducts(phone, threadId, { categoryName, metal: m })
   } else {
     await sendBot(phone, threadId, 'closing')
   }

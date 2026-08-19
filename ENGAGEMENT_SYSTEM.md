@@ -52,23 +52,28 @@ All in `webhook/route.ts`. **Stateless taps** (each button id encodes its path) 
 
 ### Dispatch order (what an inbound message becomes)
 1. `bot_state = with_agent` → **stay silent** (a human owns the chat; even "hi" is ignored)
-2. app product-interest (shared `gold.…` link / "interested") → note + hand to a human + shop link
-3. interactive tap → `handleFlowReply`
-4. `bot_state = awaiting_care` → the typed message is their question → hand to a human
-5. **PIN reset** (`isPinReset`, from the app's Forgot-PIN prefill) → warm ack + human handover (only the store can reset a PIN)
-6. **purchase query** (`isPurchaseQuery`, from the Bill Summary "Contact us" prefill "…about my purchase") → ack + human handover
-7. greeting (`hi/hello/namaste/…`) → welcome menu
-8. `rate`/`bhav` → today's rate (+ live-rate page link)
-9. **price/cost** (`isPriceQuery`, incl. `kitna`/`daam`) → today's rate + calculator + shop links + "send a photo to quote"
-10. `offer`/`sale` → offers menu
-11. `scheme`/`savings` → Gold Savings Scheme (+ scheme page link)
-12. **more/other/latest designs** (`isMoreDesigns`) → real product cards + shop link (skips the funnel)
-13. `design`/product words → new-designs funnel
-14. **anything else → `handleFallback`**: a real-looking question (has `?` or ≥6 words) → hand to a human + shop link; otherwise the welcome menu
+2. **product enquiry** (`hasProductRef`: a `/product/<id>` link — from the app's Enquire/Share button — or a typed `MN…` design code) → **live itemised price** (`handleProductEnquiry`); human follow-up flagged in the background. Checked before #3 because the Enquire prefill also contains "interested".
+3. app product-interest (shared link / "interested", no resolvable piece) → note + hand to a human + shop link
+5. interactive tap → `handleFlowReply`
+6. `bot_state = awaiting_care` → the typed message is their question → hand to a human
+7. **PIN reset** (`isPinReset`, from the app's Forgot-PIN prefill) → warm ack + human handover (only the store can reset a PIN)
+8. **purchase query** (`isPurchaseQuery`, from the Bill Summary "Contact us" prefill "…about my purchase") → ack + human handover
+9. greeting (`hi/hello/namaste/…`) → welcome menu
+10. `rate`/`bhav` → today's rate (+ live-rate page link)
+11. **price/cost** (`isPriceQuery`, incl. `kitna`/`daam`, *no* specific piece) → today's rate + calculator + shop links + "send a photo to quote"
+12. `offer`/`sale` → offers menu
+13. `scheme`/`savings` → Gold Savings Scheme (+ scheme page link)
+14. **more/other/latest designs** (`isMoreDesigns`) → matched product cards + shop link (skips the funnel)
+15. `design`/product words → new-designs funnel
+16. **anything else → `handleFallback`**: a real-looking question (has `?` or ≥6 words) → hand to a human + shop link; otherwise the welcome menu
 
 **Typo tolerance:** rate/offer/scheme/design/price matchers add a Levenshtein-≤1 fuzzy pass (`fuzzyHas`, tokens length ≥5 only, so "dear sir" never becomes an offers hit).
 
-**App deep links (all PUBLIC, no login):** `APP_LINKS` builds `/shop`, `/product/<wa_products.id>`, `/gold-rate-in-rourkela`, `/calculator`, `/home?schemeIntro=1` off `CUSTOMER_APP_PUBLISH_URL` (fallback `gold.mnalankarpalace.com`). `sendBotWithCta()` appends the link line to editable copy so copy stays owner-editable while the link is always code-correct. `suggestProducts()` sends up to 2 real published pieces (photo + `/product` link, queried from `wa_products` where `show_in_app`) then a browse link — used by the designs "Yes" answer and the "more designs" intent; free-form/image sends are fine because every reply is inside WhatsApp's 24h service window.
+**Live price responder (`handleProductEnquiry`):** resolves each `/product/<id>` link and `MN…` design code to OUR `wa_products` row (`show_in_app` only; message-pasted weights are never trusted), computes the breakup inline — `metal = weight × ₹/g(today's daily_rates); making = metal × making_percent; + ₹50 HUID; + 3% GST` (mirrors customer-app `lib/price.ts` so chat and app never disagree) — and replies with an itemised total. **Multiple** pieces → a line each + grand total. **14K/9K/silver/diamond** (no live per-gram rate) → "price on request" + handoff. Indicative-price disclaimer always appended.
+
+**Matched suggestions (`suggestProducts({categoryName, metal})`):** broad SQL prefilter by category *stem* (`item_name ilike`), then precise JS filtering — `categoryMatches` (word-boundary, so "ring" ≠ "earring" but "rings"/"gold ring" match) + `productMetal` (gold via `karatOf`/keywords, silver/diamond via keywords, diamond wins its gold mount). In-stock ranked over catalogue-only; up to 2 cards. **Never sends an off-category piece** — an unmatched specific ask closes with "our team will share those designs shortly" + shop link, not a random product. Used by the designs "Yes" answer (category = topic, metal = chosen) and the "more designs" intent (category/metal guessed from text).
+
+**App deep links (all PUBLIC, no login):** `APP_LINKS` builds `/shop`, `/product/<wa_products.id>`, `/gold-rate-in-rourkela`, `/calculator`, `/home?schemeIntro=1` off `CUSTOMER_APP_PUBLISH_URL` (fallback `gold.mnalankarpalace.com`). `sendBotWithCta()` appends the link line to editable copy so copy stays owner-editable while the link is always code-correct. Free-form/image sends are fine because every reply is inside WhatsApp's 24h service window.
 
 ### The flow (built around 4 real customer needs)
 ```
@@ -86,9 +91,13 @@ Offers & Sale → [Offers] [Gold Exchange/Cash] [Talk to our team]
 
 New Designs → metal [Gold/Silver/Diamond] → product (list) →
               "Shall we send designs?" [Yes][No][Talk to our team]
-              Yes → sends 2 real pieces (photo + /product link) + shop link, still flags a rep
+              Yes → sends up to 2 pieces MATCHED to that category+metal
+                    (photo + /product link), still flags a rep; no match → handoff line
 
 Gold Savings Scheme → scheme message (flags a rep) + scheme page link
+
+Product enquiry (Enquire button link / MN-code, any time) →
+              live itemised price breakup (+ grand total for several), rep flagged
 
 Talk to our team (on every step) → "type your question" → handed to a human, bot goes silent
 ```
