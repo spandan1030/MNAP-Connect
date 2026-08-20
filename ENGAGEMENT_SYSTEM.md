@@ -52,8 +52,9 @@ All in `webhook/route.ts`. **Stateless taps** (each button id encodes its path) 
 
 ### Dispatch order (what an inbound message becomes)
 1. `bot_state = with_agent` → **stay silent** (a human owns the chat; even "hi" is ignored)
-2. **product enquiry** (`hasProductRef`: a `/product/<id>` link — from the app's Enquire/Share button — or a typed `MN…` design code) → **live itemised price** (`handleProductEnquiry`); human follow-up flagged in the background. Checked before #3 because the Enquire prefill also contains "interested".
-3. app product-interest (shared link / "interested", no resolvable piece) → note + hand to a human + shop link
+2. **flood guard** (`maybeThrottle`) → over `FLOOD_PER_MIN` (15) inbound in 60s: one "please hold" as they cross, then silent. Placed after stop/dnd so opting out always works.
+3. **product enquiry** (`hasProductRef`: a `/product/<id>` link — from the app's Enquire/Share button — or a typed `MN…` design code) → **live itemised price** (`handleProductEnquiry`); human follow-up flagged in the background. Before #4 because the Enquire prefill also contains "interested".
+4. app product-interest (shared link / "interested", no resolvable piece) → note + hand to a human + shop link
 5. interactive tap → `handleFlowReply`
 6. `bot_state = awaiting_care` → the typed message is their question → hand to a human
 7. **PIN reset** (`isPinReset`, from the app's Forgot-PIN prefill) → warm ack + human handover (only the store can reset a PIN)
@@ -63,17 +64,22 @@ All in `webhook/route.ts`. **Stateless taps** (each button id encodes its path) 
 11. **price/cost** (`isPriceQuery`, incl. `kitna`/`daam`, *no* specific piece) → today's rate + calculator + shop links + "send a photo to quote"
 12. `offer`/`sale` → offers menu
 13. `scheme`/`savings` → Gold Savings Scheme (+ scheme page link)
-14. **more/other/latest designs** (`isMoreDesigns`) → matched product cards + shop link (skips the funnel)
-15. `design`/product words → new-designs funnel
-16. **anything else → `handleFallback`**: a real-looking question (has `?` or ≥6 words) → hand to a human + shop link; otherwise the welcome menu
+14. **"more"/"send more"/"aur"/"next"** (`isMoreDesigns`) → more designs, **shuffled** so a repeat varies; keeps any category named ("more rings")
+15. **a specific item name typed** (`guessCategory` → any synonym/language/typo) → **recommend that category directly** (no metal re-ask); matched → cards, unmatched → "team will share" + shop
+16. **generic** `design`/`collection`/`jewellery` with no item named (`isGenericDesignRequest`) → metal → item funnel
+17. **anything else → `handleFallback`**: real-looking question (`?` or ≥6 words) → human + shop; else browse-ish (`isBrowseIsh`) → latest designs + shop; else welcome menu
 
-**Typo tolerance:** rate/offer/scheme/design/price matchers add a Levenshtein-≤1 fuzzy pass (`fuzzyHas`, tokens length ≥5 only, so "dear sir" never becomes an offers hit).
+**Dedup:** `alreadyHandled(msg.id)` drops Meta webhook redeliveries (no double enrol / double reply).
+
+**Typo tolerance:** rate/offer/scheme/price matchers add a Levenshtein-≤1 fuzzy pass (`fuzzyHas`, tokens length ≥5 only, so "dear sir" never becomes an offers hit); category matching has its own typo pass in `canonicalCategory`.
 
 **Live price responder (`handleProductEnquiry`):** resolves each `/product/<id>` link and `MN…` design code to OUR `wa_products` row (`show_in_app` only; message-pasted weights are never trusted), computes the breakup inline — `metal = weight × ₹/g(today's daily_rates); making = metal × (making_percent ?? 9%); + ₹50 HUID; + 3% GST` (mirrors customer-app `lib/price.ts` so chat and app never disagree) — and replies with an itemised total. **Multiple** pieces → a line each + grand total. **14K/9K/silver/diamond** (no live per-gram rate) → "price on request" + handoff. Indicative-price disclaimer always appended. **After pricing, suggests similar designs** (same item type + metal, excluding the enquired piece[s]).
 
 **Default making = 9%** (`DEFAULT_MAKING_PERCENT`, in both `webhook/route.ts` and `lib/catalogue-sync.ts`): a piece with no `making_percent` is priced at 9% making — in the chat quote AND, via the sync default, on the app's product page/calculator (existing published rows need a **catalogue "Resync app"** to pick it up; new/edited ones auto-sync).
 
-**Matched suggestions (`suggestProducts({categoryName, metal, excludeIds, intro})`):** because item names are LOCAL (`SHORT HAR`, `CHURI`, `JHUMKA`, `TOPS`, `BALI`, `KADA`, `BALA`, `MS LOCKET`…), matching is by **canonical category**, not string stem. `CATEGORY_SYNONYMS` maps every category to its English + Hindi/Odia + misspelling variants; `canonicalCategory()` (exact word/phrase match, then a typo-tolerant pass on synonyms ≥5 chars — so "ring" is exact-only and "bring" never matches) resolves both the request and each product's `item_name` to the same canonical; `categoryMatches` compares them. `productMetal` filters gold/silver/diamond (diamond wins its gold mount). In-stock ranked over catalogue-only; up to 2 cards; **never an off-category piece** — an unmatched ask closes with "our team will share those designs" + complete-collection link. **To teach a new word, add it to a `CATEGORY_SYNONYMS` list.** Used by the designs pick (category = topic, metal = chosen), the "more designs" intent (category/metal guessed from text), and the post-enquiry "similar" suggestion.
+**Matched suggestions (`suggestProducts({categoryName, metal, excludeIds, intro})`):** because item names are LOCAL (`SHORT HAR`, `CHURI`, `JHUMKA`, `TOPS`, `BALI`, `KADA`, `BALA`, `MS LOCKET`…), matching is by **canonical category**, not string stem. `CATEGORY_SYNONYMS` maps every category to its English + Hindi/Odia + misspelling variants; `canonicalCategory()` (exact word/phrase match, then a typo-tolerant pass on synonyms ≥5 chars — so "ring" is exact-only and "bring" never matches) resolves both the request and each product's `item_name` to the same canonical; `categoryMatches` compares them. `productMetal` filters gold/silver/diamond (diamond wins its gold mount). In-stock ranked over catalogue-only (`shuffle` randomises for "more"); up to 2 cards; **never an off-category piece** — an unmatched ask closes with "our team will share those designs" + complete-collection link, so **an item request is always routed to the app** even with no stock. Canonical keys include categories with no stock yet (anklet/`payal`, nosepin/`nath`) so those requests are still recognised and routed. **To teach a new word, add it to a `CATEGORY_SYNONYMS` list.** Used by: a typed item name (recommend directly), the designs funnel pick, the "more designs" intent, and the post-enquiry "similar" suggestion.
+
+**Abuse guards:** `alreadyHandled` (redelivery dedup) + `maybeThrottle` (≤15 automated replies/min per number; one "please hold" + shop link as they cross, then silent — staff still receives everything). Stronger, cross-instance limiting (Upstash) remains in `SECURITY_HARDENING_BACKLOG.md` F1.
 
 **App deep links (all PUBLIC, no login):** `APP_LINKS` builds `/shop`, `/product/<wa_products.id>`, `/gold-rate-in-rourkela`, `/calculator`, `/home?schemeIntro=1` off `CUSTOMER_APP_PUBLISH_URL` (fallback `gold.mnalankarpalace.com`). `sendBotWithCta()` appends the link line to editable copy so copy stays owner-editable while the link is always code-correct. Free-form/image sends are fine because every reply is inside WhatsApp's 24h service window.
 

@@ -99,6 +99,10 @@ async function handleInboundMessage(
   msg: WaInboundMessage,
   contacts: WaContact[]
 ) {
+  // Meta redelivery guard — if this exact message is already stored, do nothing
+  // (prevents duplicate enrolments and duplicate auto-replies on webhook retries).
+  if (await alreadyHandled(msg.id)) return
+
   const rawPhone: string = msg.from
   const phone = rawPhone.startsWith('91') ? rawPhone.slice(2) : rawPhone
 
@@ -260,6 +264,9 @@ async function handleInboundMessage(
     } else if (botState === 'with_agent') {
       // A human has taken over. Stay completely silent — even for "hi"/"hello" —
       // until staff resumes the bot from the chat. Don't talk over the salesman.
+    } else if (await maybeThrottle(phone, threadId)) {
+      // Flooded: one "please hold" was sent as they crossed the limit; now silent.
+      // Placed AFTER stop/dnd so opting out always works even under a flood.
     } else if (hasProductRef(text)) {
       // A product enquiry: the app's "Enquire on WhatsApp" / Share button sent the
       // piece's /product/<id> link (or the customer typed a design code). Answer
@@ -299,10 +306,15 @@ async function handleInboundMessage(
     } else if (isSchemeKeyword(text)) {
       await handleScheme(phone, threadId, customer)
     } else if (isMoreDesigns(text)) {
-      // "Send me more/other designs" — show real pieces matched to any category +
-      // metal named in the message, instead of routing back through the funnel.
+      // "send more" / "more rings" — continue with more designs (shuffled so a
+      // repeated "more" doesn't show the same two pieces).
+      await suggestProducts(phone, threadId, { categoryName: guessCategory(text), metal: guessMetal(text), shuffle: true })
+    } else if (guessCategory(text)) {
+      // The customer TYPED an item name (any language/spelling/typo) — recommend it
+      // directly instead of re-asking metal. Metal filters only if they named one.
       await suggestProducts(phone, threadId, { categoryName: guessCategory(text), metal: guessMetal(text) })
-    } else if (isDesignKeyword(text)) {
+    } else if (isGenericDesignRequest(text)) {
+      // "designs"/"collection" with no specific item → pick metal, then item.
       await sendMetalStep(phone, threadId, 'designs')
     } else {
       // Anything else (random/unwanted text, an emoji, a photo): if it reads like a
@@ -355,12 +367,16 @@ function isStartKeyword(raw: string): boolean {
   return /^(start|resume|subscribe)\b/.test(raw.trim().toLowerCase())
 }
 
-function isDesignKeyword(raw: string): boolean {
-  const t = raw.trim().toLowerCase()
-  if (/\b(design|designs|new design|collection|jewell?ery)\b/.test(t)) return true
-  // Any category the customer names — in English, Hindi/Odia, or a near-typo
-  // (har, churi, kada, jhumka, tops, bali, mangalsutra…).
-  return canonicalCategory(raw) != null
+// A generic "designs"/"collection" request with NO specific item named → funnel
+// (pick metal, then item). A SPECIFIC item name is handled separately (recommended
+// directly), so this is only the no-category case.
+function isGenericDesignRequest(raw: string): boolean {
+  return /\b(design|designs|new design|collection|jewell?ery|jewelry)\b/.test(raw.trim().toLowerCase())
+}
+// A loose "I want to look at jewellery" signal — used only as a last resort so an
+// unmatched item/browse request is still routed to the app instead of a bare menu.
+function isBrowseIsh(raw: string): boolean {
+  return /\b(show|dikha|dekh|dekhna|want|chahiye|chahie|looking|buy|purchase|gold|silver|diamond|design|collection|item|jewell?ery|jewelry)\b/.test(raw.toLowerCase())
 }
 
 // A product-interest message from the customer app: the app's "Share on WhatsApp"
@@ -447,8 +463,11 @@ function isPriceQuery(raw: string): boolean {
   return fuzzyHas(raw, ['price', 'pricing'])
 }
 // "Send me more / other / latest designs" — a request to see more of the catalogue.
+// Also catches a bare "more" / "send more" / "aur" / "next" so a follow-up never
+// falls on deaf ears.
 function isMoreDesigns(raw: string): boolean {
-  const t = raw.toLowerCase()
+  const t = raw.toLowerCase().trim()
+  if (/^(more|send more|show more|more please|more pls|1 more|one more|next|aur|aur dikhao|others?|and more)\b/.test(t)) return true
   return /\b(more|other|another|new|latest|show|send|aur|dusr[ae])\b/.test(t)
     && (/design|collection|jewell?ery|piece|photos?|pics?|catalog/.test(t) || canonicalCategory(t) != null)
 }
@@ -469,6 +488,10 @@ const CATEGORY_SYNONYMS: Record<string, string[]> = {
   mangalsutra: ['mangalsutra', 'mangal sutra', 'mangalsutr', 'mangalsutram', 'mangalya', 'black beads', 'kala moti'],
   locket:      ['locket', 'loket', 'lockit', 'pendant', 'pendent', 'ms locket'],
   bracelet:    ['bracelet', 'braclet', 'braslet', 'brasslet', 'brace let', 'hath phool', 'lotan'],
+  // These have no stock yet, but naming them means an "item request" is recognised
+  // and routed to the app (matched → cards; unmatched → "team will share" + shop).
+  anklet:      ['anklet', 'anklets', 'payal', 'paayal', 'pajeb', 'nupur', 'pancha'],
+  nosepin:     ['nose pin', 'nosepin', 'nath', 'nathni', 'nose ring', 'laung', 'phuli', 'koka'],
 }
 // The canonical category a free word or item_name belongs to (or null). Direct
 // word/phrase match first, then a typo-tolerant pass on synonyms of length ≥5
@@ -479,19 +502,17 @@ function canonicalCategory(raw: string | null | undefined): string | null {
   const t = raw.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
   if (!t) return null
   const toks = t.split(' ')
-  for (const [canon, syns] of Object.entries(CATEGORY_SYNONYMS)) {
-    for (const s of syns) {
-      if (s.includes(' ')) { if (t.includes(s)) return canon }
-      else if (toks.includes(s)) return canon
-    }
-  }
+  // Pass 1: multi-word phrases first (more specific, e.g. "nose ring" beats "ring").
+  for (const [canon, syns] of Object.entries(CATEGORY_SYNONYMS))
+    for (const s of syns) if (s.includes(' ') && t.includes(s)) return canon
+  // Pass 2: single-word exact token.
+  for (const [canon, syns] of Object.entries(CATEGORY_SYNONYMS))
+    for (const s of syns) if (!s.includes(' ') && toks.includes(s)) return canon
+  // Pass 3: typo-tolerant, synonyms ≥5 chars only (so "ring" is exact-only).
   for (const tok of toks) {
     if (tok.length < 5) continue
-    for (const [canon, syns] of Object.entries(CATEGORY_SYNONYMS)) {
-      for (const s of syns) {
-        if (!s.includes(' ') && s.length >= 5 && within1(tok, s)) return canon
-      }
-    }
+    for (const [canon, syns] of Object.entries(CATEGORY_SYNONYMS))
+      for (const s of syns) if (!s.includes(' ') && s.length >= 5 && within1(tok, s)) return canon
   }
   return null
 }
@@ -684,6 +705,36 @@ async function recordStepReply(wamid: string, buttonId: string) {
   })
 }
 
+// --- Abuse / misuse guards -------------------------------------------------
+// Meta can redeliver the same webhook; if we've already stored this exact inbound
+// message, don't process (and re-reply to) it again.
+async function alreadyHandled(waMessageId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin.from('wa_messages')
+    .select('id').eq('wa_message_id', waMessageId).limit(1).maybeSingle()
+  return !!data
+}
+// How many inbound messages this thread sent in the last `seconds`.
+async function recentInboundCount(threadId: string, seconds: number): Promise<number> {
+  const since = new Date(Date.now() - seconds * 1000).toISOString()
+  const { count } = await supabaseAdmin.from('wa_messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('thread_id', threadId).eq('direction', 'inbound').gte('created_at', since)
+  return count ?? 0
+}
+// Flood guard: cap automated replies when one number spams the chat. Sends ONE
+// gentle "please hold" as they cross the line, then stays silent (staff still sees
+// every message — needs_agent/thread are untouched). Returns true = skip the reply.
+const FLOOD_PER_MIN = 15
+async function maybeThrottle(phone: string, threadId: string): Promise<boolean> {
+  const n = await recentInboundCount(threadId, 60)
+  if (n <= FLOOD_PER_MIN) return false
+  if (n === FLOOD_PER_MIN + 1) {
+    const line = `You're sending messages very quickly 🙏 Please hold on a moment — our team will get back to you. Meanwhile, browse our collection 👉 ${APP_LINKS.shop()}`
+    try { const w = await sendTextMessage(phone, line); await logOutbound(threadId, w, line) } catch { /* best-effort */ }
+  }
+  return true
+}
+
 // Log an outbound message we sent ourselves (auto-reply / flow) and bump the thread
 async function logOutbound(threadId: string, wamid: string, body: string) {
   const now = new Date().toISOString()
@@ -779,9 +830,9 @@ type ProdRow = {
 async function suggestProducts(
   phone: string,
   threadId: string,
-  opts: { categoryName?: string | null; metal?: Metal | null; excludeIds?: string[]; intro?: string } = {},
+  opts: { categoryName?: string | null; metal?: Metal | null; excludeIds?: string[]; intro?: string; shuffle?: boolean } = {},
 ): Promise<number> {
-  const { categoryName, metal, excludeIds, intro } = opts
+  const { categoryName, metal, excludeIds, intro, shuffle } = opts
   const wantCat = categoryName ? canonicalCategory(categoryName) : null
   const exclude = new Set(excludeIds ?? [])
   let sent = 0
@@ -801,7 +852,9 @@ async function suggestProducts(
         : list.filter(p => categoryMatches(p.item_name, categoryName)) // unknown word → best effort
     }
     if (metal) list = list.filter(p => productMetal(p) === metal)
-    // Prefer in-stock pieces over catalogue-only showcases (both are valid designs).
+    // Optionally shuffle first (so a repeated "more" varies), then prefer in-stock
+    // pieces over catalogue-only showcases (both are valid designs; sort is stable).
+    if (shuffle) list.sort(() => Math.random() - 0.5)
     list.sort((a, b) => {
       const ai = a.stock_status === 'in_stock' && !a.is_catalogue_only ? 0 : 1
       const bi = b.stock_status === 'in_stock' && !b.is_catalogue_only ? 0 : 1
@@ -1081,6 +1134,10 @@ async function handleFallback(phone: string, threadId: string, text: string) {
   if (looksLikeQuestion) {
     await flagAgent(threadId)
     await sendBotWithCta(phone, threadId, 'care_ack', `Meanwhile, explore our collection 👉 ${APP_LINKS.shop()}`)
+  } else if (isBrowseIsh(text)) {
+    // An item/browse-ish ask we couldn't map to a category — still route them to the
+    // app to browse (with a couple of latest designs) rather than a bare menu.
+    await suggestProducts(phone, threadId, { shuffle: true })
   } else {
     await sendWelcomeMenu(phone, threadId)
   }
