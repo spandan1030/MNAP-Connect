@@ -616,6 +616,12 @@ export default function ConversationPage({
     if (!thread) return
     const next = thread.bot_state === 'active' ? 'with_agent' : 'active'
     await supabase.from('wa_threads').update({ bot_state: next }).eq('id', thread.id)
+    // Best-effort: stamp the pause clock so a manual "BOT OFF" also auto-resumes
+    // 6h later (webhook maybeAutoResume). Separate update so a pre-wa_064 missing
+    // column doesn't block the toggle itself.
+    await supabase.from('wa_threads')
+      .update({ bot_paused_at: next === 'with_agent' ? new Date().toISOString() : null })
+      .eq('id', thread.id)
     setThread({ ...thread, bot_state: next })
   }
 

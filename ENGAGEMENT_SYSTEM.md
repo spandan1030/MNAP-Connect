@@ -39,6 +39,7 @@ the service-role client to bypass RLS for auto-enroll/auto-reply.
 | `enrolled_via` allows `whatsapp`, `import` | `wa_009`, `wa_010` | Auto-enrolled inbound contacts; imported buyers |
 | `wa_bot_messages` | `wa_010` | **Editable bot copy** (key → content + optional image) |
 | `wa_threads.bot_state`, `wa_threads.needs_agent` | `wa_010` | Bot state machine + "needs a human" inbox flag |
+| `wa_threads.bot_paused_at` | `wa_064` | Pause clock → 6h auto-resume of a handed-off / manually-paused bot |
 | `wa_lead_captures` | `wa_010` | Captured conversation signals (intent, metal, product, wants_designs) — analytics |
 | Bot copy seeds + scheme/offers/exchange | `wa_011`, `wa_012` | Default editable messages |
 | **Topic taxonomy sync** | `wa_013` | Renames + child topics so the bot tags real topics |
@@ -51,7 +52,8 @@ All in `webhook/route.ts`. **Stateless taps** (each button id encodes its path) 
 **`bot_state`** on the thread for the cases that need memory.
 
 ### Dispatch order (what an inbound message becomes)
-1. `bot_state = with_agent` → **stay silent** (a human owns the chat; even "hi" is ignored)
+0. **auto-resume** (`maybeAutoResume`) → if `bot_state = with_agent` and the pause is ≥ **6h** old, flip back to `active` and process this inbound normally. See "Auto-resume" below.
+1. `bot_state = with_agent` → **stay silent** (a human owns the chat; even "hi" is ignored — until the 6h auto-resume above)
 2. **flood guard** (`maybeThrottle`) → over `FLOOD_PER_MIN` (15) inbound in 60s: one "please hold" as they cross, then silent. Placed after stop/dnd so opting out always works.
 3. **product enquiry** (`hasProductRef`: a `/product/<id>` link — from the app's Enquire/Share button — or a typed `MN…` design code) → **live itemised price** (`handleProductEnquiry`); human follow-up flagged in the background. Before #4 because the Enquire prefill also contains "interested".
 4. app product-interest (shared link / "interested", no resolvable piece) → note + hand to a human + shop link
@@ -116,8 +118,16 @@ Talk to our team (on every step) → "type your question" → handed to a human,
 - **One message per step** — calm, not spammy.
 - **Self-serve first, not "team will get back"** — terminal replies carry an app deep link (and, where it fits, real product cards) so the customer can act now; the human handoff still fires in the background where a person adds value (scheme/exchange/cash/PIN/purchase).
 - **Always reply** — unrecognised text is triaged (`handleFallback`): a real question goes to a human, otherwise the menu.
-- **Human handover is sticky** — once `with_agent`, the bot stays out; greetings don't restart it.
-- **Staff control** — a `BOT ON/OFF` toggle in the chat header pauses/resumes auto-replies.
+- **Human handover is sticky, but self-healing** — once `with_agent` the bot stays out; greetings don't restart it. But it isn't stuck forever: **6h after the pause, the next inbound auto-resumes the bot** (see below) so a returning customer is never ignored because staff forgot to switch it back on.
+- **Staff control** — a `BOT ON/OFF` toggle in the chat header pauses/resumes auto-replies. A manual pause is stamped the same way, so it too auto-resumes after 6h.
+
+### Auto-resume (`maybeAutoResume`, wa_064)
+Every pause to a human — the auto-handoffs (`setBotState(… 'with_agent')`) **and** the manual `BOT OFF` toggle — stamps `wa_threads.bot_paused_at = now()`. On the next inbound, if `now − bot_paused_at ≥ 6h`, the thread flips back to `active` (clearing the stamp) and the message is handled fresh. Notes:
+- **Measured from the switch-off moment**, not last activity — a manual pause always buys a full 6h of silence even on a dormant thread.
+- **Lazy, not swept** — the flip happens on the customer's next message. With no inbound there's nothing for the bot to do anyway, but the header badge keeps showing `BOT OFF` until that message arrives (no cron sweep).
+- **Fail-safe pre-migration** — reads/writes of `bot_paused_at` tolerate the column being absent (the read errors → returns false → stays paused = old behaviour), so the code is safe to deploy before wa_064 is applied. A legacy pause with a NULL stamp falls back to `last_message_at` for the 6h clock.
+- **`awaiting_care` is untouched** — it's a transient "type your question" prompt, not a handoff.
+- Tunable via `BOT_RESUME_AFTER_MS` in `webhook/route.ts`.
 - **Editable copy** — every message lives in `wa_bot_messages`, edited from the Engagement admin page (text + optional image where WhatsApp allows it).
 
 ---

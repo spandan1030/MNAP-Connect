@@ -225,6 +225,7 @@ export interface WaThread {
   last_message_preview: string | null
   unread_count: number
   bot_state: 'active' | 'awaiting_care' | 'with_agent'
+  bot_paused_at: string | null   // set when paused to a human; drives the 6h auto-resume (wa_064)
   needs_agent: boolean
   created_at: string
 }

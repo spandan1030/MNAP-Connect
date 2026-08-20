@@ -145,7 +145,7 @@ async function handleInboundMessage(
   // Customer lookup and thread lookup are independent — run in parallel
   const [{ data: existingCustomer }, { data: existingThread }] = await Promise.all([
     supabaseAdmin.from('wa_customers').select('id, name, dnd').eq('phone', phone).maybeSingle(),
-    supabaseAdmin.from('wa_threads').select('id, customer_id, bot_state').eq('phone', phone).maybeSingle(),
+    supabaseAdmin.from('wa_threads').select('id, customer_id, bot_state, last_message_at').eq('phone', phone).maybeSingle(),
   ])
 
   // --- Auto-enroll: every inbound contact lands in the customer book ---
@@ -252,9 +252,19 @@ async function handleInboundMessage(
 
   // ----- Automated, rules-based response -----
   const text     = msg.type === 'text' ? (body ?? '') : ''
-  const botState = existingThread?.bot_state ?? 'active'
+  let   botState = existingThread?.bot_state ?? 'active'
 
   try {
+    // Auto-resume: a thread handed to the sales team (or manually switched off)
+    // stays silent, but owners forget to switch it back on. 6h after the pause,
+    // the next inbound wakes the bot so a returning customer isn't ignored. We
+    // pass the PREVIOUS last_message_at (captured above, before this inbound
+    // overwrote it) as the fallback clock for pauses made before wa_064.
+    if (botState === 'with_agent' &&
+        await maybeAutoResume(threadId, existingThread?.last_message_at ?? null)) {
+      botState = 'active'
+    }
+
     if (isStopKeyword(text)) {
       // Opt out — flag DnD and never message this number again
       await handleStop(phone, threadId, customer)
@@ -671,6 +681,35 @@ async function getDesignSubtopics(): Promise<Array<{ id: string; name: string }>
 
 async function setBotState(threadId: string, state: 'active' | 'awaiting_care' | 'with_agent') {
   await supabaseAdmin.from('wa_threads').update({ bot_state: state }).eq('id', threadId)
+  // Stamp the pause clock (wa_064): set when handed to a human, clear on resume.
+  // 'awaiting_care' is a transient prompt, not a handoff, so it leaves the clock
+  // untouched. Best-effort + separate from the state update so a pre-migration
+  // missing column (error is ignored) never breaks the handoff itself.
+  const stamp = state === 'with_agent' ? new Date().toISOString()
+              : state === 'active'     ? null
+              : undefined
+  if (stamp !== undefined) {
+    await supabaseAdmin.from('wa_threads').update({ bot_paused_at: stamp }).eq('id', threadId)
+  }
+}
+
+// Hours the bot stays silent after a handoff / manual pause before the next
+// inbound auto-resumes it. Measured from the pause moment (bot_paused_at).
+const BOT_RESUME_AFTER_MS = 6 * 60 * 60 * 1000
+
+// Decide whether a 'with_agent' thread should wake up. Reads the pause clock
+// defensively: if the column isn't there yet (pre wa_064) the read errors and we
+// return false — the bot stays paused exactly as before. Post-migration, a NULL
+// clock (legacy pause) falls back to the last message time.
+async function maybeAutoResume(threadId: string, prevLastMessageAt: string | null): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from('wa_threads').select('bot_paused_at').eq('id', threadId).maybeSingle()
+  if (error) return false // column absent (pre-migration) → keep current behaviour
+  const since = (data as { bot_paused_at?: string | null } | null)?.bot_paused_at ?? prevLastMessageAt
+  if (!since) return false
+  if (Date.now() - new Date(since).getTime() < BOT_RESUME_AFTER_MS) return false
+  await setBotState(threadId, 'active') // flips to active + clears the clock
+  return true
 }
 
 async function flagAgent(threadId: string) {
