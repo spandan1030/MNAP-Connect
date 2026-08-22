@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Navbar from '@/components/ui/Navbar'
 import { applyPlaceholders } from '@/lib/utils'
+import { compressImage } from '@/lib/image'
 import type { MessageTemplate } from '@/lib/types'
 
 const CATEGORY_LABEL = {
@@ -41,6 +42,8 @@ export default function TemplatesPage() {
   const [metaVars, setMetaVars] = useState('')   // comma-separated variable names
   const [headerType, setHeaderType] = useState<'none' | 'image'>('none')
   const [headerImageUrl, setHeaderImageUrl] = useState('')
+  const [headerUploading, setHeaderUploading] = useState(false)
+  const headerFileRef = useRef<HTMLInputElement>(null)
   const [showMetaSection, setShowMetaSection] = useState(false)
   // Reach suppression (wa_032)
   const [category, setCategory] = useState('custom')
@@ -53,6 +56,32 @@ export default function TemplatesPage() {
     const { data } = await supabase.from('wa_message_templates').select('*').order('created_at', { ascending: false })
     setTemplates(data ?? [])
     setLoading(false)
+  }
+
+  // Upload a header image to the public `wa-media` bucket and drop its public URL
+  // into the field — so the store never has to leave the app to host an image.
+  // Same bucket/path pattern as the catalogue uploader; compressed to keep it well
+  // under Meta's ~5 MB header limit.
+  async function onPickHeaderImage(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-picking the same file after an error
+    if (!file) return
+    if (!file.type.startsWith('image/')) { setError('Please choose an image file (JPG or PNG).'); return }
+    setError('')
+    setHeaderUploading(true)
+    try {
+      const img = await compressImage(file)
+      const path = `template-headers/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
+      const { data: up, error: upErr } = await supabase.storage
+        .from('wa-media').upload(path, img, { upsert: false, contentType: 'image/jpeg' })
+      if (upErr || !up) { setError(`Upload failed: ${upErr?.message ?? 'unknown error'}`); return }
+      const { data: { publicUrl } } = supabase.storage.from('wa-media').getPublicUrl(up.path)
+      setHeaderImageUrl(publicUrl)
+    } catch (err) {
+      setError(`Upload failed: ${(err as Error).message}`)
+    } finally {
+      setHeaderUploading(false)
+    }
   }
 
   function insertPlaceholder(tag: string) {
@@ -348,14 +377,31 @@ export default function TemplatesPage() {
                 {headerType === 'image' && (
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-gray-500">Header image URL</label>
-                    <input
-                      type="url"
-                      value={headerImageUrl}
-                      onChange={e => setHeaderImageUrl(e.target.value)}
-                      className="input text-sm"
-                      placeholder="https://your-domain.com/image.jpg"
-                    />
-                    <p className="text-[10px] text-gray-400">Must be a publicly accessible URL. This image is sent as the header with every use of this template.</p>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={headerImageUrl}
+                        onChange={e => setHeaderImageUrl(e.target.value)}
+                        className="input text-sm flex-1"
+                        placeholder="https://your-domain.com/image.jpg"
+                      />
+                      <input
+                        ref={headerFileRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={onPickHeaderImage}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => headerFileRef.current?.click()}
+                        disabled={headerUploading}
+                        className="btn-secondary text-sm whitespace-nowrap disabled:opacity-50"
+                      >
+                        {headerUploading ? 'Uploading…' : '⬆ Upload image'}
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-gray-400">Paste a public URL, or upload an image to host it automatically. This image is sent as the header with every use of this template.</p>
                     {headerImageUrl && (
                       <img
                         src={headerImageUrl}
