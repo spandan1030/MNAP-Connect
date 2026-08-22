@@ -360,7 +360,9 @@ function isRateKeyword(raw: string): boolean {
 }
 
 function isOffersKeyword(raw: string): boolean {
-  return /\b(offer|offers|sale|discount|deal|deals)\b/.test(raw.trim().toLowerCase())
+  // Short typos (ofer/offr/offar/discout) are listed explicitly — they're below
+  // the ≥5-char gate that fuzzyHas uses, but they're clearly not real words.
+  return /\b(offer|offers|ofer|offr|offar|sale|discount|discout|discunt|deal|deals)\b/.test(raw.trim().toLowerCase())
     || fuzzyHas(raw, ['offer', 'offers', 'discount'])
 }
 
