@@ -566,6 +566,7 @@ Send module defaults to "Daily Rates" filter on first load (finds the topic name
 - Placeholder chips insert `{name}`, `{rate_24kt}`, `{rate_22kt}`, `{rate_18kt}` at cursor position
 - Preview shows sample rates (9850/9025/7380) with disclaimer
 - Actual rates fetched from `daily_rates` at send time
+- **Meta header image:** when Header = Image, the field takes a public HTTPS URL. **"⬆ Upload image"** button beside it hosts a file in-app: compresses via `lib/image` `compressImage` (~1600px JPEG q0.82, under Meta's ~5 MB limit) → uploads to the public **`wa-media`** bucket under `template-headers/` → auto-fills the public URL (`onPickHeaderImage`). Pasting a URL manually still works.
 
 **`applyPlaceholders(template, customerName, todayRates)`** — in `lib/utils.ts`. Formats rates `en-IN` with 2 decimal places; `—` if rate unavailable.
 
