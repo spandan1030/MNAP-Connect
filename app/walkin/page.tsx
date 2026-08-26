@@ -34,6 +34,8 @@ export default function WalkInPage() {
   const [timing, setTiming] = useState('')
   const [isVip, setIsVip] = useState(false)
   const [notes, setNotes] = useState('')
+  const [sendWelcome, setSendWelcome] = useState(true)
+  const [hasWelcomeTemplate, setHasWelcomeTemplate] = useState(false)
   const [salesmen, setSalesmen] = useState<Array<{ id: string; name: string; alias: string }>>([])
   const [salesmanId, setSalesmanId] = useState<string>('')
 
@@ -45,11 +47,16 @@ export default function WalkInPage() {
         const saved = typeof window !== 'undefined' ? localStorage.getItem('mc_salesman') : null
         setSalesmanId(list.find(s => s.id === saved)?.id ?? list[0]?.id ?? '')
       })
+    // Is an approved walk-in welcome template configured? If not, hide the toggle
+    // and the success card explains why nothing was sent.
+    supabase.from('wa_message_templates').select('id')
+      .eq('is_active', true).eq('category', 'walkin').limit(1)
+      .then(({ data }) => setHasWelcomeTemplate((data ?? []).length > 0))
   }, [supabase])
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [done, setDone] = useState<{ phone: string; created: boolean; signals: number } | null>(null)
+  const [done, setDone] = useState<{ phone: string; name: string; created: boolean; signals: number; welcome: string; hot: boolean } | null>(null)
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
 
   // Existing-number lookup — search the whole contact spine as the salesman types.
@@ -83,6 +90,7 @@ export default function WalkInPage() {
 
   function reset() {
     setName(''); setPhone(''); setSelected(new Set()); setTiming(''); setIsVip(false); setNotes('')
+    setSendWelcome(true)
     setError(''); setDone(null); setPicked(null); setSuggest([]); setShowSuggest(false)
   }
 
@@ -99,12 +107,12 @@ export default function WalkInPage() {
         body: JSON.stringify({
           name: name.trim(), phone: cleaned, interests: [...selected],
           timing: timing || undefined, notes: notes.trim() || undefined, isVip,
-          salesmanId: salesmanId || undefined,
+          salesmanId: salesmanId || undefined, sendWelcome,
         }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Could not save.'); setSaving(false); return }
-      setDone({ phone: data.phone, created: data.created, signals: data.signals })
+      setDone({ phone: data.phone, name: name.trim(), created: data.created, signals: data.signals, welcome: data.welcome?.status ?? 'disabled', hot: isVip })
     } catch { setError('Network error — try again.') }
     finally { setSaving(false) }
   }
@@ -127,6 +135,30 @@ export default function WalkInPage() {
               <p className="font-semibold text-gray-900">{done.created ? 'Walk-in registered' : 'Walk-in updated'}</p>
               <p className="text-xs text-gray-500 mt-0.5">+91 {done.phone} · {done.signals} signal{done.signals !== 1 ? 's' : ''} saved</p>
             </div>
+
+            {/* Touch 0 outcome — exactly what the automated welcome did. */}
+            <WelcomeStatus status={done.welcome} />
+
+            {/* Hot lead → the salesman follows up personally, on top of the auto-message. */}
+            {done.hot && (
+              <div className="rounded-xl border-2 border-amber-400 bg-amber-50 p-3 text-left space-y-2">
+                <p className="text-sm font-bold text-amber-900 flex items-center gap-1.5">
+                  <span>🔥</span> Hot lead — follow up personally
+                </p>
+                <p className="text-[11px] text-amber-700 leading-snug">
+                  The welcome message is automated. For a hot lead, add a personal touch now — open their WhatsApp and say hello yourself.
+                </p>
+                <a
+                  href={`https://wa.me/91${done.phone}?text=${encodeURIComponent(`Hi ${done.name || 'there'}! It was lovely having you at M N Alankar Palace today. I'd be happy to help you find exactly what you're looking for — do reply here anytime. 🙏`)}`}
+                  target="_blank" rel="noopener noreferrer"
+                  className="btn-primary w-full inline-flex items-center justify-center gap-2 !bg-green-600 !border-green-600"
+                >
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M.057 24l1.687-6.163a11.867 11.867 0 01-1.587-5.945C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 018.413 3.488 11.824 11.824 0 013.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 01-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884a9.86 9.86 0 001.51 5.26l-.999 3.648 3.978-.607z"/></svg>
+                  Message {done.name?.split(' ')[0] || 'them'} on WhatsApp
+                </a>
+              </div>
+            )}
+
             <div className="flex gap-2">
               <button onClick={() => setPeekPhone(done.phone)} className="btn-secondary flex-1">View profile</button>
               <button onClick={reset} className="btn-primary flex-1">Register another</button>
@@ -213,6 +245,15 @@ export default function WalkInPage() {
                 <input type="checkbox" checked={isVip} onChange={e => setIsVip(e.target.checked)} />
                 Mark as hot lead (priority follow-up)
               </label>
+              {hasWelcomeTemplate && (
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input type="checkbox" checked={sendWelcome} onChange={e => setSendWelcome(e.target.checked)} className="mt-0.5" />
+                  <span>
+                    Send welcome WhatsApp now
+                    <span className="block text-[11px] text-gray-400">Today&apos;s rate + fresh designs. Skipped automatically if they&apos;ve opted out or were messaged recently.</span>
+                  </span>
+                </label>
+              )}
               <input value={notes} onChange={e => setNotes(e.target.value)} className="input text-sm" placeholder="Note (optional) — e.g. wants bridal set for March wedding" />
             </div>
 
@@ -228,4 +269,26 @@ export default function WalkInPage() {
       <CustomerPeek phone={peekPhone} onClose={() => setPeekPhone(null)} />
     </div>
   )
+}
+
+// The Touch 0 outcome, told plainly so the salesman knows whether to follow up.
+function WelcomeStatus({ status }: { status: string }) {
+  const MAP: Record<string, { tone: string; text: string }> = {
+    sent:               { tone: 'green', text: '✓ Welcome message sent on WhatsApp' },
+    skipped_suppressed: { tone: 'gray',  text: 'Already messaged recently — welcome skipped (no repeat)' },
+    skipped_dnc:        { tone: 'gray',  text: 'Customer has opted out — no message sent' },
+    skipped_no_rate:    { tone: 'amber', text: "Today's rate isn't set yet — welcome held. Set the rate, then message manually." },
+    no_template:        { tone: 'amber', text: 'No welcome template set up yet — nothing sent.' },
+    disabled:           { tone: 'gray',  text: 'Welcome message was turned off for this walk-in.' },
+    failed:             { tone: 'red',   text: "Welcome couldn't be sent — please message them manually." },
+    error:              { tone: 'red',   text: "Welcome couldn't be sent — please message them manually." },
+  }
+  const m = MAP[status] ?? MAP.error
+  const cls: Record<string, string> = {
+    green: 'bg-green-50 border-green-200 text-green-700',
+    gray:  'bg-gray-50 border-gray-200 text-gray-500',
+    amber: 'bg-amber-50 border-amber-200 text-amber-800',
+    red:   'bg-red-50 border-red-200 text-red-700',
+  }
+  return <p className={`rounded-lg border px-3 py-2 text-[12px] font-medium ${cls[m.tone]}`}>{m.text}</p>
 }

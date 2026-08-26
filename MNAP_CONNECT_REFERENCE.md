@@ -984,6 +984,20 @@ One phone-keyed layer converging interest signals from **all sources** onto one 
 
 ---
 
+## Walk-in Warm-up — Touch 0 auto-welcome (2026-08-26, no migration)
+
+**What:** the moment a salesman registers a walk-in, one approved WhatsApp template is auto-sent to the customer ("today's rate + fresh designs + festival/scheme tie-in") so the counter conversation continues on WhatsApp. Immediate touch only — **no scheduler / no follow-up drip** (that's a later phase).
+
+- **Template:** a `wa_message_templates` row with **`category='walkin'`** (new category, registered in `/admin/templates`). The **active, most-recent** walkin template is auto-picked (mirrors the thank-you pattern) — keep only ONE active. Must be a **Marketing** Meta template. Draft copy + setup steps in **`WALKIN_WELCOME_TEMPLATE.md`**.
+- **Send path:** `/api/walkin` calls `dispatchTemplate({ cohortLabel:'walkin_touch0', campaignRef:'walkin', limit:1 })` after saving the visit + signals. All spend-safety is inherited from dispatch — **opt-out honoured, and a repeat visitor inside the template's suppression window is NOT re-blasted** (14-day default; the send is ledgered like any other). Rate placeholders fill from today's `daily_rates`.
+- **Own guard — no "rate is —" messages:** if the template uses a `rate_*` placeholder but today's rate isn't set, the welcome is **held** (`skipped_no_rate`) instead of sending a broken rate. Salesman is told to set the rate / message manually.
+- **Form (`/walkin`):** a **"Send welcome WhatsApp now"** toggle (default ON, shown only when a walkin template exists). Success card reports the real outcome via `WelcomeStatus`: `sent` / `skipped_suppressed` / `skipped_dnc` / `skipped_no_rate` / `no_template` / `disabled` / `failed`.
+- **Hot lead → BOTH.** The auto-message still goes out, **and** the success card shows a bold "🔥 Hot lead — follow up personally" banner with a one-tap **wa.me** link (pre-filled personal greeting) so the salesman adds a human touch on top of the automation. On-screen only — no separate owner ping.
+- **Failure isolation:** a failed/blocked welcome never loses the walk-in — the contact + visit + signals are already saved; the welcome is best-effort and only reported.
+- **Files:** `app/api/walkin/route.ts` (send block + `welcome` in response), `app/walkin/page.tsx` (toggle, template detection, `WelcomeStatus`, hot-lead wa.me banner), `app/admin/templates/page.tsx` (`walkin` category).
+
+---
+
 ## 18C. Reach — Unified Cohort Messaging (`wa_032`, Phase 1 — 2026-07-15)
 
 Message **any cohort** assembled from call signals, chat signals, markers, or a pasted number list — with a phone-keyed **send ledger** that prevents paying to send the same template twice.

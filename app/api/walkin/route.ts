@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { INTEREST_KEYS } from '@/lib/signals'
+import { dispatchTemplate } from '@/lib/reach/dispatch'
 
 // Walk-in registration — a salesman logs an in-store visitor and the signals
 // they showed. Treated exactly like chat/call: the visitor becomes a Type B
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest) {
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = (await req.json().catch(() => ({}))) as {
-    name?: string; phone?: string; interests?: string[]; timing?: string; notes?: string; isVip?: boolean; salesmanId?: string
+    name?: string; phone?: string; interests?: string[]; timing?: string; notes?: string; isVip?: boolean; salesmanId?: string; sendWelcome?: boolean
   }
   const name = (body.name ?? '').trim()
   const phone = tenDigit(body.phone ?? '')
@@ -108,5 +109,63 @@ export async function POST(req: NextRequest) {
     if (error) return Response.json({ error: error.message, customerId }, { status: 500 })
   }
 
-  return Response.json({ customerId, phone, created, signals: interests.length })
+  // ── Touch 0: immediate welcome WhatsApp (today's rate + fresh designs) ───────
+  // Fire ONE approved template (category='walkin') the moment a walk-in is logged,
+  // so the counter conversation continues on WhatsApp. All the money-safety lives
+  // in dispatchTemplate: opt-out is honoured, and a repeat visitor within the
+  // template's suppression window is NOT re-blasted. We add one guard of our own —
+  // if the template leads with today's rate but no rate is set yet, we hold the
+  // send rather than deliver a "rate is —" message. `welcome` reports the outcome
+  // so the salesman sees exactly what happened (and can act if it was skipped).
+  let welcome: { status: string } = { status: 'disabled' }
+  if (body.sendWelcome !== false) {
+    welcome = { status: 'no_template' }
+    const { data: tpl } = await supabaseAdmin.from('wa_message_templates')
+      .select('id, meta_variables')
+      .eq('is_active', true).eq('category', 'walkin')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+
+    if (tpl?.id) {
+      try {
+        // If the copy uses a rate placeholder, make sure today's rate exists first.
+        const vars = (tpl.meta_variables as string[] | null) ?? []
+        const needsRate = vars.some(v => v.toLowerCase().startsWith('rate_'))
+        let rateReady = true
+        if (needsRate) {
+          const todayStr = new Date().toLocaleDateString('en-CA')
+          const { data: rate } = await supabaseAdmin.from('daily_rates')
+            .select('rate_24kt, rate_22kt, rate_18kt').eq('date', todayStr).maybeSingle()
+          rateReady = !!rate && vars.every(v => {
+            const k = v.toLowerCase()
+            if (k === 'rate_24kt') return rate.rate_24kt != null
+            if (k === 'rate_22kt') return rate.rate_22kt != null
+            if (k === 'rate_18kt') return rate.rate_18kt != null
+            return true
+          })
+        }
+
+        if (!rateReady) {
+          welcome = { status: 'skipped_no_rate' }
+        } else {
+          const r = await dispatchTemplate({
+            templateId: tpl.id, recipients: [{ phone, name }], userId: user.id,
+            cohortLabel: 'walkin_touch0', campaignRef: 'walkin', limit: 1,
+          })
+          welcome = { status:
+            r.error ? 'error'
+            : r.sent > 0 ? 'sent'
+            : r.skippedDnc > 0 ? 'skipped_dnc'
+            : r.skippedSuppressed > 0 ? 'skipped_suppressed'
+            : r.failed > 0 ? 'failed'
+            : 'error' }
+        }
+      } catch (e) {
+        // A failed welcome must never lose the walk-in — it is already saved.
+        console.error('[walkin] welcome send failed:', (e as Error).message)
+        welcome = { status: 'error' }
+      }
+    }
+  }
+
+  return Response.json({ customerId, phone, created, signals: interests.length, welcome })
 }
