@@ -131,11 +131,22 @@ export async function POST(req: NextRequest) {
   const ledgerRows: Array<Record<string, unknown>> = []
   const results: Array<{ billNo: string; status: string; error?: string }> = []
   const sentMembers = new Map<string, string | null>() // phone -> name, for wa_campaign_members
-  let sent = 0, failed = 0, skippedDnc = 0
+  let sent = 0, failed = 0, skippedDnc = 0, skippedInvalid = 0
 
   for (const inv of invoices) {
     const p = tenDigit(inv.phone)
     if (optedOut.has(p)) { skippedDnc++; results.push({ billNo: inv.bill_no, status: 'skipped_dnc' }); continue }
+
+    // Guard: never send a nonsensical Bill Summary. A net-negative bill is a pure
+    // refund (the customer returned more than they bought), and a bill with no line
+    // items would render an empty page. Skip both — left unsent, never published.
+    const itemCount = Array.isArray(inv.line_items) ? inv.line_items.length : 0
+    const negative = (inv.net_amount != null && inv.net_amount < 0) || (inv.payable != null && inv.payable < 0)
+    if (itemCount === 0 || negative) {
+      skippedInvalid++
+      results.push({ billNo: inv.bill_no, status: itemCount === 0 ? 'skipped_no_items' : 'skipped_negative' })
+      continue
+    }
 
     // 2. Publish first — a failure here means we never send a link to a missing page.
     const snapshot: InvoiceSnapshot = {
@@ -215,5 +226,5 @@ export async function POST(req: NextRequest) {
     }).eq('id', invoiceCampaignId)
   }
 
-  return Response.json({ sent, failed, skippedDnc, total: invoices.length, results })
+  return Response.json({ sent, failed, skippedDnc, skippedInvalid, total: invoices.length, results })
 }

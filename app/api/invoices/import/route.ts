@@ -17,7 +17,12 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 //
 // Expected columns (raw ERP names, only the ones we render):
 //   RI_VRNO RI_DATE RI_CST_NAME RI_PHN_NO RI_AMT RI_TAX_AMT RI_NET_AMT OA_AMT AR_AMT
-//   ITM_NAME PURT_NAME RIO_NET_WT BCM_BRCD RIO_TOTAL_AMT
+//   ITM_NAME PURT_NAME RIO_NET_WT BCM_BRCD RIO_TOTAL_AMT RIO_SALE_TYPE
+//
+// RIO_SALE_TYPE ('Sale' | 'Return') tells sale items apart from a NEW item the
+// customer handed back (a sales return). The bill total foots as Σ Sale − Σ Return,
+// so a Return line is stored with a NEGATIVE amount. (This is unrelated to old-gold
+// exchange, OA_AMT, which is a payment method, not an item.)
 
 interface RawRow {
   RI_VRNO?: string
@@ -34,6 +39,7 @@ interface RawRow {
   RIO_NET_WT?: string
   BCM_BRCD?: string
   RIO_TOTAL_AMT?: string
+  RIO_SALE_TYPE?: string
 }
 
 function normPhone(raw: string | undefined): string | null {
@@ -90,7 +96,7 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { rows, batch } = (await req.json()) as { rows: RawRow[]; batch?: string }
+  const { rows, batch, update } = (await req.json()) as { rows: RawRow[]; batch?: string; update?: boolean }
   if (!Array.isArray(rows) || rows.length === 0) {
     return Response.json({ error: 'No rows' }, { status: 400 })
   }
@@ -101,7 +107,7 @@ export async function POST(req: NextRequest) {
     bill_no: string
     phone: string | null
     header: RawRow
-    items: Array<{ item: string; purity: string | null; net_wt: number | null; barcode: string | null; amount: number | null }>
+    items: Array<{ item: string | null; purity: string | null; net_wt: number | null; barcode: string | null; amount: number | null; sale_type: 'sale' | 'return' }>
   }
   const byBill = new Map<string, Grouped>()
   let noPhone = 0
@@ -114,13 +120,22 @@ export async function POST(req: NextRequest) {
       byBill.set(bill, g)
     }
     const name = (r.ITM_NAME ?? '').trim()
-    if (name || r.BCM_BRCD) {
+    const barcode = (r.BCM_BRCD ?? '').trim() || null
+    const netWt = num(r.RIO_NET_WT)
+    const rawAmt = num(r.RIO_TOTAL_AMT)
+    // A NEW item the customer handed back — subtracts from the bill.
+    const isReturn = (r.RIO_SALE_TYPE ?? '').trim().toLowerCase().includes('return')
+    // A real item line carries at least one item-level field. A row with only
+    // bill-level totals (blank item detail) is header-only → contributes no line.
+    if (name || barcode || rawAmt != null || netWt != null) {
       g.items.push({
-        item: name,
+        item: name || null,                       // page renders "Item" when null (placeholder)
         purity: (r.PURT_NAME ?? '').trim() || null,
-        net_wt: num(r.RIO_NET_WT),
-        barcode: (r.BCM_BRCD ?? '').trim() || null,
-        amount: num(r.RIO_TOTAL_AMT),
+        net_wt: netWt,
+        barcode,
+        // Store returns negative so the line items foot to RI_NET_AMT (Σ Sale − Σ Return).
+        amount: rawAmt == null ? null : (isReturn ? -Math.abs(rawAmt) : rawAmt),
+        sale_type: isReturn ? 'return' : 'sale',
       })
     }
   }
@@ -134,27 +149,33 @@ export async function POST(req: NextRequest) {
     return Response.json({ imported: 0, bills: 0, skippedNoPhone: noPhone })
   }
 
-  // Insert new bills only. Fetch which bill_nos already exist so re-imports are a
-  // no-op (tokens + send state untouched) and counts are exact.
+  // Fetch existing bills (by bill_no). In default mode they're skipped (insert-new
+  // only, so tokens + send state are untouched); in update mode their content is
+  // refreshed while the token + send lifecycle are preserved.
   const billNos = bills.map(g => g.bill_no)
-  const existing = new Set<string>()
+  interface ExistingRow {
+    bill_no: string; token: string
+    sent_at: string | null; published_at: string | null; expires_at: string | null; created_at: string
+    line_items: unknown
+  }
+  const existing = new Map<string, ExistingRow>()
   for (let i = 0; i < billNos.length; i += 500) {
     const { data, error } = await supabaseAdmin
-      .from('wa_invoices').select('bill_no').in('bill_no', billNos.slice(i, i + 500))
+      .from('wa_invoices')
+      .select('bill_no, token, sent_at, published_at, expires_at, created_at, line_items')
+      .in('bill_no', billNos.slice(i, i + 500))
     if (error) return Response.json({ error: error.message }, { status: 500 })
-    for (const r of (data ?? []) as { bill_no: string }[]) existing.add(r.bill_no)
+    for (const r of (data ?? []) as ExistingRow[]) existing.set(r.bill_no, r)
   }
 
-  const fresh = bills.filter(g => !existing.has(g.bill_no))
-  const insertRows = fresh.map(g => {
+  // The parsed content of a bill (everything except identity + send lifecycle).
+  function contentOf(g: Grouped) {
     const h = g.header
     const net = num(h.RI_NET_AMT)
     const oldMetal = num(h.OA_AMT)
     const advance = num(h.AR_AMT)
     const payable = net == null ? null : net - (oldMetal ?? 0) - (advance ?? 0)
     return {
-      bill_no: g.bill_no,
-      token: newToken(),
       phone: g.phone!,
       customer_name: (h.RI_CST_NAME ?? '').trim() || null,
       invoice_date: dateISO(h.RI_DATE),
@@ -166,9 +187,16 @@ export async function POST(req: NextRequest) {
       payable,
       line_items: g.items,
       import_batch: batch ?? null,
-      imported_by: user.id,
     }
-  })
+  }
+
+  const fresh = bills.filter(g => !existing.has(g.bill_no))
+  const insertRows = fresh.map(g => ({
+    bill_no: g.bill_no,
+    token: newToken(),
+    ...contentOf(g),
+    imported_by: user.id,
+  }))
 
   // Diagnostic: how many freshly-imported bills got a real date vs null. A high
   // datesNull count means the date column didn't parse (surfaced in the UI).
@@ -185,8 +213,43 @@ export async function POST(req: NextRequest) {
     imported += chunk.length
   }
 
+  // ── Update mode: refresh content on bills that already exist ─────────────────
+  // A corrected re-export can backfill items / fix returns on bills imported
+  // earlier. We rewrite ONLY the parsed content and carry the existing token +
+  // send lifecycle back unchanged (so nothing re-sends), and never replace real
+  // items with an empty list — so re-uploading an older, item-less export can't
+  // wipe good data.
+  let updated = 0
+  if (update) {
+    const stale = bills.filter(g => existing.has(g.bill_no))
+    const updateRows = stale.map(g => {
+      const ex = existing.get(g.bill_no)!
+      const content = contentOf(g)
+      const oldItems = Array.isArray(ex.line_items) ? ex.line_items : []
+      const line_items = content.line_items.length === 0 && oldItems.length > 0 ? oldItems : content.line_items
+      return {
+        bill_no: g.bill_no,
+        token: ex.token,               // preserve capability token
+        ...content,
+        line_items,
+        sent_at: ex.sent_at,           // preserve send lifecycle — never re-send
+        published_at: ex.published_at,
+        expires_at: ex.expires_at,
+        created_at: ex.created_at,
+      }
+    })
+    for (let i = 0; i < updateRows.length; i += 500) {
+      const chunk = updateRows.slice(i, i + 500)
+      const { error } = await supabaseAdmin
+        .from('wa_invoices').upsert(chunk, { onConflict: 'bill_no' })
+      if (error) return Response.json({ error: error.message, imported, updated }, { status: 500 })
+      updated += chunk.length
+    }
+  }
+
   return Response.json({
     imported,
+    updated,
     bills: bills.length,
     alreadyPresent: bills.length - fresh.length,
     skippedNoPhone: noPhone,

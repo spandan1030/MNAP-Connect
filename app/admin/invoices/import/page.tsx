@@ -21,6 +21,7 @@ export default function InvoiceImportPage() {
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState('')
   const [error, setError] = useState('')
+  const [updateExisting, setUpdateExisting] = useState(false)
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -60,18 +61,19 @@ export default function InvoiceImportPage() {
     if (rows.length === 0) return
     setImporting(true); setProgress(0); setResult(''); setError('')
     const batch = new Date().toISOString()
-    let imported = 0, already = 0, noPhone = 0, done = 0, datesNull = 0
+    let imported = 0, updated = 0, already = 0, noPhone = 0, done = 0, datesNull = 0
     try {
       const chunks = billChunks(rows)
       for (const chunk of chunks) {
         const res = await fetch('/api/invoices/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rows: chunk, batch }),
+          body: JSON.stringify({ rows: chunk, batch, update: updateExisting }),
         })
         const json = await res.json()
         if (!res.ok) throw new Error(json.error ?? 'Import failed')
         imported += json.imported ?? 0
+        updated += json.updated ?? 0
         already += json.alreadyPresent ?? 0
         noPhone += json.skippedNoPhone ?? 0
         datesNull += json.datesNull ?? 0
@@ -80,7 +82,8 @@ export default function InvoiceImportPage() {
       }
       setResult(
         `Imported ${imported} new invoice${imported === 1 ? '' : 's'}` +
-        `${already ? ` · ${already} already present` : ''}` +
+        `${updated ? ` · ${updated} updated` : ''}` +
+        `${already && !updateExisting ? ` · ${already} already present` : ''}` +
         `${noPhone ? ` · ${noPhone} skipped (no phone)` : ''}` +
         `${datesNull ? ` · ⚠ ${datesNull} with no readable date` : ''}.`,
       )
@@ -114,7 +117,7 @@ export default function InvoiceImportPage() {
               <code>BCM_BRCD</code>, <code>RIO_TOTAL_AMT</code>.
             </p>
             <p className="text-[11px] text-gray-400 mt-1">
-              Re-importing is safe — bills already imported are skipped, so nothing re-sends.
+              Re-importing is safe — by default bills already imported are skipped, so nothing re-sends.
             </p>
           </div>
 
@@ -126,6 +129,15 @@ export default function InvoiceImportPage() {
 
           {fileName && (
             <p className="text-xs text-gray-500">{fileName} — {rows.length} row{rows.length === 1 ? '' : 's'} · {billCount} bill{billCount === 1 ? '' : 's'}</p>
+          )}
+
+          {rows.length > 0 && (
+            <label className="flex items-start gap-2 text-xs text-gray-600">
+              <input type="checkbox" checked={updateExisting} onChange={e => setUpdateExisting(e.target.checked)} className="mt-0.5" />
+              <span>
+                <span className="font-medium text-gray-700">Update existing bills</span> — refresh items &amp; amounts on bills already imported (e.g. to backfill a corrected export). Tokens and sent status are preserved; nothing re-sends.
+              </span>
+            </label>
           )}
 
           {rows.length > 0 && (

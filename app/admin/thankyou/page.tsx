@@ -376,7 +376,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
   const [loaded, setLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
-  const [result, setResult] = useState<{ sent: number; failed: number; skippedDnc: number } | null>(null)
+  const [result, setResult] = useState<{ sent: number; failed: number; skippedDnc: number; skippedInvalid?: number } | null>(null)
   const [peekPhone, setPeekPhone] = useState<string | null>(null)
   // Test send
   const [testPhone, setTestPhone] = useState('')
@@ -507,7 +507,7 @@ function InvoicesTab({ templates, setError }: { templates: MessageTemplate[]; se
 
       {result && (
         <div className="text-xs bg-green-50 border border-green-100 rounded-lg px-3 py-2 text-green-800">
-          Sent {result.sent} · {result.skippedDnc} opted-out · {result.failed} failed.
+          Sent {result.sent} · {result.skippedDnc} opted-out{result.skippedInvalid ? ` · ${result.skippedInvalid} skipped (no items / refund)` : ''} · {result.failed} failed.
         </div>
       )}
 
