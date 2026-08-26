@@ -30,11 +30,43 @@ export async function GET(req: NextRequest) {
   const { data: camps } = await supabaseAdmin.from('wa_campaigns')
     .select('id, name, cohort_label, template_name, total, sent, failed, skipped_suppressed, skipped_dnc, is_dynamic, created_at')
     .order('created_at', { ascending: false }).limit(limit)
-  for (const c of (camps ?? []) as Array<Record<string, unknown>>) {
+  const campList = (camps ?? []) as Array<Record<string, unknown>>
+
+  // sent/failed from the SOURCE OF TRUTH — the per-message ledger — rather than the
+  // stored counters, which drift when a big send times out after the messages went
+  // out but before the counter-update step ran. This makes the list self-healing and
+  // agree with the detail view (which already counts from the ledger).
+  const campIds = campList.map(c => c.id as string)
+  const ledgerSent = new Map<string, number>()
+  const ledgerFailed = new Map<string, number>()
+  const ledgerSeen = new Set<string>()   // campaigns that HAVE any ledger row
+  for (let i = 0; i < campIds.length; i += 100) {
+    const slice = campIds.slice(i, i + 100)
+    for (let from = 0; ; from += 1000) {
+      const { data } = await supabaseAdmin.from('wa_send_ledger')
+        .select('campaign_id, status').in('campaign_id', slice).in('status', ['sent', 'failed']).range(from, from + 999)
+      const rows = (data ?? []) as { campaign_id: string; status: string }[]
+      for (const r of rows) {
+        ledgerSeen.add(r.campaign_id)
+        const m = r.status === 'sent' ? ledgerSent : ledgerFailed
+        m.set(r.campaign_id, (m.get(r.campaign_id) ?? 0) + 1)
+      }
+      if (rows.length < 1000) break
+    }
+  }
+
+  for (const c of campList) {
+    const id = c.id as string
+    // Ledger is authoritative once a campaign has ANY ledger row; fall back to the
+    // stored counter only for runs that predate campaign_id stamping (no ledger rows).
+    const hasLedger = ledgerSeen.has(id)
+    const sent = hasLedger ? (ledgerSent.get(id) ?? 0) : ((c.sent as number) ?? 0)
+    const failed = hasLedger ? (ledgerFailed.get(id) ?? 0) : ((c.failed as number) ?? 0)
+    const storedTotal = (c.total as number) ?? 0
     out.push({
-      id: c.id as string, source: 'reach',
+      id, source: 'reach',
       label: (c.name as string) || (c.cohort_label as string) || 'Reach send', template: (c.template_name as string) ?? null,
-      total: (c.total as number) ?? 0, sent: (c.sent as number) ?? 0, failed: (c.failed as number) ?? 0,
+      total: Math.max(storedTotal, sent + failed), sent, failed,
       skippedSuppressed: (c.skipped_suppressed as number) ?? 0, skippedDnc: (c.skipped_dnc as number) ?? 0,
       isDynamic: !!c.is_dynamic, sentAt: c.created_at as string,
     })
