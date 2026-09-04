@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
           .select('success, topics, intent, called_at')
           .eq('customer_id', bCust.id).order('called_at', { ascending: false }).limit(10)
       : Promise.resolve({ data: null }),
-    supabaseAdmin.from('contacts').select('is_opted_out, app_user, has_scheme, app_product_interest').eq('phone', phone).maybeSingle(),
+    supabaseAdmin.from('contacts').select('is_opted_out, app_user, has_scheme, app_product_interest, birthday_month, anniversary_month').eq('phone', phone).maybeSingle(),
     supabaseAdmin.from('audience_members').select('audience:wa_audiences(id, name, is_dynamic)').eq('phone', phone),
     // Full store-visit history — one row per visit (wa_050). The customer row
     // caches only the latest; this is every visit we have.
@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
   // Unified opt-out from the contact spine (chat STOP ∪ call DNC ∪ manual),
   // plus the customer-app features (wa_053).
   const contact = contactRes.data as
-    { is_opted_out: boolean; app_user: boolean; has_scheme: boolean; app_product_interest: boolean } | null
+    { is_opted_out: boolean; app_user: boolean; has_scheme: boolean; app_product_interest: boolean; birthday_month: number | null; anniversary_month: number | null } | null
 
   // Walk-in enrollment: which salesman, and did they convert (buy) after it?
   let walkin: { salesman: string | null; at: string | null; converted: boolean } | null = null
@@ -127,6 +127,11 @@ export async function GET(req: NextRequest) {
       app_product_interest: contact?.app_product_interest ?? false,
     },
     markers: markerRes.data ?? null,
+    // Birthday / anniversary MONTH (1–12), self-submitted on a Bill Summary page.
+    occasions: {
+      birthday_month: contact?.birthday_month ?? null,
+      anniversary_month: contact?.anniversary_month ?? null,
+    },
     walkin,
     visits,
     audiences,

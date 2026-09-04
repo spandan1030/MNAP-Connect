@@ -9,7 +9,7 @@ import type { MessageTemplate } from '@/lib/types'
 
 const CATEGORY_LABEL = {
   all: 'All', daily_rate: 'Daily rate', rate: 'Rate alert',
-  offer: 'Offer', thankyou: 'Thank-you', walkin: 'Walk-in welcome', custom: 'Custom',
+  offer: 'Offer', thankyou: 'Thank-you', walkin: 'Walk-in welcome', coupon: 'Coupon', custom: 'Custom',
 } as const
 
 const PLACEHOLDER_NAME = 'Priya Sharma'
@@ -26,7 +26,7 @@ export default function TemplatesPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
-  const [categoryFilter, setCategoryFilter] = useState<'all' | 'daily_rate' | 'rate' | 'offer' | 'thankyou' | 'walkin' | 'custom'>('all')
+  const [categoryFilter, setCategoryFilter] = useState<'all' | 'daily_rate' | 'rate' | 'offer' | 'thankyou' | 'walkin' | 'coupon' | 'custom'>('all')
   const [loading, setLoading] = useState(true)
 
   // Form state
@@ -206,12 +206,15 @@ export default function TemplatesPage() {
                 <option value="offer">Offer / promo</option>
                 <option value="thankyou">Thank-you (used by the thank-you broadcast)</option>
                 <option value="walkin">Walk-in welcome (auto-sent on new walk-in)</option>
+                <option value="coupon">Coupon (used by the coupon / birthday module)</option>
               </select>
               <p className="text-[10px] text-gray-400">
                 {category === 'thankyou'
                   ? 'Appears in the thank-you broadcast (Recent buyers, manual, and Invoices). A template used for invoice links must be a Utility template with a dynamic URL button ending in /i/{{1}}.'
                   : category === 'walkin'
                   ? "The active Walk-in welcome template is auto-sent the moment a walk-in is registered (Touch 0). Only ONE should be active at a time — the most recent wins. Use a Marketing template; lead with today's rate + fresh designs."
+                  : category === 'coupon'
+                  ? 'Used by the Coupon / birthday module to send codes. Add variables in order: name, coupon_code, offer, expiry. Use a Marketing template.'
                   : category === 'daily_rate'
                   ? 'Daily rate — always sends, never suppressed.'
                   : 'Available in Reach cohort sends.'}
@@ -458,7 +461,7 @@ export default function TemplatesPage() {
 
         {/* Filter by Message type */}
         <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-          {(['all', 'daily_rate', 'rate', 'offer', 'thankyou', 'walkin', 'custom'] as const).map(f => (
+          {(['all', 'daily_rate', 'rate', 'offer', 'thankyou', 'walkin', 'coupon', 'custom'] as const).map(f => (
             <button
               key={f}
               onClick={() => setCategoryFilter(f)}

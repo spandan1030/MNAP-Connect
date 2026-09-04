@@ -119,8 +119,19 @@ photo**. `renderCrop` loads the watermark (`loadWatermark`, `WATERMARK_SRC`) and
 onto both the full + thumb canvases before export, so the **customer app receives the already-
 combined photo — no app-side change**. Only photos taken through the cropper get the logo (an
 auto-centred crop with no `logo` field is un-watermarked).
+- **Card rendition — grid tiles (`wa_065`, 2026-09-03, egress fix):** alongside the full
+  4:5 `display_url` (~1280×1600) and tiny `display_thumb_url` (320px), each photo now also
+  has a **`card_url` (~640×800)**. `renderCrop` emits all three; the customer app's **grid
+  tiles load the card** (~4× smaller than the display) while the **detail view + OG/share**
+  keep the full display — this was the fix for exceeding Supabase **cached (CDN) egress**,
+  which was dominated by the app loading full-size photos in every grid tile. All catalogue
+  uploads now also set a **1-year `Cache-Control`** (`IMG_CACHE_CONTROL` in `lib/image.ts`).
+  Pre-`wa_065` photos are backfilled from `/admin/backfill-cards` (browser canvas pipeline,
+  resumable; auto re-syncs published products at the end). Full plan + Cloudflare/R2 next
+  steps: root `SUPABASE_EGRESS_PLAN.md`.
 - The **customer app is fed the crop**: `catalogue-sync.buildDoc` sends
-  `display_url ?? image_url` (and `display_thumb_url ?? thumb_url ?? image_url`).
+  `card_url ?? display_url ?? image_url` as `card` (grids), `display_url ?? image_url` as
+  `image` (detail), and `display_thumb_url ?? thumb_url ?? image_url` as `thumb`.
 - **Latest upload = primary by default:** on both `/catalogue/new` (save loop) and
   `/catalogue/[id]` (`addPhotos`), the **most-recently-uploaded** photo is set primary +
   `in_app`, overriding any previous primary (staff can re-pick with ★). Old rule was
@@ -981,6 +992,24 @@ One phone-keyed layer converging interest signals from **all sources** onto one 
 - **Customer Book UI** `/contacts` (the "Customers" primary tab now points here): searchable by name/number, filter All/Active/Opted-out, rows show value tier + last purchase + source dots; tap → `CustomerPeek` (full biography). API `GET /api/contacts?q=&filter=&limit=&offset=`. Old `/customers` pages remain reachable (enroll/detail) but the tab is the unified book.
 
 **Consumers:** `/calls` card "Interested in" chips (per-source colour dots) · `CustomerPeek` interests split by source (chat/call/walk-in/sales/billing) · interest-based campaign filter · `GET /api/signals/export` → `signals_export.csv` for the pipeline → **interest-based Meta/Google audiences** (retargeting + value-based lookalike seeds). Sources now include **`walkin`** (in-store captures) and the taxonomy includes the **occasion** group (`wedding`/`gift`/`festival`); occasion is exported but not yet built into ad audiences ("audience rules v2"). The pipeline documents these as `sig_*` markers in `customer-signals/MARKER_REFERENCE_v2.docx` §13–14. See also `customer-signals/MARKETING_V1_TRACKER.md` §5b/5c and root `MNAP_ECOSYSTEM_OVERVIEW.md`.
+
+---
+
+## Coupon engine + Birthday/Anniversary module (2026-09-04, `wa_066`)
+
+**What:** a general coupon system whose first consumer is the birthday/anniversary module. Send each customer a **unique code paired to their phone**, track its lifecycle, and mark redemption. Data source for occasions = `contacts.birthday_month` / `anniversary_month` (1–12, self-submitted on a Bill Summary page, wa_062).
+
+- **Schema (`wa_066`, MUST be applied to Supabase):**
+  - `wa_coupon_offers` — reusable offer definitions: `name`, `discount_type` (`making_pct`|`free_gift`|`flat_amount`|`total_pct`|`custom`), `discount_value`, **`offer_text`** (the customer-facing line used in the WhatsApp + everywhere), `min_bill_amount`, `applies_to` (informational), `terms`, `is_active`.
+  - `wa_coupons` — one row per code: **`code` UNIQUE**, `offer_id`, `phone` (the pairing), `customer_name`, `occasion`, `status` (`issued`→`sent`→`redeemed`|`void`), `issued_at/by`, `sent_at`, `valid_from`, `valid_until`, `wa_message_id`, `redeemed_at/by/bill_no/note`. **`expired` is DERIVED (`couponState()` in `lib/coupons.ts`), never stored** — a `sent` coupon past `valid_until` reads expired.
+  - **No `(phone, offer_id)` unique index on purpose:** "one live coupon" can't be a partial index (needs `now()`), and would wrongly block re-issuing a yearly offer (expired coupons keep `status='sent'`). The rule is enforced expiry-aware in `issueCoupons()` instead.
+- **Validity = fixed 30 days from send** (`COUPON_VALID_DAYS`, owner decision). Clock starts at send, not issue.
+- **Issue/send:** `lib/couponIssue.ts issueCoupons()` mints unique codes (skips anyone still holding a usable coupon for that offer). `POST /api/coupons/send` sends the `category='coupon'` template with **per-recipient variables** (`name`, `coupon_code`/`code`, `offer`/`offer_text`, `expiry`/`valid_until`) — its own loop, NOT dispatchTemplate, because those vars are per-recipient. Honours opt-out; threads + ledgers (category `coupon`, `cohort_label='coupon:<offer>'`); flips status→sent + sets the 30-day window. Template draft + setup: **`COUPON_TEMPLATE.md`**.
+- **Routes:** `/api/coupons/offers` (GET/POST/PATCH), `/api/coupons` (GET list w/ state filter incl. derived `active`/`expired`; POST mint-only; PATCH `redeem`/`void`/`unredeem`/`note`), `/api/coupons/send` (couponIds OR offerId+recipients), `/api/coupons/lookup?code=` (counter validation), `/api/occasions?month=` (this-month birthdays/anniversaries + each person's latest coupon). All auth via new `lib/supabase/route.ts getRouteUser()`.
+- **UI `/admin/coupons`** (Navbar → More → Coupons), 3 tabs: **This month** (occasions → pick offer → send per-person / to-all, opted-out & already-couponed skipped), **Coupons** (all codes, filter by state, code search = lookup, Send/Mark-redeemed/Void/Undo, redeem modal captures salesman + bill no), **Offers** (CRUD; create form offers making_pct / free_gift / custom, auto-suggests `offer_text`).
+- **Peek:** `CustomerPeek` + `/api/customer/peek` now show a **"Special occasions"** section (🎂 birthday month / 💍 anniversary month) from `contacts`.
+- **Redemption is a MANUAL mark** (Connect ⟂ billing ERP): staff look up the code, apply the discount in the ERP, tap Redeemed. `applies_to` / `min_bill` are informational, enforced by the human at the counter.
+- **Data reality at build (2026-09-04):** only **5** contacts have a birthday month, **2** an anniversary month (from 151 invoice links sent, ~3% capture); **September had 0 events**. Module is correct but sparse until more invoice links go out.
 
 ---
 

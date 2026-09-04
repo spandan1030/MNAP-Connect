@@ -23,6 +23,7 @@ interface PeekData {
     first_purchase_date: string | null; last_purchase_date: string | null
     audience_labels: string[] | null; is_high_value: boolean | null; is_likely_wedding: boolean | null
   } | null
+  occasions: { birthday_month: number | null; anniversary_month: number | null }
   walkin: { salesman: string | null; at: string | null; converted: boolean } | null
   visits: Array<{ at: string; timing: string | null; note: string | null; interests: string[]; isBackfill: boolean; salesman: string | null }>
   audiences: Array<{ id: string; name: string; is_dynamic: boolean }>
@@ -41,6 +42,9 @@ const SOURCE_DOT: Record<string, string> = {
 const CATEGORY_LABEL: Record<string, string> = {
   daily_rate: 'Daily rate', rate: 'Rate alert', offer: 'Offer', thankyou: 'Thank-you', custom: 'Custom',
 }
+
+const MONTH_LABEL = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December']
 
 // Walk-in timing buckets (see walk-in enrollment) — how soon they said they'd buy.
 const TIMING_LABEL: Record<string, string> = {
@@ -133,6 +137,25 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                     {m.is_high_value && <Tag>High value</Tag>}
                     {m.is_likely_wedding && <Tag>Wedding</Tag>}
                     {(m.audience_labels ?? []).map(l => <Tag key={l}>{l}</Tag>)}
+                  </div>
+                </Section>
+              )}
+
+              {/* Special occasions — birthday / anniversary MONTH, self-submitted on
+                  a Bill Summary page. The hook for the birthday/anniversary module. */}
+              {(data.occasions.birthday_month || data.occasions.anniversary_month) && (
+                <Section title="Special occasions">
+                  <div className="flex flex-wrap gap-1.5">
+                    {data.occasions.birthday_month && (
+                      <span className="text-[11px] font-medium bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-full">
+                        🎂 Birthday · {MONTH_LABEL[data.occasions.birthday_month]}
+                      </span>
+                    )}
+                    {data.occasions.anniversary_month && (
+                      <span className="text-[11px] font-medium bg-violet-50 text-violet-700 border border-violet-200 px-2 py-0.5 rounded-full">
+                        💍 Anniversary · {MONTH_LABEL[data.occasions.anniversary_month]}
+                      </span>
+                    )}
                   </div>
                 </Section>
               )}

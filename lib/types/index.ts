@@ -54,6 +54,45 @@ export interface MessageTemplate {
   category: string | null           // 'daily_rate'|'rate'|'offer'|'thankyou'|'custom'
 }
 
+// Coupon engine (wa_066).
+export interface WaCouponOffer {
+  id: string
+  name: string
+  description: string | null
+  discount_type: 'making_pct' | 'free_gift' | 'flat_amount' | 'total_pct' | 'custom'
+  discount_value: number | null
+  offer_text: string
+  min_bill_amount: number | null
+  applies_to: string            // 'all' | 'gold' | 'silver' | 'diamond'
+  terms: string | null
+  is_active: boolean
+  created_by: string | null
+  created_at: string
+}
+
+export interface WaCoupon {
+  id: string
+  code: string
+  offer_id: string
+  phone: string
+  customer_name: string | null
+  occasion: string | null       // 'birthday' | 'anniversary' | null
+  status: 'issued' | 'sent' | 'redeemed' | 'void'
+  issued_at: string
+  issued_by: string | null
+  sent_at: string | null
+  valid_from: string | null
+  valid_until: string | null
+  wa_message_id: string | null
+  redeemed_at: string | null
+  redeemed_by: string | null
+  redeemed_bill_no: string | null
+  redeemed_note: string | null
+  notes: string | null
+  created_at: string
+  offer?: WaCouponOffer
+}
+
 export interface CommunicationLog {
   id: string
   customer_id: string
@@ -279,8 +318,9 @@ export interface WaProductImage {
   product_id: string
   image_url: string          // original upload (any aspect ratio) — never altered
   thumb_url: string | null   // thumbnail of the original
-  display_url: string | null       // 4:5-cropped full image fed to the customer app
+  display_url: string | null       // 4:5-cropped full image (used on the app's product DETAIL view)
   display_thumb_url: string | null // 4:5-cropped grid thumbnail
+  card_url: string | null          // 4:5 mid-size (~640px) image the app's GRID cards load — cuts CDN egress
   crop: CropRect | null            // where the 4:5 frame sits on the original
   in_app: boolean                  // published to the customer-app photo gallery
   sort_order: number
