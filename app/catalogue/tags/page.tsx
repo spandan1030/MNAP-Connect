@@ -10,12 +10,12 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import Navbar from '@/components/ui/Navbar'
-import { DEFAULT_TAG_TOLERANCE_PCT, type AppCategory, type AppCatalogueTag, type TagKind, type TagMetric } from '@/lib/catalogue-tag-types'
+import { DEFAULT_TAG_TOLERANCE_PCT, effectiveTagCategories, type AppCategory, type AppCatalogueTag, type TagKind, type TagMetric } from '@/lib/catalogue-tag-types'
 
 const BLANK_CAT = { label: '', thumb: '', matchText: '', order: 0, active: true }
 const BLANK_TAG = {
   label: '', kind: 'curated' as TagKind, order: 0, active: true,
-  scope: '', metric: 'amountMax' as TagMetric, amountMax: 0, weightMin: 0, weightMax: 0,
+  categories: [] as string[], metric: 'amountMax' as TagMetric, amountMax: 0, weightMin: 0, weightMax: 0,
   tolerancePct: DEFAULT_TAG_TOLERANCE_PCT,
 }
 
@@ -200,7 +200,7 @@ function Tags({ tags, cats, counts, busy, post }: {
     setEditing(t)
     setForm({
       label: t.label, kind: t.kind, order: t.order, active: t.active,
-      scope: t.scope ?? '', metric: t.metric ?? 'amountMax',
+      categories: effectiveTagCategories(t), metric: t.metric ?? 'amountMax',
       amountMax: t.amountMax ?? 0, weightMin: t.weightMin ?? 0, weightMax: t.weightMax ?? 0,
       tolerancePct: t.tolerancePct ?? DEFAULT_TAG_TOLERANCE_PCT,
     })
@@ -209,19 +209,25 @@ function Tags({ tags, cats, counts, busy, post }: {
     if (!form.label.trim()) return
     const ok = await post({ action: 'saveTag', tag: {
       id: editing?.id, label: form.label, kind: form.kind, order: Number(form.order) || 0, active: form.active,
-      scope: form.scope, metric: form.metric,
+      categories: form.categories, metric: form.metric,
       amountMax: Number(form.amountMax) || 0, weightMin: Number(form.weightMin) || 0, weightMax: Number(form.weightMax) || 0,
       tolerancePct: Number(form.tolerancePct) || DEFAULT_TAG_TOLERANCE_PCT,
     } })
     if (ok) { setForm({ ...BLANK_TAG }); setEditing(null) }
   }
+  const toggleCat = (id: string) =>
+    set('categories', form.categories.includes(id) ? form.categories.filter(x => x !== id) : [...form.categories, id])
 
-  const scopeLabel = (id?: string) => (id && id !== 'all' ? cats.find(c => c.id === id)?.label ?? '?' : 'All products')
+  const catsLabel = (t: AppCatalogueTag) => {
+    const ids = effectiveTagCategories(t)
+    if (ids.length === 0) return 'All categories'
+    return ids.map(id => cats.find(c => c.id === id)?.label ?? '?').join(', ')
+  }
   const ruleText = (t: AppCatalogueTag) => {
-    if (t.kind === 'curated') return 'Curated · assign from the Catalogue grid'
-    const scope = scopeLabel(t.scope)
-    if (t.metric === 'amountMax') return `${scope} · under ₹${(t.amountMax ?? 0).toLocaleString('en-IN')} (±${t.tolerancePct ?? DEFAULT_TAG_TOLERANCE_PCT}%)`
-    return `${scope} · ${t.weightMin ?? 0}–${t.weightMax ?? 0} g (±${t.tolerancePct ?? DEFAULT_TAG_TOLERANCE_PCT}%)`
+    const where = catsLabel(t)
+    if (t.kind === 'curated') return `Curated · assign from the Catalogue grid · ${where}`
+    if (t.metric === 'amountMax') return `${where} · under ₹${(t.amountMax ?? 0).toLocaleString('en-IN')} (±${t.tolerancePct ?? DEFAULT_TAG_TOLERANCE_PCT}%)`
+    return `${where} · ${t.weightMin ?? 0}–${t.weightMax ?? 0} g (±${t.tolerancePct ?? DEFAULT_TAG_TOLERANCE_PCT}%)`
   }
 
   return (
@@ -242,15 +248,28 @@ function Tags({ tags, cats, counts, busy, post }: {
           </select>
         </div>
 
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Show in categories (none = all)</label>
+          {cats.length === 0 ? (
+            <p className="text-xs text-gray-400">No categories yet — add them in the Categories tab.</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {cats.map(c => {
+                const on = form.categories.includes(c.id)
+                return (
+                  <button key={c.id} type="button" onClick={() => toggleCat(c.id)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] border font-medium ${on ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+                    {on ? '✓ ' : ''}{c.label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          <p className="mt-1 text-[11px] text-gray-400">The chip shows only while browsing these categories (empty = everywhere).{form.kind === 'computed' ? ' Computed rules also only match products in these categories.' : ''}</p>
+        </div>
+
         {form.kind === 'computed' && (
           <div className="space-y-3 rounded-lg bg-[#faf6ee] p-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Applies to</label>
-              <select className="input" value={form.scope} onChange={e => set('scope', e.target.value)}>
-                <option value="">All products</option>
-                {cats.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-              </select>
-            </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Rule</label>
               <select className="input" value={form.metric} onChange={e => set('metric', e.target.value as TagMetric)}>

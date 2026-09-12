@@ -49,6 +49,7 @@ function coerceTag(id: string, d: FirebaseFirestore.DocumentData): AppCatalogueT
     kind: (d.kind as TagKind) ?? 'curated',
     order: (d.order as number) ?? 0,
     active: d.active !== false,
+    categories: Array.isArray(d.categories) ? (d.categories as string[]) : undefined,
     scope: (d.scope as string) ?? '',
     metric: (d.metric as TagMetric) ?? undefined,
     amountMax: (d.amountMax as number) ?? undefined,
@@ -151,7 +152,10 @@ export async function saveTag(input: Partial<AppCatalogueTag> & { id?: string })
     kind: input.kind ?? 'curated',
     order: input.order ?? 0,
     active: input.active !== false,
-    scope: isComputed ? input.scope ?? '' : undefined,
+    // Categories this tag belongs to (both kinds). Always written (even []), so it's
+    // authoritative; the legacy single `scope` is NOT written (full replace) and
+    // drops off on save.
+    categories: (input.categories ?? []).map(s => s.trim()).filter(Boolean),
     metric: isComputed ? input.metric : undefined,
     amountMax: isComputed && input.metric === 'amountMax' ? input.amountMax ?? 0 : undefined,
     weightMin: isComputed && input.metric === 'weightRange' ? input.weightMin ?? 0 : undefined,

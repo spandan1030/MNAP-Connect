@@ -24,11 +24,20 @@ export interface AppCatalogueTag {
   kind: TagKind
   order: number
   active: boolean
-  scope?: string          // computed only: category id, or '' = all products
+  categories?: string[]   // categories this tag belongs to (both kinds); []/absent = all
+  scope?: string          // legacy computed single scope — read as fallback only
   metric?: TagMetric      // computed only
   amountMax?: number      // computed + metric==='amountMax'
   weightMin?: number      // computed + metric==='weightRange'
   weightMax?: number      // computed + metric==='weightRange'
   tolerancePct?: number   // computed only
   createdAt: number
+}
+
+/** Categories a tag belongs to. [] ⇒ global. New `categories` wins; old docs fall
+ *  back to the legacy single `scope`. Mirrors the customer app's helper. */
+export function effectiveTagCategories(tag: { categories?: string[]; scope?: string }): string[] {
+  if (Array.isArray(tag.categories)) return tag.categories.filter(Boolean)
+  const s = (tag.scope ?? '').trim()
+  return s && s !== 'all' ? [s] : []
 }
