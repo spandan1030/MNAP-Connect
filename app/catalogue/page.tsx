@@ -81,11 +81,46 @@ export default function CataloguePage() {
   // ── Bulk selection ────────────────────────────────────────────────────────
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected]     = useState<Set<string>>(new Set())
-  const [sheetView, setSheetView]   = useState<null | 'menu' | 'party' | 'making' | 'publish' | 'delete'>(null)
+  const [sheetView, setSheetView]   = useState<null | 'menu' | 'party' | 'making' | 'publish' | 'delete' | 'tag'>(null)
   const [bulkBusy, setBulkBusy]     = useState(false)
   const [bulkNote, setBulkNote]     = useState<string | null>(null)
   const [partyPick, setPartyPick]   = useState('')
   const [makingInput, setMakingInput] = useState('')
+
+  // ── Curated tags (customer-app filter chips) for the bulk "Tag" action ───────
+  const [curatedTags, setCuratedTags] = useState<Array<{ id: string; label: string }> | null>(null)
+  const [tagNote, setTagNote] = useState<string | null>(null)
+  const ensureTags = useCallback(async () => {
+    if (curatedTags) return
+    try {
+      const res = await fetch('/api/catalogue/tags')
+      const data = await res.json()
+      const list = ((data.tags ?? []) as Array<{ id: string; label: string; kind: string }>)
+        .filter(t => t.kind === 'curated').map(t => ({ id: t.id, label: t.label }))
+      setCuratedTags(list)
+    } catch { setCuratedTags([]) }
+  }, [curatedTags])
+
+  // Add/remove ONE curated tag across the selection. Unlike applyBulk this keeps
+  // the selection + sheet open, so several tags can be applied in a row.
+  async function applyTag(tagId: string, mode: 'add' | 'remove', label: string) {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    setBulkBusy(true); setTagNote(null)
+    try {
+      const res = await fetch('/api/catalogue/tags', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'assign', tagId, productIds: ids, mode }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Tag action failed')
+      setTagNote(`${mode === 'add' ? 'Tagged' : 'Untagged'} ${ids.length} · ${label} ✓`)
+    } catch (e) {
+      setTagNote(e instanceof Error ? e.message : 'Tag action failed')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
 
   function toggleSelect(id: string) {
     setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -276,6 +311,7 @@ export default function CataloguePage() {
             <Link href="/catalogue/inventory" className="text-xs font-medium text-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg active:bg-gray-50">Inventory</Link>
             <Link href="/catalogue/stock" className="text-xs font-medium text-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg active:bg-gray-50">Stock</Link>
             <Link href="/catalogue/values" className="text-xs font-medium text-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg active:bg-gray-50">Values</Link>
+            <Link href="/catalogue/tags" className="text-xs font-medium text-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg active:bg-gray-50">Tags</Link>
             <Link href="/catalogue/new" className="text-xs font-semibold bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg">+ Add</Link>
           </div>
         </div>
@@ -502,6 +538,7 @@ export default function CataloguePage() {
                   : sheetView === 'party' ? 'Set party'
                   : sheetView === 'making' ? 'Set making %'
                   : sheetView === 'publish' ? 'Publish to customer app'
+                  : sheetView === 'tag' ? 'Tag products'
                   : 'Delete products'}
               </h2>
               <button onClick={() => setSheetView(sheetView === 'menu' ? null : 'menu')} disabled={bulkBusy}
@@ -541,6 +578,10 @@ export default function CataloguePage() {
                     className="bg-white text-gray-700 border-gray-300">Set party…</SheetBtn>
                   <SheetBtn onClick={() => { setMakingInput(''); setSheetView('making') }} disabled={bulkBusy}
                     className="bg-white text-gray-700 border-gray-300">Set making %…</SheetBtn>
+                </BulkGroup>
+                <BulkGroup label="Customer-app tags">
+                  <SheetBtn onClick={() => { setTagNote(null); ensureTags(); setSheetView('tag') }} disabled={bulkBusy}
+                    className="bg-amber-50 text-amber-700 border-amber-200">Tag…</SheetBtn>
                 </BulkGroup>
                 <BulkGroup label="Danger zone">
                   <SheetBtn onClick={() => setSheetView('delete')} disabled={bulkBusy}
@@ -601,6 +642,30 @@ export default function CataloguePage() {
                   className="w-full py-2.5 rounded-xl bg-red-600 text-white font-semibold text-sm disabled:opacity-50">
                   {bulkBusy ? 'Deleting…' : `Yes, delete ${selected.size}`}
                 </button>
+              </div>
+            )}
+
+            {sheetView === 'tag' && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">Add or remove a curated tag on {selected.size} product{selected.size === 1 ? '' : 's'}. Changes apply to the customer app’s filter chips immediately. Manage the tag list on the <Link href="/catalogue/tags" className="text-green-700 underline">Tags</Link> page.</p>
+                {curatedTags === null ? (
+                  <p className="text-sm text-gray-400">Loading tags…</p>
+                ) : curatedTags.length === 0 ? (
+                  <p className="text-sm text-gray-500">No curated tags yet. Create one on the <Link href="/catalogue/tags" className="text-green-700 underline">Tags</Link> page (type “Curated”).</p>
+                ) : (
+                  <div className="space-y-2">
+                    {curatedTags.map(t => (
+                      <div key={t.id} className="flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-2">
+                        <span className="flex-1 text-sm font-medium text-gray-800 truncate">{t.label}</span>
+                        <button onClick={() => applyTag(t.id, 'add', t.label)} disabled={bulkBusy}
+                          className="text-xs font-semibold px-3 py-1.5 rounded-lg border bg-amber-50 text-amber-700 border-amber-200 disabled:opacity-50">+ Add</button>
+                        <button onClick={() => applyTag(t.id, 'remove', t.label)} disabled={bulkBusy}
+                          className="text-xs font-semibold px-3 py-1.5 rounded-lg border bg-white text-gray-600 border-gray-300 disabled:opacity-50">− Remove</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {tagNote && <p className={`text-[12px] ${tagNote.includes('✓') ? 'text-green-700' : 'text-amber-600'}`}>{tagNote}</p>}
               </div>
             )}
           </div>

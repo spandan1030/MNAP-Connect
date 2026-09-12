@@ -1013,6 +1013,19 @@ One phone-keyed layer converging interest signals from **all sources** onto one 
 
 ---
 
+## Catalogue tags & categories — controlled from connect (2026-09-12, no migration)
+
+**What:** the customer app's storefront taxonomy (Categories, curated & computed filter tags, and per-product curated assignments) is now fully editable from connect. Lets staff tag many products at once from the catalogue grid — where the images live — instead of the customer admin.
+
+- **Source of truth = the customer Firestore, unchanged.** Three collections (as before): `categories/{id}`, `catalogue_tags/{id}` (`kind: 'curated' | 'computed'`), `catalogue_meta/{productId}` (`{ tags: string[] }`, productId == `wa_products.id`). They live in the customer project *specifically* so a catalogue re-sync (which overwrites `catalogue/{id}`) never wipes them. Connect edits them **directly via the Admin SDK** (`customerDb()`) — **no Supabase table, no sync layer, no migration.** Field shapes mirror the customer app's `src/lib/catalogueFilters.ts` exactly so both admin surfaces agree.
+- **Dual control (by decision):** the customer-app admin tag tabs still work; both surfaces are just editors of the same docs (last-write-wins). Hide the customer ones later if desired.
+- **Server module `lib/catalogue-tags.ts`** (Admin SDK): `listCategories/listTags/getProductTags`, `saveCategory/deleteCategory/setFeaturedCategory`, `saveTag/deleteTag`, `setProductTags`, and `assignCuratedTag(tagId, productIds, 'add'|'remove')` (batched, `FieldValue.arrayUnion/arrayRemove` — idempotent, creates the meta doc on first touch). Pure types + `DEFAULT_TAG_TOLERANCE_PCT` are split into **`lib/catalogue-tag-types.ts`** (client-safe — the server module pulls firebase-admin, so the client page must NOT import it).
+- **API `app/api/catalogue/tags/route.ts`** (staff-auth): `GET` → `{ categories, tags, productTags }` (optional `?ids=` limits productTags to the grid page); `POST { action }` → `saveCategory | deleteCategory | featureCategory | saveTag | deleteTag | setProductTags | assign`.
+- **UI:** `/catalogue/tags` — Categories & Filter-tags CRUD (mirrors the customer managers; curated-tag rows show a product count). **Bulk tagging** on `/catalogue`: the existing select mode's action sheet gained a **Tag…** view — pick a curated tag, Add/Remove across the whole selection in one call; the sheet stays open to apply several. Header link **Tags** next to Inventory/Stock/Values.
+- **Note:** category thumbnails in connect are a URL field (+ still settable with the image picker in the customer admin); connect doesn't upload to customer Storage. Computed-tag scope needs categories to exist first.
+
+---
+
 ## Walk-in Warm-up — Touch 0 auto-welcome (2026-08-26, no migration)
 
 **What:** the moment a salesman registers a walk-in, one approved WhatsApp template is auto-sent to the customer ("today's rate + fresh designs + festival/scheme tie-in") so the counter conversation continues on WhatsApp. Immediate touch only — **no scheduler / no follow-up drip** (that's a later phase).
