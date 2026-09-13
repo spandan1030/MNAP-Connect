@@ -5,6 +5,11 @@
 // catalogue stays light at thousands of products. Falls back to the original
 // file if the browser can't decode it.
 
+// Cache-Control (seconds) for uploaded catalogue images. They're immutable
+// (content-addressed by a timestamped path; edits upload NEW files), so a 1-year
+// TTL lets browsers and the Supabase CDN keep them — fewer re-fetches, less egress.
+export const IMG_CACHE_CONTROL = '31536000' // 365 days
+
 const MAX_DIM = 1600        // full image, longest edge, px
 const JPEG_QUALITY = 0.82
 const THUMB_DIM = 320       // grid thumbnail, longest edge, px
@@ -112,11 +117,14 @@ export function rotateImageToCanvas(src: HTMLImageElement | HTMLCanvasElement, d
 }
 
 export const CROP_RATIO = 4 / 5      // width / height (portrait)
-const CROP_W = 1280                  // cropped full image, px
+const CROP_W = 1280                  // cropped full image, px (product DETAIL view)
 const CROP_H = 1600                  // = CROP_W / CROP_RATIO
-const CROP_THUMB_W = 320             // cropped grid thumbnail, px
+const CROP_CARD_W = 640              // cropped GRID-card image, px (the app's tiles load this)
+const CROP_CARD_H = 800              // = CROP_CARD_W / CROP_RATIO
+const CROP_THUMB_W = 320             // cropped grid thumbnail, px (fallback / tiny previews)
 const CROP_THUMB_H = 400
 const CROP_QUALITY = 0.85
+const CROP_CARD_QUALITY = 0.75
 const CROP_THUMB_QUALITY = 0.72
 
 // The largest centered 4:5 rectangle that fits an imgW×imgH image, normalized.
@@ -159,9 +167,10 @@ async function drawCrop(img: HTMLImageElement | HTMLCanvasElement, crop: CropRec
 }
 
 // Render the 4:5 crop of a source (File or already-decoded image) into a full
-// display image + a small thumbnail. When `crop` is omitted the largest centered
-// 4:5 region is used. Returns null if the source can't be decoded.
-export async function renderCrop(source: File | HTMLImageElement, crop?: CropRect | null): Promise<{ display: File; thumb: File } | null> {
+// display image (detail view) + a mid-size card image (grid tiles) + a small
+// thumbnail. When `crop` is omitted the largest centered 4:5 region is used.
+// Returns null if the source can't be decoded.
+export async function renderCrop(source: File | HTMLImageElement, crop?: CropRect | null): Promise<{ display: File; card: File; thumb: File } | null> {
   try {
     const img0 = source instanceof HTMLImageElement ? source : await loadImage(source)
     const base = source instanceof HTMLImageElement ? 'photo' : (source.name.replace(/\.[^.]+$/, '') || 'photo')
@@ -174,10 +183,22 @@ export async function renderCrop(source: File | HTMLImageElement, crop?: CropRec
     const logoImg = logoCfg ? await loadWatermark() : null
     const logo = logoImg && logoCfg ? { img: logoImg, cfg: logoCfg } : undefined
     const display = await drawCrop(img, rect, CROP_W, CROP_H, CROP_QUALITY, `${base}-4x5`, logo)
+    const card = await drawCrop(img, rect, CROP_CARD_W, CROP_CARD_H, CROP_CARD_QUALITY, `${base}-4x5-card`, logo)
     const thumb = await drawCrop(img, rect, CROP_THUMB_W, CROP_THUMB_H, CROP_THUMB_QUALITY, `${base}-4x5-thumb`, logo)
-    if (!display || !thumb) return null
-    return { display, thumb }
+    if (!display || !card || !thumb) return null
+    return { display, card, thumb }
   } catch {
     return null
   }
+}
+
+// Downscale an ALREADY 4:5-cropped display image (an HTMLImageElement decoded from
+// a stored display_url) into the ~640px grid-card size. Used by the one-off card
+// backfill for photos uploaded before the card rendition existed — no re-crop, just
+// a straight downscale of the existing crop. Returns null if the canvas is tainted
+// (cross-origin decode without CORS) or encoding fails.
+export async function renderCardFromDisplay(img: HTMLImageElement, name = 'card'): Promise<File | null> {
+  // The display is already 4:5, so scaling its longest edge to CROP_CARD_H yields
+  // the 640×800 card. `resize` no-ops if the source is already smaller.
+  return resize(img, CROP_CARD_H, CROP_CARD_QUALITY, `${name}-4x5-card`)
 }

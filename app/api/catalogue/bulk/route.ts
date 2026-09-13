@@ -109,9 +109,9 @@ export async function POST(req: NextRequest) {
         for (const id of publishedIds) await removeProductFromApp(id)
         // 2) clean up photos + their storage objects
         const { data: imgs } = await supabase.from('wa_product_images')
-          .select('id, image_url, thumb_url, display_url, display_thumb_url').in('product_id', ids)
+          .select('id, image_url, thumb_url, display_url, card_url, display_thumb_url').in('product_id', ids)
         const paths = ((imgs ?? []) as Array<Record<string, string | null>>)
-          .flatMap(i => [i.image_url, i.thumb_url, i.display_url, i.display_thumb_url])
+          .flatMap(i => [i.image_url, i.thumb_url, i.display_url, i.card_url, i.display_thumb_url])
           .map(u => u?.split('/wa-media/')[1]).filter(Boolean) as string[]
         if (paths.length) await supabase.storage.from('wa-media').remove(paths)
         await supabase.from('wa_product_images').delete().in('product_id', ids)

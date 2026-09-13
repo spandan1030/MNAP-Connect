@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { compressWithThumb, renderCrop, type CropRect } from '@/lib/image'
+import { compressWithThumb, renderCrop, IMG_CACHE_CONTROL as IMG_CACHE, type CropRect } from '@/lib/image'
 import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
 import ShareSheet from '@/components/catalogue/ShareSheet'
@@ -185,27 +185,30 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
     for (const raw of imgs) {
       const { full, thumb } = await compressWithThumb(raw)
       const base = `products/${id}/${Date.now()}-${order}`
-      const { data: up, error: upErr } = await supabase.storage.from('wa-media').upload(`${base}.jpg`, full, { upsert: false, contentType: 'image/jpeg' })
+      const { data: up, error: upErr } = await supabase.storage.from('wa-media').upload(`${base}.jpg`, full, { upsert: false, contentType: 'image/jpeg', cacheControl: IMG_CACHE })
       if (upErr || !up) { console.error('[catalogue] upload failed:', upErr); setError(`Photo upload failed: ${upErr?.message ?? 'unknown error'}`); continue }
       const { data: { publicUrl } } = supabase.storage.from('wa-media').getPublicUrl(up.path)
       let thumbUrl: string | null = null
       if (thumb) {
-        const { data: tup } = await supabase.storage.from('wa-media').upload(`${base}-thumb.jpg`, thumb, { upsert: false, contentType: 'image/jpeg' })
+        const { data: tup } = await supabase.storage.from('wa-media').upload(`${base}-thumb.jpg`, thumb, { upsert: false, contentType: 'image/jpeg', cacheControl: IMG_CACHE })
         if (tup) thumbUrl = supabase.storage.from('wa-media').getPublicUrl(tup.path).data.publicUrl
       }
-      // 4:5 crop (centred by default) for the customer app
-      let displayUrl: string | null = null, displayThumbUrl: string | null = null
+      // 4:5 renditions (centred crop by default) for the customer app: full DISPLAY
+      // (detail view), mid-size CARD (grid tiles), tiny thumb.
+      let displayUrl: string | null = null, cardUrl: string | null = null, displayThumbUrl: string | null = null
       const cropped = await renderCrop(raw)
       if (cropped) {
-        const { data: cup } = await supabase.storage.from('wa-media').upload(`${base}-4x5.jpg`, cropped.display, { upsert: false, contentType: 'image/jpeg' })
+        const { data: cup } = await supabase.storage.from('wa-media').upload(`${base}-4x5.jpg`, cropped.display, { upsert: false, contentType: 'image/jpeg', cacheControl: IMG_CACHE })
         if (cup) displayUrl = supabase.storage.from('wa-media').getPublicUrl(cup.path).data.publicUrl
-        const { data: ctup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-thumb.jpg`, cropped.thumb, { upsert: false, contentType: 'image/jpeg' })
+        const { data: cdup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-card.jpg`, cropped.card, { upsert: false, contentType: 'image/jpeg', cacheControl: IMG_CACHE })
+        if (cdup) cardUrl = supabase.storage.from('wa-media').getPublicUrl(cdup.path).data.publicUrl
+        const { data: ctup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-thumb.jpg`, cropped.thumb, { upsert: false, contentType: 'image/jpeg', cacheControl: IMG_CACHE })
         if (ctup) displayThumbUrl = supabase.storage.from('wa-media').getPublicUrl(ctup.path).data.publicUrl
       }
       // Insert not-primary for now; the newest of this batch is promoted below.
       const { data: row } = await supabase.from('wa_product_images').insert({
         product_id: id, image_url: publicUrl, thumb_url: thumbUrl,
-        display_url: displayUrl, display_thumb_url: displayThumbUrl, crop: null,
+        display_url: displayUrl, card_url: cardUrl, display_thumb_url: displayThumbUrl, crop: null,
         sort_order: order, is_primary: false, in_app: false,
       }).select('*').single()
       if (row) { addedImages.push(row as WaProductImage); setImages(prev => [...prev, row as WaProductImage]) }
@@ -254,20 +257,22 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
     const cropped = await renderCrop(decoded, crop)
     if (!cropped) { setError('Could not crop this image.'); return }
     const base = `products/${id}/${Date.now()}-crop`
-    const { data: cup, error: cErr } = await supabase.storage.from('wa-media').upload(`${base}-4x5.jpg`, cropped.display, { upsert: false, contentType: 'image/jpeg' })
+    const { data: cup, error: cErr } = await supabase.storage.from('wa-media').upload(`${base}-4x5.jpg`, cropped.display, { upsert: false, contentType: 'image/jpeg', cacheControl: IMG_CACHE })
     if (cErr || !cup) { setError(`Crop upload failed: ${cErr?.message ?? 'unknown error'}`); return }
     const displayUrl = supabase.storage.from('wa-media').getPublicUrl(cup.path).data.publicUrl
-    let displayThumbUrl: string | null = null
-    const { data: ctup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-thumb.jpg`, cropped.thumb, { upsert: false, contentType: 'image/jpeg' })
+    let cardUrl: string | null = null, displayThumbUrl: string | null = null
+    const { data: cdup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-card.jpg`, cropped.card, { upsert: false, contentType: 'image/jpeg', cacheControl: IMG_CACHE })
+    if (cdup) cardUrl = supabase.storage.from('wa-media').getPublicUrl(cdup.path).data.publicUrl
+    const { data: ctup } = await supabase.storage.from('wa-media').upload(`${base}-4x5-thumb.jpg`, cropped.thumb, { upsert: false, contentType: 'image/jpeg', cacheControl: IMG_CACHE })
     if (ctup) displayThumbUrl = supabase.storage.from('wa-media').getPublicUrl(ctup.path).data.publicUrl
 
-    await supabase.from('wa_product_images').update({ display_url: displayUrl, display_thumb_url: displayThumbUrl, crop }).eq('id', img.id)
+    await supabase.from('wa_product_images').update({ display_url: displayUrl, card_url: cardUrl, display_thumb_url: displayThumbUrl, crop }).eq('id', img.id)
     // remove the superseded display files (keep the original intact)
-    const stale = [img.display_url, img.display_thumb_url]
+    const stale = [img.display_url, img.card_url, img.display_thumb_url]
       .map(u => u?.split('/wa-media/')[1]).filter(Boolean) as string[]
     if (stale.length) await supabase.storage.from('wa-media').remove(stale)
 
-    setImages(prev => prev.map(i => i.id === img.id ? { ...i, display_url: displayUrl, display_thumb_url: displayThumbUrl, crop } : i))
+    setImages(prev => prev.map(i => i.id === img.id ? { ...i, display_url: displayUrl, card_url: cardUrl, display_thumb_url: displayThumbUrl, crop } : i))
     if (showInApp && img.is_primary) syncToApp() // the app is fed the crop
   }
 
@@ -290,7 +295,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
 
   async function deleteImage(img: WaProductImage) {
     await supabase.from('wa_product_images').delete().eq('id', img.id)
-    const paths = [img.image_url, img.thumb_url, img.display_url, img.display_thumb_url]
+    const paths = [img.image_url, img.thumb_url, img.display_url, img.card_url, img.display_thumb_url]
       .map(u => u?.split('/wa-media/')[1]).filter(Boolean) as string[]
     if (paths.length) await supabase.storage.from('wa-media').remove(paths)
     const rest = images.filter(i => i.id !== img.id)

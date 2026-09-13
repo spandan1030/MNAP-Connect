@@ -40,7 +40,8 @@ interface CatalogueDoc {
   karat: number | null
   priceHidden: boolean
   makingPercent: number | null
-  image: string | null
+  image: string | null    // full 4:5 display image — product DETAIL view + OG/share
+  card: string | null     // mid-size 4:5 image (~640px) — grid tiles load this (cuts CDN egress)
   thumb: string | null
   images: string[]        // full gallery (primary first) shown in the customer app viewer
   active: boolean
@@ -83,6 +84,9 @@ function buildDoc(p: WaProduct & { app_title?: string | null; app_description?: 
     makingPercent: p.making_percent ?? DEFAULT_MAKING_PERCENT,
     // Feed the 4:5 crop; fall back to the original for photos taken before cropping existed.
     image: cover?.display_url ?? cover?.image_url ?? null,
+    // Grid tiles load `card` (~640px). Falls back to the full display then the
+    // original, so pre-card photos still render until the backfill runs.
+    card: cover?.card_url ?? cover?.display_url ?? cover?.image_url ?? null,
     thumb: cover?.display_thumb_url ?? cover?.thumb_url ?? cover?.image_url ?? null,
     images: gallery.map(i => i.display_url ?? i.image_url).filter(Boolean) as string[],
     // Stays in the customer catalogue while published + active. Sold/deleted pieces are
