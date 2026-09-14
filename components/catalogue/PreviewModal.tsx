@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { cdnImage } from '@/lib/cdn'
 import type { WaProduct, WaProductImage } from '@/lib/types'
 
 export default function PreviewModal({ product, onClose }: { product: WaProduct; onClose: () => void }) {
@@ -48,10 +49,10 @@ export default function PreviewModal({ product, onClose }: { product: WaProduct;
           ) : (
             <div className="flex overflow-x-auto snap-x snap-mandatory">
               {images.map(img => (
-                <a key={img.id} href={img.image_url} target="_blank" rel="noopener noreferrer"
+                <a key={img.id} href={cdnImage(img.image_url)} target="_blank" rel="noopener noreferrer"
                   className="snap-center flex-shrink-0 w-full">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={img.display_url ?? img.image_url} alt="" className="w-full max-h-[55vh] object-contain bg-gray-900" />
+                  <img src={cdnImage(img.display_url ?? img.image_url)} alt="" className="w-full max-h-[55vh] object-contain bg-gray-900" />
                 </a>
               ))}
             </div>

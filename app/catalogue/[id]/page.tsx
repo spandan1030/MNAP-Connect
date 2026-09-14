@@ -3,6 +3,7 @@
 import { use, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { cdnImage } from '@/lib/cdn'
 import { compressWithThumb, renderCrop, IMG_CACHE_CONTROL as IMG_CACHE, type CropRect } from '@/lib/image'
 import { fetchCatalogueOptions, addCatalogueOptions, type Options } from '@/lib/catalogue'
 import Navbar from '@/components/ui/Navbar'
@@ -273,7 +274,10 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
     if (stale.length) await supabase.storage.from('wa-media').remove(stale)
 
     setImages(prev => prev.map(i => i.id === img.id ? { ...i, display_url: displayUrl, card_url: cardUrl, display_thumb_url: displayThumbUrl, crop } : i))
-    if (showInApp && img.is_primary) syncToApp() // the app is fed the crop
+    // Re-crop moves the photo to a NEW URL and deletes the old file, so the app
+    // MUST be re-fed — for the primary AND any published gallery photo, else the
+    // app's gallery would point at the deleted URL (broken image).
+    if (showInApp && (img.is_primary || img.in_app)) syncToApp()
   }
 
   // Publish / unpublish a single photo to the customer-app gallery. The primary is
@@ -305,7 +309,9 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
       rest[0] = { ...rest[0], is_primary: true }
     }
     setImages(rest)
-    if (showInApp && img.is_primary) syncToApp() // primary photo changed
+    // Deleting a published photo (primary or gallery) must re-sync so the app
+    // drops the now-deleted URL instead of showing a broken image.
+    if (showInApp && (img.is_primary || img.in_app)) syncToApp()
   }
 
   async function deleteProduct() {
@@ -390,9 +396,9 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
                 {images.map(img => (
                   <div key={img.id} className="w-20">
                     <div className="relative">
-                      <a href={img.image_url} target="_blank" rel="noopener noreferrer">
+                      <a href={cdnImage(img.image_url)} target="_blank" rel="noopener noreferrer">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={img.display_url ?? img.image_url} alt="" className={`w-20 aspect-[4/5] object-cover rounded-lg border-2 ${img.is_primary ? 'border-green-500' : 'border-gray-200'}`} />
+                        <img src={cdnImage(img.card_url ?? img.display_url ?? img.image_url)} alt="" className={`w-20 aspect-[4/5] object-cover rounded-lg border-2 ${img.is_primary ? 'border-green-500' : 'border-gray-200'}`} />
                       </a>
                       <button onClick={() => deleteImage(img)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-gray-700 text-white rounded-full text-xs flex items-center justify-center">×</button>
                       <button onClick={() => setCropImg(img)}

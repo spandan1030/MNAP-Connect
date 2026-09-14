@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { fetchCatalogueOptions, type Options } from '@/lib/catalogue'
+import { cdnImage } from '@/lib/cdn'
 import Navbar from '@/components/ui/Navbar'
 import PreviewModal from '@/components/catalogue/PreviewModal'
 import type { WaProduct } from '@/lib/types'
@@ -235,10 +236,12 @@ export default function CataloguePage() {
     if (rows.length) {
       const ids = rows.map(r => r.id)
       const { data: imgs } = await supabase.from('wa_product_images')
-        .select('product_id, image_url, thumb_url, display_url, display_thumb_url').eq('is_primary', true).in('product_id', ids)
+        .select('product_id, image_url, thumb_url, display_url, display_thumb_url, card_url').eq('is_primary', true).in('product_id', ids)
       setThumbs(prev => {
         const m = reset ? {} : { ...prev }
-        for (const i of (imgs ?? [])) m[i.product_id] = i.display_thumb_url ?? i.display_url ?? i.thumb_url ?? i.image_url
+        // Smallest-first for this tiny admin grid tile, then route through the CDN
+        // (no-op until NEXT_PUBLIC_IMAGE_CDN_HOST is set) so daily browsing is cheap.
+        for (const i of (imgs ?? [])) m[i.product_id] = cdnImage(i.display_thumb_url ?? i.card_url ?? i.display_url ?? i.thumb_url ?? i.image_url)
         return m
       })
     } else if (reset) {

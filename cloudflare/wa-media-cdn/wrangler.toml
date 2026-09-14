@@ -1,0 +1,24 @@
+name = "wa-media-cdn"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# The Supabase project origin the Worker proxies (public Storage host — no secrets).
+[vars]
+SUPABASE_ORIGIN = "https://tqnirshwiqpwbqdcrgbr.supabase.co"
+
+# --- Deploy target -----------------------------------------------------------
+# The domain mnalankarpalace.com is on GOOGLE CLOUD DNS, not Cloudflare, so we
+# deploy to a free `*.workers.dev` hostname — NO DNS change, deployable today.
+# `wrangler deploy` then serves at:
+#     https://wa-media-cdn.<your-account-subdomain>.workers.dev
+# Set NEXT_PUBLIC_IMAGE_CDN_HOST in the customer app to that exact hostname.
+workers_dev = true
+
+# --- UPGRADE (later, optional): branded custom domain ------------------------
+# Only after the zone `mnalankarpalace.com` is moved onto Cloudflare. Then a
+# custom-domain route also lets EDGE CACHE HITS bypass the Worker entirely, which
+# removes the workers.dev free-tier request ceiling (see README "Limits"). To
+# switch: set `workers_dev = false`, uncomment the route, and redeploy.
+# [[routes]]
+# pattern = "cdn.mnalankarpalace.com"
+# custom_domain = true
