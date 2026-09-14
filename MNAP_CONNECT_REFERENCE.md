@@ -132,6 +132,22 @@ auto-centred crop with no `logo` field is un-watermarked).
 - The **customer app is fed the crop**: `catalogue-sync.buildDoc` sends
   `card_url ?? display_url ?? image_url` as `card` (grids), `display_url ?? image_url` as
   `image` (detail), and `display_thumb_url ?? thumb_url ?? image_url` as `thumb`.
+- **Cloudflare CDN host-swap (`lib/cdn.ts`, 2026-09-14):** `cdnImage(url)` rewrites a
+  Supabase `wa-media` public URL onto the image CDN by swapping ONLY the hostname (the
+  Worker preserves the `/storage/v1/object/public/wa-media/…` path 1:1), so no stored URL
+  changes. **Gated by `NEXT_PUBLIC_IMAGE_CDN_HOST`** (set on Vercel) — a no-op until set,
+  clearing it + redeploy is an instant rollback. Connect's OWN heavy daily catalogue
+  browsing is its own egress source, so it applies `cdnImage` in the catalogue **grid**
+  (`app/catalogue/page.tsx`, which now also falls back to `card_url`), **detail
+  thumbnails** (`app/catalogue/[id]`), and **`PreviewModal`**. The Worker + deploy steps
+  live in **`cloudflare/wa-media-cdn/`** (README); the domain is on Google Cloud DNS so it
+  deploys to a `*.workers.dev` host — no DNS change. Same helper + env in the customer app.
+- **Photo changes never leave a stale CDN copy:** every image is written to a
+  **timestamped filename** (`products/<id>/<Date.now()>-…`), so a new/re-cropped photo is a
+  new URL that was never cached, and old files are deleted. **Fix (2026-09-14):** `applyCrop`
+  + `deleteImage` now re-sync the customer app for **any published photo** (`is_primary ||
+  in_app`), not just the primary — else a re-cropped/deleted GALLERY photo left the app’s
+  `images[]` pointing at the deleted URL (broken image).
 - **Latest upload = primary by default:** on both `/catalogue/new` (save loop) and
   `/catalogue/[id]` (`addPhotos`), the **most-recently-uploaded** photo is set primary +
   `in_app`, overriding any previous primary (staff can re-pick with ★). Old rule was

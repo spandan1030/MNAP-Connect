@@ -2,17 +2,19 @@ name = "wa-media-cdn"
 main = "worker.js"
 compatibility_date = "2026-01-01"
 
-# The Supabase project origin the Worker proxies (public Storage host — no secrets).
-[vars]
-SUPABASE_ORIGIN = "https://tqnirshwiqpwbqdcrgbr.supabase.co"
-
 # --- Deploy target -----------------------------------------------------------
 # The domain mnalankarpalace.com is on GOOGLE CLOUD DNS, not Cloudflare, so we
 # deploy to a free `*.workers.dev` hostname — NO DNS change, deployable today.
-# `wrangler deploy` then serves at:
-#     https://wa-media-cdn.<your-account-subdomain>.workers.dev
-# Set NEXT_PUBLIC_IMAGE_CDN_HOST in the customer app to that exact hostname.
+# `wrangler deploy` serves at https://wa-media-cdn.<account-subdomain>.workers.dev
+# (this account: https://wa-media-cdn.mnap.workers.dev). Set the same host in
+# NEXT_PUBLIC_IMAGE_CDN_HOST in both apps.
+# NOTE: this MUST be a top-level key (before [vars]); under [vars] it would be
+# parsed as a Worker variable instead of the deploy-target setting.
 workers_dev = true
+
+# The Supabase project origin the Worker proxies (public Storage host — no secrets).
+[vars]
+SUPABASE_ORIGIN = "https://tqnirshwiqpwbqdcrgbr.supabase.co"
 
 # --- UPGRADE (later, optional): branded custom domain ------------------------
 # Only after the zone `mnalankarpalace.com` is moved onto Cloudflare. Then a
