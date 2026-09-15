@@ -61,6 +61,7 @@ export default function AudiencesPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState<string | null>(null)
+  const [refreshingAll, setRefreshingAll] = useState(false)
   const [seeding, setSeeding] = useState(false)
   const [seedMsg, setSeedMsg] = useState<string | null>(null)
 
@@ -272,6 +273,18 @@ export default function AudiencesPage() {
     })
     setRefreshing(null); load()
   }
+  // Re-materialise every live (dynamic) audience in one server sweep, so all the
+  // member counts below are current. Fixed audiences are skipped server-side.
+  async function refreshAllNow() {
+    setRefreshingAll(true); setSeedMsg('Refreshing all live audiences…')
+    try {
+      const res = await fetch('/api/audiences/refresh-all', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) { setSeedMsg(data.error ?? 'Refresh failed.'); return }
+      setSeedMsg(`Refreshed ${data.refreshed} live audience${data.refreshed === 1 ? '' : 's'}${data.failed ? ` · ${data.failed} failed` : ''}.`)
+      await load()
+    } catch { setSeedMsg('Network error.') } finally { setRefreshingAll(false) }
+  }
   async function remove(a: Audience) {
     if (!confirm(`Delete audience "${a.name}"? Past sends/calls keep their history.`)) return
     await fetch('/api/audiences/delete', {
@@ -290,6 +303,10 @@ export default function AudiencesPage() {
             <p className="text-xs text-gray-500">Saved, reusable cohorts. Pick one to message or call — no re-filtering.</p>
           </div>
           <div className="flex items-center gap-1.5">
+            <button onClick={refreshAllNow} disabled={refreshingAll}
+              className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 font-medium disabled:opacity-50">
+              {refreshingAll ? 'Refreshing…' : 'Refresh all'}
+            </button>
             <button onClick={seedPresets} disabled={seeding}
               className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 font-medium disabled:opacity-50">
               {seeding ? 'Seeding…' : 'Seed presets'}

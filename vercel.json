@@ -1,8 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/audiences/refresh-all",
-      "schedule": "0 2 * * *"
-    }
-  ]
-}

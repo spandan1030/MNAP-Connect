@@ -1,35 +1,17 @@
-import { NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { refreshAudienceMembers } from '@/lib/audiences/service'
 
-// Refreshing every dynamic audience is several queries each — give the function
-// headroom over the default so the daily cron doesn't time out mid-sweep.
+// Re-materialise every active DYNAMIC audience in one sweep — behind the
+// "Refresh all" button on /audiences. Dynamic audiences freeze their members at
+// creation; opening Insights or activating refreshes the one you touch, this
+// brings the whole list's member counts current at once. Fixed audiences are a
+// no-op (refreshAudienceMembers keeps them frozen).
+
 export const maxDuration = 60
-export const dynamic = 'force-dynamic'
 
-// Re-materialise EVERY active dynamic audience — the "daily run" the single
-// refresh route always anticipated. Dynamic audiences freeze their members at
-// creation and only re-sync on an explicit refresh; opening Insights or
-// activating now refreshes the one you touch, but this keeps the whole library's
-// member counts honest without anyone opening each audience.
-//
-// Auth: either a scheduler bearing CRON_SECRET, or a signed-in user (so it can
-// also be triggered by hand). Fixed audiences are skipped by refreshAudienceMembers.
-//
-// Vercel Cron triggers this path with a GET and, when CRON_SECRET is set in the
-// project env, adds `Authorization: Bearer <CRON_SECRET>` automatically — so GET
-// and POST both run the same job. Without CRON_SECRET set, only a signed-in user
-// can call it (a cron with no cookie would 401), so the owner MUST set it in
-// Vercel for the scheduled run to work.
-
-async function authorized(req: NextRequest): Promise<boolean> {
-  const secret = process.env.CRON_SECRET
-  if (secret) {
-    const auth = req.headers.get('authorization')
-    if (auth === `Bearer ${secret}`) return true
-  }
+export async function POST() {
   const cookieStore = await cookies()
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -37,26 +19,17 @@ async function authorized(req: NextRequest): Promise<boolean> {
     { cookies: { getAll: () => cookieStore.getAll(), setAll: () => {} } }
   )
   const { data: { user } } = await supabase.auth.getUser()
-  return !!user
-}
-
-async function run(req: NextRequest) {
-  if (!await authorized(req)) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { data } = await supabaseAdmin.from('wa_audiences')
     .select('id').eq('is_dynamic', true).eq('is_active', true)
   const ids = ((data ?? []) as { id: string }[]).map(r => r.id)
 
   let refreshed = 0, failed = 0
-  const results: Array<{ id: string; members?: number; added?: number; removed?: number; error?: string }> = []
   for (const id of ids) {
     const r = await refreshAudienceMembers(id)
-    if (r.error) { failed++; results.push({ id, error: r.error }) }
-    else { refreshed++; results.push({ id, members: r.members, added: r.added, removed: r.removed }) }
+    if (r.error) failed++; else refreshed++
   }
 
-  return Response.json({ total: ids.length, refreshed, failed, results })
+  return Response.json({ total: ids.length, refreshed, failed })
 }
-
-export const GET = run
-export const POST = run

@@ -93,10 +93,10 @@ Files touched: `app/api/audiences/{activate,save-slice,report,count}/route.ts`,
 `components/audiences/{RuleBuilder,AudienceInsights}.tsx`. Build clean.
 
 **Follow-ups (done 2026-09-15):**
-- `vercel.json` cron hits `GET /api/audiences/refresh-all` daily at 02:00 UTC
-  (route now serves GET+POST, `maxDuration=60`). **Owner TODO: set `CRON_SECRET`
-  in Vercel** — Vercel adds `Authorization: Bearer <CRON_SECRET>` to the cron
-  request; without it set, the scheduled call 401s (only a signed-in user passes).
+- A **"Refresh all" button** on `/audiences` calls `POST /api/audiences/refresh-all`
+  and re-materialises every live audience at once (fixed ones no-op). Picked over a
+  cron — manual, visible, zero config. The on-open / on-activate / on-narrow
+  refreshes still keep the paths you actually touch correct on their own.
 - The report is now FULLY derived — `total` from `wa_campaign_members`, `sent`/
   `failed` from the ledger, `delivered`/`read` from events, `replied` from inbound.
   Nothing trusts the stored `wa_campaigns` counters. The Insights card also shows
