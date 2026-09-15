@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     .eq('phone', phone).maybeSingle()
 
   // Everything else in parallel.
-  const [markerRes, aCustRes, signalsRes, ledgerRes, callsRes, contactRes, audRes, visitsRes] = await Promise.all([
+  const [markerRes, aCustRes, signalsRes, ledgerRes, callsRes, contactRes, audRes, visitsRes, msgsRes] = await Promise.all([
     bCust
       ? supabaseAdmin.from('wa_b_markers')
           .select('recency_tier,value_tier,rfm_segment,frequency_tier,primary_metal,lifetime_value,total_bills,days_since_last_purchase,first_purchase_date,last_purchase_date,audience_labels,is_high_value,is_likely_wedding,outreach_bucket')
@@ -44,8 +44,8 @@ export async function GET(req: NextRequest) {
     supabaseAdmin.from('wa_customers').select('id, name, is_opted_out').eq('phone', phone).maybeSingle(),
     supabaseAdmin.from('wa_signals').select('interest, source, last_seen').eq('phone', phone),
     supabaseAdmin.from('wa_send_ledger')
-      .select('meta_template_name, category, status, cohort_label, sent_at, campaign_id, template:wa_message_templates(name)')
-      .eq('phone', phone).order('sent_at', { ascending: false }).limit(20),
+      .select('wa_message_id, meta_template_name, category, status, cohort_label, sent_at, campaign_id, template:wa_message_templates(name)')
+      .eq('phone', phone).order('sent_at', { ascending: false }).limit(30),
     bCust
       ? supabaseAdmin.from('wa_b_call_logs')
           .select('success, topics, intent, called_at')
@@ -58,6 +58,13 @@ export async function GET(req: NextRequest) {
     supabaseAdmin.from('wa_walkin_visits')
       .select('visited_at, timing, note, interests, is_backfill, salesman:salesmen(alias)')
       .eq('phone', phone).order('visited_at', { ascending: false }).limit(20),
+    // Every OUTBOUND message to this phone — this is the complete record and the
+    // only place individually-typed inbox messages land (they never hit the send
+    // ledger). Joined to the ledger below so campaign sends keep their category.
+    supabaseAdmin.from('wa_messages')
+      .select('wa_message_id, template_name, status, sent_at, created_at, thread:wa_threads!inner(phone)')
+      .eq('thread.phone', phone).eq('direction', 'outbound')
+      .order('created_at', { ascending: false }).limit(30),
   ])
 
   const aCust = aCustRes.data as { id: string; name: string | null; is_opted_out: boolean } | null
@@ -87,12 +94,41 @@ export async function GET(req: NextRequest) {
     (interests[s.source] ??= []).push(s.interest)
   }
 
-  const sends = ((ledgerRes.data ?? []) as unknown as Array<{ meta_template_name: string | null; category: string | null; status: string; cohort_label: string | null; sent_at: string; campaign_id: string | null; template: { name: string } | { name: string }[] | null }>)
-    .map(r => ({
-      label: (Array.isArray(r.template) ? r.template[0]?.name : r.template?.name) ?? r.meta_template_name ?? r.category ?? 'message',
-      category: r.category, status: r.status, cohort: r.cohort_label, sentAt: r.sent_at,
-      inCampaign: !!r.campaign_id,
-    }))
+  // Messages sent = OUTBOUND wa_messages (the complete record, including one-off
+  // inbox messages) UNIONed with the send ledger (which adds category / campaign /
+  // cohort for template sends). Match on wa_message_id; a message with no ledger
+  // match is an individual send ("outside campaign"), and a ledger row with no
+  // message (e.g. a failed campaign send, which has no wa_message_id) is kept too.
+  interface LedgerRow { meta_template_name: string | null; category: string | null; status: string; cohort_label: string | null; sent_at: string; campaign_id: string | null; template: { name: string } | { name: string }[] | null }
+  const tmplName = (t: LedgerRow['template']) => (Array.isArray(t) ? t[0]?.name : t?.name) ?? null
+  const ledgerByWamid = new Map<string, LedgerRow>()
+  const ledgerNoWamid: LedgerRow[] = []
+  for (const r of (ledgerRes.data ?? []) as unknown as Array<LedgerRow & { wa_message_id?: string | null }>) {
+    if (r.wa_message_id) ledgerByWamid.set(r.wa_message_id, r)
+    else ledgerNoWamid.push(r)
+  }
+
+  type Send = { label: string; category: string | null; status: string; cohort: string | null; sentAt: string; inCampaign: boolean }
+  const sends: Send[] = []
+  for (const m of (msgsRes.data ?? []) as unknown as Array<{ wa_message_id: string | null; template_name: string | null; status: string; sent_at: string | null; created_at: string }>) {
+    const l = m.wa_message_id ? ledgerByWamid.get(m.wa_message_id) : undefined
+    sends.push({
+      label: (l ? tmplName(l.template) ?? l.meta_template_name : null) ?? m.template_name ?? 'Message',
+      category: l?.category ?? null, status: m.status, cohort: l?.cohort_label ?? null,
+      sentAt: m.sent_at ?? m.created_at, inCampaign: !!l?.campaign_id,
+    })
+    if (m.wa_message_id) ledgerByWamid.delete(m.wa_message_id)
+  }
+  // Ledger rows with no matching outbound message (failed campaign sends, etc.).
+  for (const l of [...ledgerByWamid.values(), ...ledgerNoWamid]) {
+    sends.push({
+      label: tmplName(l.template) ?? l.meta_template_name ?? l.category ?? 'message',
+      category: l.category, status: l.status, cohort: l.cohort_label, sentAt: l.sent_at,
+      inCampaign: !!l.campaign_id,
+    })
+  }
+  sends.sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
+  sends.splice(25)
 
   // Which saved audiences this phone is currently a member of.
   const audiences = ((audRes.data ?? []) as unknown as Array<{ audience: { id: string; name: string; is_dynamic: boolean } | { id: string; name: string; is_dynamic: boolean }[] | null }>)

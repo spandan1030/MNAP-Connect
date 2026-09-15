@@ -17,12 +17,15 @@ import { DATASETS, type Interval, type IntervalDataset } from '@/lib/audiences/i
 
 type Opt = { value: string; label: string }
 
-interface CountResult { total: number; groups: { total: number; rules: (number | null)[] }[] }
+interface CountResult { total: number; groups: { total: number; rules: (number | null)[] }[]; scoped?: boolean }
 
-export default function RuleBuilder({ tree, onChange, dynamicOptions }: {
+export default function RuleBuilder({ tree, onChange, dynamicOptions, audienceId }: {
   tree: RuleTree
   onChange: (t: RuleTree) => void
   dynamicOptions?: Partial<Record<'call_campaigns' | 'topics' | 'ad_campaigns' | 'salesmen', Opt[]>>
+  // When set, the headline total is scoped to this audience's members — "how
+  // many of THIS audience match" — instead of the whole database.
+  audienceId?: string
 }) {
   const [counts, setCounts] = useState<CountResult | null>(null)
   const [counting, setCounting] = useState(false)
@@ -38,13 +41,13 @@ export default function RuleBuilder({ tree, onChange, dynamicOptions }: {
       try {
         const res = await fetch('/api/audiences/count', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rules: tree }),
+          body: JSON.stringify({ rules: tree, audienceId }),
         })
         setCounts(res.ok ? await res.json() : null)
       } catch { setCounts(null) } finally { setCounting(false) }
     }, 500)
     return () => { if (timer.current) clearTimeout(timer.current) }
-  }, [tree])
+  }, [tree, audienceId])
 
   const groups = tree.groups?.length ? tree.groups : [{ rules: [] }]
   const intervals = tree.intervals ?? []
@@ -150,7 +153,9 @@ export default function RuleBuilder({ tree, onChange, dynamicOptions }: {
           </button>
         </div>
         <span className="text-[11px] font-bold text-gray-700">
-          {counting ? 'counting…' : counts ? `${counts.total.toLocaleString('en-IN')} people match` : ''}
+          {counting ? 'counting…' : counts
+            ? `${counts.total.toLocaleString('en-IN')} ${counts.scoped ? 'in this audience match' : 'people match'}`
+            : ''}
         </span>
       </div>
     </div>

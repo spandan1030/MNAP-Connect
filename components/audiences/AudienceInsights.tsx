@@ -89,7 +89,7 @@ export default function AudienceInsights({
       {error && <p className="text-[11px] text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
 
       {/* Carry by NARROW — save a marker slice of this audience as a new audience. */}
-      <NarrowSlice audienceName={audienceName} dynamicOptions={dynamicOptions}
+      <NarrowSlice audienceId={audienceId} audienceName={audienceName} dynamicOptions={dynamicOptions}
         onSave={(payload) => saveSlice({ mode: 'narrow', audienceId, ...payload })} />
 
       {loading && <p className="text-sm text-gray-400 text-center py-6">Loading…</p>}
@@ -231,8 +231,9 @@ export default function AudienceInsights({
 
 // ── Carry by NARROW: members ∩ marker filter → save as audience ──────────────
 function NarrowSlice({
-  audienceName, dynamicOptions, onSave,
+  audienceId, audienceName, dynamicOptions, onSave,
 }: {
+  audienceId: string
   audienceName: string
   dynamicOptions: DynOpts
   onSave: (payload: Record<string, unknown>) => Promise<boolean>
@@ -260,7 +261,7 @@ function NarrowSlice({
       {open && (
         <div className="mt-2 space-y-2">
           <p className="text-[10px] text-gray-400">Keep only the members of “{audienceName}” who also match — e.g. Last call outcome = Will come, or Starred hot ★. Saved as a new audience you can send templates to (N at a time).</p>
-          <RuleBuilder tree={rules} onChange={setRules} dynamicOptions={dynamicOptions} />
+          <RuleBuilder tree={rules} onChange={setRules} dynamicOptions={dynamicOptions} audienceId={audienceId} />
           <input value={name} onChange={e => setName(e.target.value)} placeholder="New audience name (e.g. Winback · Will-come)" className="input text-xs" />
           <button onClick={save} disabled={busy || !name.trim() || !active}
             className="w-full text-xs font-semibold bg-gray-900 text-white py-2 rounded-lg disabled:opacity-50">

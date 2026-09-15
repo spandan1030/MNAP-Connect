@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { resolveCohortPhones, tenDigit } from '@/lib/reach/resolve'
 import { resolveRuleTree } from '@/lib/audiences/resolve-rules'
+import { refreshAudienceMembers } from '@/lib/audiences/service'
 import { isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
 import { dispatchTemplate } from '@/lib/reach/dispatch'
 import { callableTypeB, notCallableMessage, mintCallDeck } from '@/lib/calls/deck'
@@ -64,6 +65,12 @@ export async function POST(req: NextRequest) {
     .select('id, name, filter').eq('id', audienceId).maybeSingle()
   if (!aud) return Response.json({ error: 'Audience not found' }, { status: 404 })
 
+  // Re-materialise a DYNAMIC audience before sending. Its members are frozen at
+  // creation and only re-synced on an explicit refresh (there is no daily job
+  // yet), so without this a "live" audience sends to a stale snapshot — the same
+  // staleness that made narrowing collapse to a handful of people.
+  await refreshAudienceMembers(audienceId)
+
   // Members, optionally narrowed by a send-time sub-filter (AND). The narrowing
   // uses the SAME two faces as authoring: subRules (rule tree from the Rules or
   // Chips builder) resolves through the one engine; subFilter is the legacy chip
@@ -122,6 +129,20 @@ export async function POST(req: NextRequest) {
       limit: (limit && limit > 0) ? limit : null,
     })
     if (result.error) return Response.json({ error: result.error }, { status: 500 })
+
+    // Write the counters back onto the campaign — WITHOUT this the audience report
+    // (which reads the stored wa_campaigns.sent) shows 0 forever, even though the
+    // ledger recorded the sends. Accumulate like campaigns/send so repeat
+    // activations of the same (audience, template) add up into one funnel.
+    const { data: cur } = await supabaseAdmin.from('wa_campaigns')
+      .select('sent, failed').eq('id', campaignId!).maybeSingle()
+    await supabaseAdmin.from('wa_campaigns').update({
+      total: phones.length,
+      sent: ((cur?.sent as number) ?? 0) + result.sent,
+      failed: ((cur?.failed as number) ?? 0) + result.failed,
+      last_refreshed_at: new Date().toISOString(),
+    }).eq('id', campaignId!)
+
     return Response.json({
       channel: 'chat', campaignId, sent: result.sent, failed: result.failed,
       skippedSuppressed: result.skippedSuppressed, skippedDnc: result.skippedDnc,

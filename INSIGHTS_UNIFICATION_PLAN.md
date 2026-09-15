@@ -61,6 +61,41 @@ attached via the "Adopt the current live calling cohort" button (Activate sheet)
 ## Open questions for the user
 - (none blocking — same-template-twice defaulted to "merge"; say the word to change it.)
 
+## QC pass (2026-09-15) — four live bugs found + fixed
+
+A comprehensive QC of the audience/engagement logic surfaced four bugs; all fixed
+(no migration). Root causes, not symptoms:
+
+1. **Stale dynamic membership (the "hot starred → narrow → only 2" bug).** Dynamic
+   audiences materialise members ONCE at creation and only re-sync on an explicit
+   refresh (no daily job existed). Narrow/activate read that frozen `audience_members`
+   snapshot, so everyone starred/called *after* creation was invisible → the narrow
+   collapsed to a handful. **Fix:** `refreshAudienceMembers` is now called before the
+   member set is read — on Insights open (`report`), on `activate`, and on `save-slice`
+   narrow. New `POST /api/audiences/refresh-all` (CRON_SECRET- or user-guarded) lets a
+   scheduler keep every active dynamic audience's card count honest.
+2. **Individual messages missing from the customer profile.** `CustomerPeek` read only
+   `wa_send_ledger`; one-off inbox messages (`/api/whatsapp/send`) only write
+   `wa_messages`. **Fix:** peek now UNIONs outbound `wa_messages` (complete record) with
+   the ledger (adds category/campaign), matched on `wa_message_id`.
+3. **Activated chat campaign always showed "0 sent".** `audiences/activate` called
+   `dispatchTemplate` but never wrote `wa_campaigns.{sent,failed,total}` back (unlike
+   every sibling send path); the report read the stored 0. **Fix:** activate now
+   accumulates the counters, AND the report derives sent/failed from the ledger so
+   already-broken campaigns self-heal.
+4. **Rule-builder count showed whole-DB totals, not within-audience.** `/api/audiences/count`
+   had no audience scope, so narrowing previewed a big number then saved a tiny slice
+   (this hid bug #1). **Fix:** `count` accepts `audienceId`; the headline total is now
+   `members ∩ tree`, and RuleBuilder shows "N in this audience match".
+
+Files touched: `app/api/audiences/{activate,save-slice,report,count}/route.ts`,
+`app/api/audiences/refresh-all/route.ts` (new), `app/api/customer/peek/route.ts`,
+`components/audiences/{RuleBuilder,AudienceInsights}.tsx`. Build clean.
+
+**Follow-up not done:** point a scheduler at `POST /api/audiences/refresh-all` daily
+(set `CRON_SECRET`), and consider deriving ALL report funnel stages from the
+ledger/events (the report still trusts stored `total`, floored by sent).
+
 ## Progress log
 - 2026-07-31 — plan created; starting Phase 1.
 - 2026-07-31 — **Phase 1 complete + build clean.** New Insights live: per-template funnel + drill-down

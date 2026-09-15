@@ -6,6 +6,7 @@ import { resolveCohortPhones, tenDigit } from '@/lib/reach/resolve'
 import { resolveRuleTree } from '@/lib/audiences/resolve-rules'
 import { isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
 import { createAudienceFromCohort } from '@/lib/audiences/adhoc'
+import { refreshAudienceMembers } from '@/lib/audiences/service'
 import { phonesAtStage, type EngagementStage } from '@/lib/campaigns/engagement'
 import type { ReachFilter } from '@/lib/types'
 
@@ -56,6 +57,10 @@ export async function POST(req: NextRequest) {
 
   if (body.mode === 'narrow') {
     if (!body.audienceId) return Response.json({ error: 'Missing audienceId' }, { status: 400 })
+    // Re-materialise a dynamic base audience first — otherwise the narrow runs
+    // against a frozen snapshot and silently drops everyone matched since it was
+    // last synced (the "only 2 left" bug).
+    await refreshAudienceMembers(body.audienceId)
     phones = await memberPhones(body.audienceId)
     if (body.subRules && !isEmptyTree(body.subRules)) {
       const { phones: subSet, error } = await resolveRuleTree(body.subRules)

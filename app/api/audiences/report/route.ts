@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { tenDigit } from '@/lib/reach/resolve'
+import { refreshAudienceMembers } from '@/lib/audiences/service'
 
 // Unified per-audience insights: every activation of this audience, chat AND call.
 //   GET /api/audiences/report?id=<uuid>
@@ -22,6 +23,11 @@ export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id')
   if (!id) return Response.json({ error: 'Missing id' }, { status: 400 })
 
+  // Opening Insights re-materialises a dynamic audience so its member count, the
+  // narrow preview, and any slice saved from here all agree on who is in it.
+  // (Cheap no-op for a fixed, already-materialised audience.)
+  await refreshAudienceMembers(id)
+
   // ── Chat activations ──
   const { data: chatCamps } = await supabaseAdmin.from('wa_campaigns')
     .select('id, name, template_name, total, sent, failed, skipped_suppressed, created_at')
@@ -31,6 +37,14 @@ export async function GET(req: NextRequest) {
   const chat = []
   for (const c of (chatCamps ?? []) as Array<Record<string, unknown>>) {
     const cid = c.id as string
+    // Sent/failed come from the LEDGER, not the stored wa_campaigns.sent column.
+    // The audience/activate path historically didn't write that column back, so a
+    // stored 0 was masking real sends; counting the ledger is the source of truth
+    // and self-heals campaigns sent before that write-back was added.
+    const { count: sentCount } = await supabaseAdmin.from('wa_send_ledger')
+      .select('id', { count: 'exact', head: true }).eq('campaign_id', cid).eq('status', 'sent')
+    const { count: failedCount } = await supabaseAdmin.from('wa_send_ledger')
+      .select('id', { count: 'exact', head: true }).eq('campaign_id', cid).eq('status', 'failed')
     // wamids sent under this campaign (ledger) → look up their events.
     const wamids: string[] = []
     for (let from = 0; ; from += 1000) {
@@ -87,9 +101,11 @@ export async function GET(req: NextRequest) {
       }
       replied = repliedPhones.size
     }
+    const sent = sentCount ?? 0
     chat.push({
       campaignId: cid, name: c.name, template: c.template_name,
-      total: c.total ?? 0, sent: c.sent ?? 0, failed: c.failed ?? 0,
+      // total is the send set; if the stored total is stale, sent is a safe floor.
+      total: Math.max((c.total as number) ?? 0, sent), sent, failed: failedCount ?? 0,
       skipped: c.skipped_suppressed ?? 0, delivered, read, replied, createdAt: c.created_at,
     })
   }
