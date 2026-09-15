@@ -92,9 +92,15 @@ Files touched: `app/api/audiences/{activate,save-slice,report,count}/route.ts`,
 `app/api/audiences/refresh-all/route.ts` (new), `app/api/customer/peek/route.ts`,
 `components/audiences/{RuleBuilder,AudienceInsights}.tsx`. Build clean.
 
-**Follow-up not done:** point a scheduler at `POST /api/audiences/refresh-all` daily
-(set `CRON_SECRET`), and consider deriving ALL report funnel stages from the
-ledger/events (the report still trusts stored `total`, floored by sent).
+**Follow-ups (done 2026-09-15):**
+- `vercel.json` cron hits `GET /api/audiences/refresh-all` daily at 02:00 UTC
+  (route now serves GET+POST, `maxDuration=60`). **Owner TODO: set `CRON_SECRET`
+  in Vercel** — Vercel adds `Authorization: Bearer <CRON_SECRET>` to the cron
+  request; without it set, the scheduled call 401s (only a signed-in user passes).
+- The report is now FULLY derived — `total` from `wa_campaign_members`, `sent`/
+  `failed` from the ledger, `delivered`/`read` from events, `replied` from inbound.
+  Nothing trusts the stored `wa_campaigns` counters. The Insights card also shows
+  "N in cohort · M still to send" for a partially-sent template.
 
 ## Progress log
 - 2026-07-31 — plan created; starting Phase 1.

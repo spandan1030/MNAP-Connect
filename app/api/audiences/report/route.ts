@@ -45,6 +45,10 @@ export async function GET(req: NextRequest) {
       .select('id', { count: 'exact', head: true }).eq('campaign_id', cid).eq('status', 'sent')
     const { count: failedCount } = await supabaseAdmin.from('wa_send_ledger')
       .select('id', { count: 'exact', head: true }).eq('campaign_id', cid).eq('status', 'failed')
+    // Denominator = the actual send set (wa_campaign_members), same source the
+    // drill-down uses — not the stored wa_campaigns.total, which drifts.
+    const { count: memberCount } = await supabaseAdmin.from('wa_campaign_members')
+      .select('phone', { count: 'exact', head: true }).eq('campaign_id', cid)
     // wamids sent under this campaign (ledger) → look up their events.
     const wamids: string[] = []
     for (let from = 0; ; from += 1000) {
@@ -104,8 +108,8 @@ export async function GET(req: NextRequest) {
     const sent = sentCount ?? 0
     chat.push({
       campaignId: cid, name: c.name, template: c.template_name,
-      // total is the send set; if the stored total is stale, sent is a safe floor.
-      total: Math.max((c.total as number) ?? 0, sent), sent, failed: failedCount ?? 0,
+      // Denominator from members; floored by sent in case members weren't synced.
+      total: Math.max(memberCount ?? 0, sent), sent, failed: failedCount ?? 0,
       skipped: c.skipped_suppressed ?? 0, delivered, read, replied, createdAt: c.created_at,
     })
   }

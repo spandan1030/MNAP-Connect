@@ -120,6 +120,11 @@ export default function AudienceInsights({
                         <Arrow /><Stat label="replied" v={c.replied} accent="text-amber-700" />
                         {c.failed > 0 && <><span className="text-gray-300">·</span><Stat label="failed" v={c.failed} accent="text-red-500" /></>}
                       </div>
+                      {c.total > c.sent + c.failed && (
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          {c.total.toLocaleString('en-IN')} in cohort · {(c.total - c.sent - c.failed).toLocaleString('en-IN')} still to send — open to send more
+                        </p>
+                      )}
                     </button>
                     {openCampaign === c.campaignId && (
                       <div className="px-2.5 pb-2.5 border-t border-gray-100 pt-2.5">

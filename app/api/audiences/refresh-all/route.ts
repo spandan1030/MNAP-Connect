@@ -4,6 +4,11 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { refreshAudienceMembers } from '@/lib/audiences/service'
 
+// Refreshing every dynamic audience is several queries each — give the function
+// headroom over the default so the daily cron doesn't time out mid-sweep.
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 // Re-materialise EVERY active dynamic audience — the "daily run" the single
 // refresh route always anticipated. Dynamic audiences freeze their members at
 // creation and only re-sync on an explicit refresh; opening Insights or
@@ -12,6 +17,12 @@ import { refreshAudienceMembers } from '@/lib/audiences/service'
 //
 // Auth: either a scheduler bearing CRON_SECRET, or a signed-in user (so it can
 // also be triggered by hand). Fixed audiences are skipped by refreshAudienceMembers.
+//
+// Vercel Cron triggers this path with a GET and, when CRON_SECRET is set in the
+// project env, adds `Authorization: Bearer <CRON_SECRET>` automatically — so GET
+// and POST both run the same job. Without CRON_SECRET set, only a signed-in user
+// can call it (a cron with no cookie would 401), so the owner MUST set it in
+// Vercel for the scheduled run to work.
 
 async function authorized(req: NextRequest): Promise<boolean> {
   const secret = process.env.CRON_SECRET
@@ -29,7 +40,7 @@ async function authorized(req: NextRequest): Promise<boolean> {
   return !!user
 }
 
-export async function POST(req: NextRequest) {
+async function run(req: NextRequest) {
   if (!await authorized(req)) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { data } = await supabaseAdmin.from('wa_audiences')
@@ -46,3 +57,6 @@ export async function POST(req: NextRequest) {
 
   return Response.json({ total: ids.length, refreshed, failed, results })
 }
+
+export const GET = run
+export const POST = run
