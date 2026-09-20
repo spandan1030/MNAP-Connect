@@ -122,9 +122,24 @@ export default function AudiencesPage() {
       .then(({ data }) => setTemplates((data ?? []) as MessageTemplate[]))
   }, [supabase])
 
-  function openActivate(a: Audience) {
+  async function openActivate(a: Audience) {
     setActivate(a); setChannel('chat'); setActTemplateId(''); setActLimit('')
     setSubOpen(false); setSubAuthorMode('rules'); setSubRules(emptyTree()); setSubFilter({}); setActError(null); setActResult(null)
+    // Re-materialise a dynamic audience on open so the header count, the scoped
+    // narrow preview, and the send all agree on the same member set (the send
+    // refreshes too). Fixed audiences are a no-op.
+    if (a.is_dynamic) {
+      try {
+        const res = await fetch('/api/audiences/refresh', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: a.id }),
+        })
+        const data = await res.json()
+        if (res.ok && typeof data.members === 'number') {
+          setActivate(cur => (cur && cur.id === a.id ? { ...cur, member_count: data.members } : cur))
+          load()
+        }
+      } catch { /* non-blocking — the send still refreshes */ }
+    }
   }
   async function adoptActiveCall() {
     if (!activate) return
@@ -502,7 +517,7 @@ export default function AudiencesPage() {
                       </button>
                     </div>
                     {subAuthorMode === 'rules' ? (
-                      <RuleBuilder tree={subRules} onChange={setSubRules} dynamicOptions={{
+                      <RuleBuilder tree={subRules} onChange={setSubRules} audienceId={activate.id} dynamicOptions={{
                         call_campaigns: campaigns.map(c => ({ value: c.id, label: c.name })),
                         topics: topics.map(t => ({ value: t.id, label: t.name })),
                         salesmen: salesmen.map(s => ({ value: s.alias, label: `${s.alias} — ${s.name}` })),
