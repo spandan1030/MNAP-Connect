@@ -5,6 +5,7 @@ import Navbar from '@/components/ui/Navbar'
 import FilterBuilder from '@/components/reach/FilterBuilder'
 import RuleBuilder from '@/components/audiences/RuleBuilder'
 import AudienceInsights from '@/components/audiences/AudienceInsights'
+import MembersView from '@/components/audiences/MembersView'
 import { emptyTree, isEmptyTree, type RuleTree } from '@/lib/audiences/rules'
 import { chipsToTree, chipsConvertible } from '@/lib/audiences/chips-to-tree'
 import { createClient } from '@/lib/supabase/client'
@@ -74,6 +75,9 @@ export default function AudiencesPage() {
   // activation sheet
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [activate, setActivate] = useState<Audience | null>(null)
+  const [viewMembers, setViewMembers] = useState<Audience | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [buildPreviewOpen, setBuildPreviewOpen] = useState(false)
   const [channel, setChannel] = useState<'chat' | 'call'>('chat')
   const [actTemplateId, setActTemplateId] = useState('')
   const [actLimit, setActLimit] = useState<number | ''>('')
@@ -124,7 +128,7 @@ export default function AudiencesPage() {
 
   async function openActivate(a: Audience) {
     setActivate(a); setChannel('chat'); setActTemplateId(''); setActLimit('')
-    setSubOpen(false); setSubAuthorMode('rules'); setSubRules(emptyTree()); setSubFilter({}); setActError(null); setActResult(null)
+    setSubOpen(false); setSubAuthorMode('rules'); setSubRules(emptyTree()); setSubFilter({}); setActError(null); setActResult(null); setPreviewOpen(false)
     // Re-materialise a dynamic audience on open so the header count, the scoped
     // narrow preview, and the send all agree on the same member set (the send
     // refreshes too). Fixed audiences are a no-op.
@@ -153,20 +157,24 @@ export default function AudiencesPage() {
       setActResult(`Adopted "${data.adopted}" — this audience now owns that calling cohort (history preserved).`)
     } catch { setActError('Network error.') } finally { setActBusy(false) }
   }
+  // The send-time narrowing as the API takes it: a rule tree if we can build one
+  // (rules mode, or convertible chips), else the legacy chip filter. Shared by the
+  // recipient preview and the actual send so the two can never disagree.
+  function buildNarrow(): Record<string, unknown> {
+    if (subAuthorMode === 'rules') {
+      if (!isEmptyTree(subRules)) return { subRules }
+    } else if (chipsConvertible(subFilter)) {
+      const t = chipsToTree(subFilter)
+      if (!isEmptyTree(t)) return { subRules: t }
+    } else if (Object.keys(subFilter).length) {
+      return { subFilter }
+    }
+    return {}
+  }
   async function runActivation() {
     if (!activate) return
     setActBusy(true); setActError(null); setActResult(null)
-    // Resolve the narrowing into what the API takes: a rule tree if we can build
-    // one (rules mode, or convertible chips), else the legacy chip filter.
-    let narrow: Record<string, unknown> = {}
-    if (subAuthorMode === 'rules') {
-      if (!isEmptyTree(subRules)) narrow = { subRules }
-    } else if (chipsConvertible(subFilter)) {
-      const t = chipsToTree(subFilter)
-      if (!isEmptyTree(t)) narrow = { subRules: t }
-    } else if (Object.keys(subFilter).length) {
-      narrow = { subFilter }
-    }
+    const narrow = buildNarrow()
     try {
       const res = await fetch('/api/audiences/activate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -364,6 +372,7 @@ export default function AudiencesPage() {
               <button onClick={() => openActivate(a)} disabled={a.member_count === 0}
                 className="text-[11px] font-semibold text-white bg-green-600 px-2.5 py-1 rounded-lg disabled:opacity-40">Activate</button>
               <button onClick={() => openReport(a)} className="text-[11px] font-medium text-gray-700 border border-gray-200 px-2.5 py-1 rounded-lg">Insights</button>
+              <button onClick={() => setViewMembers(a)} className="text-[11px] font-medium text-gray-700 border border-gray-200 px-2.5 py-1 rounded-lg">View / export</button>
               <span className="flex-1" />
               <button onClick={() => remove(a)} className="text-[11px] text-red-500 px-2 py-1 rounded-lg hover:bg-red-50">Delete</button>
             </div>
@@ -430,6 +439,29 @@ export default function AudiencesPage() {
                   <FilterBuilder filter={filter} campaigns={campaigns} topics={topics} onChange={setFilter} />
                 </>
               )}
+
+              {/* Preview / export the exact people this definition matches, from
+                  the whole pool — before saving. Works in Rules, and in Chips when
+                  the chips are convertible to the one engine. */}
+              {(() => {
+                const buildRules: RuleTree | null =
+                  authorMode === 'rules' ? (isEmptyTree(rules) ? null : rules)
+                  : (authorMode === 'chips' && chipsConvertible(filter) && Object.keys(filter).length) ? chipsToTree(filter)
+                  : null
+                if (!buildRules) return null
+                return (
+                  <div className="border-t border-gray-100 pt-2">
+                    <button onClick={() => setBuildPreviewOpen(o => !o)} className="text-[11px] font-medium text-gray-600 flex items-center gap-1">
+                      {buildPreviewOpen ? '▾' : '▸'} Preview / export matches (name & number)
+                    </button>
+                    {buildPreviewOpen && (
+                      <div className="mt-2">
+                        <MembersView body={{ rules: buildRules }} filename={`cohort-${name || 'custom'}`} />
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               <label className="flex items-start gap-2 text-[11px] text-gray-600 pt-1">
                 <input type="checkbox" className="mt-0.5" checked={isDynamic} onChange={e => setIsDynamic(e.target.checked)} />
@@ -534,6 +566,25 @@ export default function AudiencesPage() {
                 )}
               </div>
 
+              {/* Preview exactly who this send will reach — name + number, opt-out
+                  flagged — reflecting the current narrow. Reload after editing it. */}
+              {channel === 'chat' && (
+                <div className="border-t border-gray-100 pt-2">
+                  <button onClick={() => setPreviewOpen(o => !o)} className="text-[11px] font-medium text-gray-600 flex items-center gap-1">
+                    {previewOpen ? '▾' : '▸'} Preview recipients {previewOpen ? '' : '(name & number)'}
+                  </button>
+                  {previewOpen && (
+                    <div className="mt-2 space-y-1.5">
+                      <p className="text-[10px] text-gray-400">Who this send targets, after any narrow. Numbers already sent this template (within its window) and anyone past the batch cap still auto-skip at send time.</p>
+                      <MembersView
+                        body={{ audienceId: activate.id, ...buildNarrow() }}
+                        filename={`recipients-${activate.name}`}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
               {actError && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{actError}</p>}
               {actResult && <p className="text-xs text-green-800 bg-green-50 border border-green-100 rounded-lg px-3 py-2">{actResult}</p>}
             </div>
@@ -566,6 +617,21 @@ export default function AudiencesPage() {
                   salesmen: salesmen.map(s => ({ value: s.alias, label: `${s.alias} — ${s.name}` })),
                 }}
               />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Members sheet — everyone in this audience, searchable + CSV export */}
+      {viewMembers && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={() => setViewMembers(null)}>
+          <div className="bg-white rounded-t-2xl flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-4 pb-3 border-b border-gray-100 flex items-center justify-between">
+              <p className="font-bold text-gray-900 truncate">Members — {viewMembers.name}</p>
+              <button onClick={() => setViewMembers(null)} className="text-gray-400 text-xl leading-none">×</button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-3">
+              <MembersView body={{ audienceId: viewMembers.id }} filename={`audience-${viewMembers.name}`} />
             </div>
           </div>
         </div>
