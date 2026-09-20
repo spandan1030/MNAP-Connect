@@ -328,6 +328,17 @@ The chat view (`app/messages/[phone]/page.tsx`) and the inbound webhook
   of these — no migration. Bubbles render `<img>` (tap = open), `<video controls>`,
   `<audio controls>`, or a document download link; a missing `media_url` shows a
   placeholder. Thread previews use 📷/🎥/📄/🎤 prefixes.
+- **Universal inbound extraction (`extractInbound()` in the webhook):** every inbound
+  shape yields the best human-readable text, so nothing stores as "[button message]"
+  → "Unsupported message". Handled: **template quick-reply buttons** (`type:'button'` —
+  distinct from our `type:'interactive'` menus; the label is captured **and** fed to the
+  keyword router, so a "Stop"/"Offers" button tap behaves like typing it), **reactions**
+  (emoji), **location** (name/coords), shared **contacts** (names), **system** notices,
+  and **stickers** (downloaded as image media). Text-bearing types store as
+  `message_type:'text'`; a genuinely opaque type does a shallow key-scan, else stores
+  nothing so the UI shows ONE clean placeholder. **UI:** the "Unsupported" placeholder no
+  longer renders on top of a real body; legacy `[<type> message]` rows (real text
+  unrecoverable — old builds discarded it) show a clean italic "`<Type> message`" label.
 - **Not yet built:** quoted-reply display (inbound `context.id` is captured only for
   audience-step attribution, `recordStepReply`) and staff outbound reply-to a specific
   message.
