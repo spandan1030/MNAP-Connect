@@ -95,6 +95,81 @@ async function handlePayload(payload: WhatsAppWebhookPayload) {
   }
 }
 
+// Universal inbound extractor: pull the best human-readable text out of ANY
+// message shape so nothing lands as a bare "Unsupported message". Returns the
+// text to store as the body plus the storage `message_type` — known media keep
+// their own type (the UI renders a player), anything text-bearing is stored as
+// 'text' (so its content shows), and only a truly contentless opaque type stays
+// 'other' (a single clean placeholder). `text` is what feeds the keyword router.
+function extractInbound(
+  msg: WaInboundMessage,
+  interactiveReply: WaInteractiveReply | null,
+): { body: string | null; messageType: string; text: string } {
+  const s = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null)
+
+  switch (msg.type) {
+    case 'text':     return { body: msg.text?.body ?? '', messageType: 'text', text: msg.text?.body ?? '' }
+    case 'image':    return { body: s(msg.image?.caption), messageType: 'image', text: '' }
+    case 'video':    return { body: s(msg.video?.caption), messageType: 'video', text: '' }
+    case 'document': return { body: s(msg.document?.caption) ?? s(msg.document?.filename), messageType: 'document', text: '' }
+    case 'audio':    return { body: null, messageType: 'audio', text: '' }
+    case 'sticker':  return { body: null, messageType: 'image', text: '' } // webp — downloaded as media
+    case 'interactive': {
+      const t = interactiveReply?.title ?? null
+      return { body: t, messageType: t ? 'text' : 'other', text: '' } // routed via handleFlowReply by id
+    }
+    case 'button': {
+      // Template quick-reply tap — capture the label and let it drive the bot.
+      const t = s(msg.button?.text) ?? s(msg.button?.payload)
+      return { body: t, messageType: t ? 'text' : 'other', text: t ?? '' }
+    }
+    case 'reaction': {
+      const e = s(msg.reaction?.emoji)
+      return { body: e ? `Reacted ${e}` : 'Removed reaction', messageType: 'text', text: '' }
+    }
+    case 'location': {
+      const label = s(msg.location?.name) ?? s(msg.location?.address)
+      const coords = msg.location?.latitude != null && msg.location?.longitude != null
+        ? `${msg.location.latitude}, ${msg.location.longitude}` : null
+      const body = ['📍 Location', label, coords].filter(Boolean).join(' · ')
+      return { body, messageType: 'text', text: '' }
+    }
+    case 'contacts': {
+      const names = (msg.contacts ?? []).map(c => s(c.name?.formatted_name)).filter(Boolean)
+      return { body: `👤 Shared contact${names.length ? `: ${names.join(', ')}` : ''}`, messageType: 'text', text: '' }
+    }
+    case 'order':    return { body: `🛒 Order enquiry${msg.order?.product_items?.length ? ` (${msg.order.product_items.length} item${msg.order.product_items.length > 1 ? 's' : ''})` : ''}`, messageType: 'text', text: '' }
+    case 'system':   return { body: s(msg.system?.body) ?? 'System update', messageType: 'text', text: '' }
+    default: {
+      // Genuinely unknown/opaque (incl. type:'unknown' with Meta errors). Prefer any
+      // error title, then a shallow scan for any text-ish field; else store nothing
+      // and let the UI show ONE clean placeholder.
+      const errText = s(msg.errors?.[0]?.title) ?? s(msg.errors?.[0]?.message)
+      const scanned = errText ?? scanForText(msg as unknown as Record<string, unknown>)
+      return { body: scanned, messageType: scanned ? 'text' : 'other', text: '' }
+    }
+  }
+}
+
+// Shallow (depth ≤2) scan for a human-readable string in an opaque payload — the
+// last resort so even a message type we've never seen shows *something*.
+function scanForText(obj: Record<string, unknown>, depth = 0): string | null {
+  const KEYS = ['body', 'text', 'caption', 'title', 'name', 'formatted_name', 'emoji', 'description', 'address', 'payload']
+  for (const k of KEYS) {
+    const v = obj[k]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  if (depth < 2) {
+    for (const v of Object.values(obj)) {
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const hit = scanForText(v as Record<string, unknown>, depth + 1)
+        if (hit) return hit
+      }
+    }
+  }
+  return null
+}
+
 async function handleInboundMessage(
   msg: WaInboundMessage,
   contacts: WaContact[]
@@ -112,23 +187,9 @@ async function handleInboundMessage(
       ? (msg.interactive?.list_reply ?? msg.interactive?.button_reply ?? null)
       : null
 
-  const body =
-    msg.type === 'text'        ? msg.text?.body ?? ''
-    : msg.type === 'image'       ? (msg.image?.caption ?? null)
-    : msg.type === 'video'       ? (msg.video?.caption ?? null)
-    : msg.type === 'document'    ? (msg.document?.caption ?? msg.document?.filename ?? null)
-    : msg.type === 'audio'       ? null
-    : interactiveReply           ? interactiveReply.title
-    : `[${msg.type} message]`
-
-  const messageType =
-    msg.type === 'text'        ? 'text'
-    : msg.type === 'image'       ? 'image'
-    : msg.type === 'video'       ? 'video'
-    : msg.type === 'document'    ? 'document'
-    : msg.type === 'audio'       ? 'audio'
-    : msg.type === 'interactive' ? 'text'
-    : 'other'
+  // Universal extraction — captures real content from button taps, reactions,
+  // locations, shared contacts, system notices, etc. instead of "[button message]".
+  const { body, messageType, text: routableText } = extractInbound(msg, interactiveReply)
 
   const contactName =
     contacts.find(c => c.wa_id === rawPhone)?.profile?.name ?? null
@@ -194,6 +255,7 @@ async function handleInboundMessage(
     : msg.type === 'video'    ? msg.video
     : msg.type === 'document' ? msg.document
     : msg.type === 'audio'    ? msg.audio
+    : msg.type === 'sticker'  ? msg.sticker
     : null
   let mediaUrl: string | null = null
   if (inboundMedia?.id) {
@@ -251,7 +313,9 @@ async function handleInboundMessage(
   }
 
   // ----- Automated, rules-based response -----
-  const text     = msg.type === 'text' ? (body ?? '') : ''
+  // Text drives the keyword router: real typed text, plus a template quick-reply
+  // button's label (so a "Stop"/"Offers" button tap behaves like typing it).
+  const text     = routableText
   let   botState = existingThread?.bot_state ?? 'active'
 
   try {
@@ -1626,11 +1690,22 @@ interface WaInboundMessage {
   video?: { id: string; mime_type?: string; caption?: string; sha256?: string }
   document?: { id: string; mime_type?: string; caption?: string; filename?: string; sha256?: string }
   audio?: { id: string; mime_type?: string; voice?: boolean; sha256?: string }
+  sticker?: { id: string; mime_type?: string; sha256?: string }
   interactive?: {
     type: string
     list_reply?: WaInteractiveReply
     button_reply?: WaInteractiveReply
   }
+  // A tap on a quick-reply button of a Meta *template* (not our interactive menu)
+  // arrives as type:'button' with the button's visible label + payload.
+  button?: { text?: string; payload?: string }
+  reaction?: { emoji?: string; message_id?: string }
+  location?: { latitude?: number; longitude?: number; name?: string; address?: string }
+  contacts?: Array<{ name?: { formatted_name?: string }; phones?: Array<{ phone?: string }> }>
+  order?: { catalog_id?: string; product_items?: unknown[] }
+  system?: { body?: string; type?: string }
+  // Meta stamps a genuinely unsupported/opaque inbound as type:'unknown' with errors.
+  errors?: Array<{ code?: number; title?: string; message?: string }>
   // On a quoted reply or a quick-reply button tap, WhatsApp echoes the wamid of
   // the message being replied to — the exact-attribution key for audience steps.
   context?: { id?: string }

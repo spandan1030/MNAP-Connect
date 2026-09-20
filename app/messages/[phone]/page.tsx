@@ -109,6 +109,12 @@ function MessageBubble({ msg }: { msg: WaMessage }) {
   const isVideo    = type === 'video'
   const isAudio    = type === 'audio'
   const isDocument = type === 'document'
+  // Legacy sentinel from older webhook builds ("[button message]" etc.) — the real
+  // text wasn't captured then, so show a clean label instead of a raw sentinel.
+  const legacyLabel = type === 'other' && msg.body
+    ? (msg.body.match(/^\[(\w+) message\]$/)?.[1] ?? null)
+    : null
+  const legacyText = legacyLabel ? `${legacyLabel[0].toUpperCase()}${legacyLabel.slice(1)} message` : null
   // Image + video fill the bubble edge-to-edge; audio/document sit in normal padding.
   const edgeMedia = (isImage || isVideo) && !!msg.media_url
   const time = new Date(msg.created_at).toLocaleTimeString('en-IN', {
@@ -168,20 +174,23 @@ function MessageBubble({ msg }: { msg: WaMessage }) {
           </a>
         )}
 
-        {/* Media missing / unsupported type placeholder */}
-        {(isImage || isVideo || isAudio || isDocument || type === 'other') && !msg.media_url && (
-          <div className="flex items-center gap-1.5 px-1 py-1">
+        {/* Media missing, or a legacy/contentless "other" message → one clean label.
+            (A real body on an 'other' row is shown below, so no doubled placeholder.) */}
+        {((isImage || isVideo || isAudio || isDocument) && !msg.media_url) ||
+         (type === 'other' && !msg.media_url && (!msg.body || legacyText)) ? (
+          <div className="flex items-center gap-1.5 px-1 py-1 text-gray-500 italic">
             <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 18h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v10.5a1.5 1.5 0 001.5 1.5z"/>
             </svg>
-            <span className="text-sm">
-              {isVideo ? 'Video' : isAudio ? 'Voice message' : isDocument ? 'Document' : isImage ? 'Photo' : 'Unsupported message'}
+            <span className="text-sm not-italic">
+              {isVideo ? 'Video' : isAudio ? 'Voice message' : isDocument ? 'Document' : isImage ? 'Photo' : (legacyText ?? 'Unsupported message')}
             </span>
           </div>
-        )}
+        ) : null}
 
-        {/* Caption or text body (document renders its label above, so skip here) */}
-        {msg.body && !isDocument && (
+        {/* Caption or text body (document renders its label above; legacy sentinels
+            are shown as the clean label above, so skip the raw text here). */}
+        {msg.body && !isDocument && !legacyText && (
           <p className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${edgeMedia ? 'px-2.5 pt-1.5' : ''}`}>
             {linkify(msg.body, isOut)}
           </p>
