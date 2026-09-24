@@ -349,6 +349,15 @@ The chat view (`app/messages/[phone]/page.tsx`) and the inbound webhook
   bot copy to the same text to also catch organic "offer" askers during the campaign._
   **`rate_lock_offer` is now exposed in Admin → Engagement → Auto-reply messages (2026-09-24)**
   so the owner can review/edit it (esp. the Odia) + attach a poster without a deploy.
+- **Promotional-reply ON/OFF switch (`wa_067`, 2026-09-24):** `wa_bot_messages.enabled`
+  (boolean, default true). The Auto-reply editor shows a switch on the two `toggleable`
+  keys — `offer` + `rate_lock_offer`. When off: `handleRateLockLead` falls back to the
+  welcome menu (ad leads still get a warm reply; referral still logged for attribution),
+  `sendOffer` guards the same way, and `sendWelcomeMenu` **hides the "Offers & Sale" button**
+  so no one taps through to a dead offer. Gate = `isBotKeyEnabled(key)` (missing row ⇒
+  enabled, so nothing changes until the owner explicitly switches one off). Core-flow keys
+  are never gated, so a stray toggle can't break the bot. Copy lives only in the DB
+  (editor-managed) + the code `BOT_DEFAULTS` safety fallback — no hardcoded copy in the UI.
 - **Not yet built:** quoted-reply display (inbound `context.id` is captured only for
   audience-step attribution, `recordStepReply`) and staff outbound reply-to a specific
   message.

@@ -912,6 +912,20 @@ async function getBotMessage(key: string): Promise<{ content: string; image_url:
   }
 }
 
+// Owner ON/OFF switch for the promotional replies (`offer`, `rate_lock_offer`),
+// set from Admin → Auto-reply. A missing row means enabled — the default — so
+// nothing changes until the owner explicitly turns a message off when its
+// campaign ends. Core-flow keys are never gated by callers, so a stray toggle
+// can't break the bot. (wa_067)
+async function isBotKeyEnabled(key: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from('wa_bot_messages')
+    .select('enabled')
+    .eq('key', key)
+    .maybeSingle()
+  return data?.enabled ?? true
+}
+
 // Send a plain (or image+caption) bot message and log it
 async function sendBot(phone: string, threadId: string, key: string) {
   const { content, image_url } = await getBotMessage(key)
@@ -1146,14 +1160,21 @@ async function handleProductEnquiry(
 // reveals the full list (rate, offers, new designs, gold savings scheme,
 // talk to our team).
 async function sendWelcomeMenu(phone: string, threadId: string) {
-  const [{ content }, notice] = await Promise.all([getBotMessage('welcome'), getBotMessage('stop_notice')])
+  const [{ content }, notice, offersOn] = await Promise.all([
+    getBotMessage('welcome'),
+    getBotMessage('stop_notice'),
+    isBotKeyEnabled('offer'),
+  ])
   // Append the opt-out line in italics (WhatsApp's lightest styling)
   const body = notice.content ? `${content}\n\n_${notice.content}_` : content
-  const wamid = await sendInteractiveButtons(phone, body, [
-    { id: 'i:rate',   title: "Today's Rate" },
-    { id: 'i:offers', title: 'Offers & Sale' },
-    { id: 'i:more',   title: 'More options' },
-  ])
+  // Drop "Offers & Sale" while the offer is switched off, so no one taps through
+  // to a dead offer (wa_067). Rate + More always remain.
+  const buttons = [
+    { id: 'i:rate', title: "Today's Rate" },
+    ...(offersOn ? [{ id: 'i:offers', title: 'Offers & Sale' }] : []),
+    { id: 'i:more', title: 'More options' },
+  ]
+  const wamid = await sendInteractiveButtons(phone, body, buttons)
   await logOutbound(threadId, wamid, body)
 }
 
@@ -1320,6 +1341,12 @@ async function tagTopic(customerId: string | undefined, namePattern: string) {
 }
 
 async function sendOffer(phone: string, threadId: string, customer: { id: string } | null) {
+  // Owner switched the offer off (campaign over) — fall back to the welcome menu
+  // (which hides the "Offers & Sale" button while off, so this is only a guard).
+  if (!(await isBotKeyEnabled('offer'))) {
+    await sendWelcomeMenu(phone, threadId)
+    return
+  }
   await tagTopic(customer?.id, '%discount%')   // "Sale & Discounts"
   await recordLead(threadId, customer?.id, { intent: 'offer' })
   await sendBotWithCta(phone, threadId, 'offer', `See our latest collection 👉 ${APP_LINKS.shop()}`)
@@ -1330,6 +1357,12 @@ async function sendOffer(phone: string, threadId: string, customer: { id: string
 // a code default), records the lead, and flags a human so staff confirm the booking
 // + take the 15% advance. The ad `referral` is already stored in wa_ad_leads.
 async function handleRateLockLead(phone: string, threadId: string, customer: { id: string } | null) {
+  // Campaign over? Treat the ad lead as a normal enquiry — they still get a warm
+  // welcome, and their ad referral is already logged to wa_ad_leads for attribution.
+  if (!(await isBotKeyEnabled('rate_lock_offer'))) {
+    await sendWelcomeMenu(phone, threadId)
+    return
+  }
   await recordLead(threadId, customer?.id, { intent: 'rate_lock' })
   await flagAgent(threadId)
   await sendBotWithCta(phone, threadId, 'rate_lock_offer', `Track today's live gold rate 👉 ${APP_LINKS.rate()}`)
