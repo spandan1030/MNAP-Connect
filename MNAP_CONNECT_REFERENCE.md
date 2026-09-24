@@ -339,6 +339,14 @@ The chat view (`app/messages/[phone]/page.tsx`) and the inbound webhook
   nothing so the UI shows ONE clean placeholder. **UI:** the "Unsupported" placeholder no
   longer renders on top of a real body; legacy `[<type> message]` rows (real text
   unrecoverable — old builds discarded it) show a clean italic "`<Type> message`" label.
+- **Click-to-WhatsApp ad-lead routing (`2026-09-24`):** an ad lead's first message carries
+  Meta's `referral` (already logged to `wa_ad_leads` for the `adLead`/`adCampaign` reach
+  filters). The webhook now derives `isAdLead` from it and, on that first message, routes
+  **straight to `handleRateLockLead`** → the festive **rate-lock offer** (admin-editable bot
+  copy `rate_lock_offer`, with a code default), records a `rate_lock` lead, and flags a human
+  to confirm the booking + 15% advance. Without this, keyword routing caught the prefill's
+  "gold rate" and replied with today's rate, losing the offer intent. _Tip: set the `offer`
+  bot copy to the same text to also catch organic "offer" askers during the campaign._
 - **Not yet built:** quoted-reply display (inbound `context.id` is captured only for
   audience-step attribution, `recordStepReply`) and staff outbound reply-to a specific
   message.
