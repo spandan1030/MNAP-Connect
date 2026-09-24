@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Navbar from '@/components/ui/Navbar'
 import CustomerPeek from '@/components/ui/CustomerPeek'
-import { createClient } from '@/lib/supabase/client'
 
 // Customer Book — the unified contact spine (all customers: chat + sales + calls).
 // Search by name or number; tap anyone for their full biography (CustomerPeek).
@@ -25,7 +24,6 @@ type Filter = 'all' | 'active' | 'opted_out'
 const PAGE = 30
 
 export default function ContactsPage() {
-  const supabase = createClient()
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [rows, setRows] = useState<ContactRow[]>([])
@@ -36,24 +34,25 @@ export default function ContactsPage() {
   const [busyPhone, setBusyPhone] = useState<string | null>(null)
   const reqId = useRef(0)
 
-  // Manual opt-out — the third consent signal, alongside chat STOP and call DNC.
-  // Sets contacts.manual_opted_out; is_opted_out (chat OR call OR manual) is the
-  // single source Reach honours. We re-read it so the badge is always accurate
-  // (undoing a manual opt-out shouldn't "un-opt" someone still on STOP/DNC).
+  // Opt in / out of ALL communication via set_opt_out() (the /api/contacts/optout
+  // route). Opting IN clears STOP / call-DNC / manual together, so a customer who
+  // said "you can message me again" is truly re-enabled — a bare manual-flag toggle
+  // could not un-block someone still on STOP/DNC. We use the returned flag so the
+  // badge is always accurate.
   async function toggleOptOut(c: ContactRow) {
     const next = !c.isOptedOut
     setBusyPhone(c.phone); setMenuPhone(null)
-    const { data: { user } } = await supabase.auth.getUser()
-    const { error } = await supabase.from('contacts').update({
-      manual_opted_out: next,
-      manual_opted_out_at: next ? new Date().toISOString() : null,
-      manual_opted_out_by: next ? (user?.id ?? null) : null,
-    }).eq('phone', c.phone)
-    if (!error) {
-      const { data } = await supabase.from('contacts').select('is_opted_out').eq('phone', c.phone).maybeSingle()
-      const now = (data?.is_opted_out as boolean | undefined) ?? next
-      setRows(rs => rs.map(r => r.phone === c.phone ? { ...r, isOptedOut: now } : r))
-    }
+    try {
+      const res = await fetch('/api/contacts/optout', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: c.phone, optOut: next }),
+      })
+      const d = await res.json()
+      if (res.ok) {
+        const now = (d.isOptedOut as boolean | undefined) ?? next
+        setRows(rs => rs.map(r => r.phone === c.phone ? { ...r, isOptedOut: now } : r))
+      }
+    } catch { /* leave the badge as-is on failure */ }
     setBusyPhone(null)
   }
 
@@ -162,10 +161,10 @@ export default function ContactsPage() {
                     <button onClick={() => toggleOptOut(c)}
                       className="w-full text-left px-4 py-3 text-sm font-medium active:bg-gray-50">
                       {c.isOptedOut
-                        ? <span className="text-gray-700">Undo opt-out</span>
+                        ? <span className="text-green-700">Opt back in (all channels)</span>
                         : <span className="text-red-600">Opt out of all comms</span>}
                       <span className="block text-[11px] text-gray-400 font-normal mt-0.5">
-                        {c.isOptedOut ? 'Clears the manual opt-out flag' : 'Stops every message — same as chat STOP / call DNC'}
+                        {c.isOptedOut ? 'Re-enables WhatsApp + calls — clears STOP / DNC / manual' : 'Stops every message — same as chat STOP / call DNC'}
                       </span>
                     </button>
                   </div>

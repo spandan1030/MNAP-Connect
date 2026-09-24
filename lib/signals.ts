@@ -26,6 +26,8 @@ export const INTERESTS: InterestDef[] = [
   { key: 'repair',      label: 'Repair',     group: 'engagement' },
   // Shared a product link from the app/website, or said "interested" in a piece.
   { key: 'app_interest', label: 'App Enquiry', group: 'engagement' },
+  // Arrived from a Click-to-WhatsApp ad (captured in wa_ad_leads). A targetable group.
+  { key: 'ad_lead',     label: 'Ad Lead',    group: 'engagement' },
   // product
   { key: 'necklace',    label: 'Necklace',    group: 'product' },
   { key: 'ring',        label: 'Ring',        group: 'product' },

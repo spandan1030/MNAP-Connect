@@ -358,6 +358,29 @@ The chat view (`app/messages/[phone]/page.tsx`) and the inbound webhook
   enabled, so nothing changes until the owner explicitly switches one off). Core-flow keys
   are never gated, so a stray toggle can't break the bot. Copy lives only in the DB
   (editor-managed) + the code `BOT_DEFAULTS` safety fallback — no hardcoded copy in the UI.
+- **CTWA Conversions-API "engaged Lead" (`wa_068`, 2026-09-25):** turns Meta from
+  optimising for *chatters* (the free "conversation started" signal) toward *engaged
+  humans*. When a Click-to-WhatsApp ad lead sends a **2nd message** (`CTWA_LEAD_MIN_MESSAGES`),
+  the webhook fires **one** CAPI `Lead` event to Meta, keyed on the stored `ctwa_clid`
+  (from the referral, in `wa_ad_leads`) — **no phone matching**, so it survives a lead
+  who messages from one number and bills from another. Path: `handleInboundMessage` →
+  `maybeFireCtwaLead(phone, threadId)` (best-effort, outside the reply path) →
+  `inboundCountForThread` ≥ 2 → `sendCtwaLeadEvent` (`lib/meta/capi.ts`) → stamps
+  `wa_ad_leads.lead_event_sent_at` so it fires exactly once. Event shape (per Meta):
+  `action_source:"business_messaging"`, `messaging_channel:"whatsapp"`,
+  `user_data:{ whatsapp_business_account_id, ctwa_clid }`. **INERT until env is set** —
+  `META_CAPI_DATASET_ID` (WABA's Events-Manager dataset), `META_WABA_ID`,
+  `META_CAPI_ACCESS_TOKEN` (falls back to `WHATSAPP_ACCESS_TOKEN`); optional
+  `META_CAPI_TEST_EVENT_CODE` (Test-events tab) and `META_CAPI_LEAD_EVENT_NAME`
+  (default `Lead`). `sendCtwaConversionEvent` also takes `value`/`currency` — the reuse
+  point for a future real **Purchase** event once a sale can be tied back to a lead.
+- **CRM enhancements batch (`wa_069`/`wa_070`, 2026-09-25):**
+  - **Ad Lead attribute (`wa_069`):** new canonical interest `ad_lead` (`lib/signals.ts` INTERESTS + a `wa_interest_topics` row, `key='ad_lead'`). The webhook tags it on every Click-to-WhatsApp lead (`tagInterestKey` in the `isAdLead` block), and a one-time migration backfill writes it for all existing `wa_ad_leads`. It appears on the profile and, because `FilterBuilder` derives interest chips from `INTERESTS`, is automatically targetable in Reach.
+  - **Smart auto-tagging:** `autoTagInterests(phone, customerId, text)` runs on each inbound customer message (webhook tail, best-effort), reusing the bot's own typo-tolerant matchers (`canonicalCategory`, `guessMetal`, `isRateKeyword`, `isOffersKeyword`, `isSchemeKeyword`, `isGenericDesignRequest`) mapped to canonical keys (`CANON_CATEGORY_TO_INTEREST`). Only ADDS signals, only from the customer's own text — the "Interested in" banner + profile build up without manual tagging. `tagInterestKey` prefers the topic path (`addInterest`, which mirrors to `wa_signals`), else writes the signal directly.
+  - **Opt back in (fix):** the Customer Book "Undo opt-out" previously only cleared `manual_opted_out`, so a STOP/DNC customer stayed blocked. Now both the Customer Book and `CustomerPeek` call **`/api/contacts/optout`** → `set_opt_out(phone,false,'manual')`, which clears `is_opted_out` + all three provenance flags together. Menu reworded "Opt back in (all channels)".
+  - **Scheduled follow-ups (`wa_070`):** new `wa_followups` table (phone-keyed; `customer_id`→Type-B, `salesman_id`, `due_on`, `interests[]`, `note`, `status`). API `/api/followups` (POST/GET `?scope=pending`/PATCH done|cancel|reschedule). Scheduled from the **chat** (new "Schedule follow-up" sheet — horizon + interest chips + note; phone-keyed, no customerId since chat's id is Type-A) and from the **walk-in** form (optional "follow up in X days", reuses ticked interests + note, walk-in API inserts the row). New **`/followups`** page (Navbar → More) lists pending follow-ups bucketed Overdue/Today/Tomorrow/In 2 days/This week/Later, with Call / Chat / Reschedule / Done, tap → `CustomerPeek`.
+  - **Profile "Messages sent" = templates only:** `peek` route now skips outbound rows that are neither a template send nor a ledger match (`if (!l && !m.template_name) continue`), so free-typed inbox replies no longer clutter the profile (they remain in the chat).
+  - **Call log details:** `peek` route now selects `salesman(alias)` + `notes` on `wa_b_call_logs`; `CustomerPeek` shows the salesman + note per call. Calls placed from the chat capture an outcome: `/api/calls/log` returns `logId`, and on return to the app the chat prompts (Reached / No answer + note) → **`/api/calls/outcome`** PATCH.
 - **Not yet built:** quoted-reply display (inbound `context.id` is captured only for
   audience-step attribution, `recordStepReply`) and staff outbound reply-to a specific
   message.

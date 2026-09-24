@@ -82,6 +82,7 @@ const PRIMARY = [
 const MORE = [
   { href: '/audiences',      label: 'Audiences',    icon: ICONS.segments },
   { href: '/walkin',         label: 'Walk-in',      icon: ICONS.customers },
+  { href: '/followups',      label: 'Follow-ups',   icon: ICONS.phone },
   { href: '/admin/coupons',  label: 'Coupons',      icon: ICONS.gift },
   { href: '/campaigns',      label: 'Campaigns',    icon: ICONS.reports },
   { href: '/send',           label: 'Send (1:1)',   icon: ICONS.messages },

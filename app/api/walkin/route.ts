@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = (await req.json().catch(() => ({}))) as {
-    name?: string; phone?: string; interests?: string[]; timing?: string; notes?: string; isVip?: boolean; salesmanId?: string; sendWelcome?: boolean
+    name?: string; phone?: string; interests?: string[]; timing?: string; notes?: string; isVip?: boolean; salesmanId?: string; sendWelcome?: boolean; followupDays?: number
   }
   const name = (body.name ?? '').trim()
   const phone = tenDigit(body.phone ?? '')
@@ -107,6 +107,19 @@ export async function POST(req: NextRequest) {
     const { error } = await supabaseAdmin.from('wa_signals')
       .upsert(rows, { onConflict: 'phone,interest,source' })
     if (error) return Response.json({ error: error.message, customerId }, { status: 500 })
+  }
+
+  // ── Optional scheduled follow-up (wa_070) ───────────────────────────────────
+  // Reuses the ticked interests + note. Best-effort: never fails the walk-in.
+  if (body.followupDays && body.followupDays > 0) {
+    const due = new Date(); due.setDate(due.getDate() + Math.round(body.followupDays))
+    const { error: fErr } = await supabaseAdmin.from('wa_followups').insert({
+      phone, customer_id: customerId, salesman_id: salesmanId, created_by: user.id,
+      due_on: due.toLocaleDateString('en-CA'),
+      interests: interests.length ? interests : null,
+      note: (body.notes ?? '').trim() || null,
+    })
+    if (fErr) console.error('[walkin] follow-up schedule failed:', fErr.message)
   }
 
   // ── Touch 0: immediate welcome WhatsApp (today's rate + fresh designs) ───────

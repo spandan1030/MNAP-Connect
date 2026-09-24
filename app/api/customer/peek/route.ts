@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
       .eq('phone', phone).order('sent_at', { ascending: false }).limit(30),
     bCust
       ? supabaseAdmin.from('wa_b_call_logs')
-          .select('success, topics, intent, called_at')
+          .select('success, topics, intent, called_at, notes, salesman:salesmen(alias)')
           .eq('customer_id', bCust.id).order('called_at', { ascending: false }).limit(10)
       : Promise.resolve({ data: null }),
     supabaseAdmin.from('contacts').select('is_opted_out, app_user, has_scheme, app_product_interest, birthday_month, anniversary_month').eq('phone', phone).maybeSingle(),
@@ -112,6 +112,10 @@ export async function GET(req: NextRequest) {
   const sends: Send[] = []
   for (const m of (msgsRes.data ?? []) as unknown as Array<{ wa_message_id: string | null; template_name: string | null; status: string; sent_at: string | null; created_at: string }>) {
     const l = m.wa_message_id ? ledgerByWamid.get(m.wa_message_id) : undefined
+    // Only structured (template / campaign) sends belong on the profile — a
+    // free-typed inbox reply (no template, no ledger match) is conversation, not a
+    // "message type sent", so it stays in the chat and is skipped here.
+    if (!l && !m.template_name) { if (m.wa_message_id) ledgerByWamid.delete(m.wa_message_id); continue }
     sends.push({
       label: (l ? tmplName(l.template) ?? l.meta_template_name : null) ?? m.template_name ?? 'Message',
       category: l?.category ?? null, status: m.status, cohort: l?.cohort_label ?? null,
@@ -172,7 +176,12 @@ export async function GET(req: NextRequest) {
     visits,
     audiences,
     interests,
-    calls: (callsRes.data ?? []) as Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string }>,
+    calls: ((callsRes.data ?? []) as unknown as Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string; notes: string | null; salesman: { alias: string } | { alias: string }[] | null }>)
+      .map(c => ({
+        success: c.success, topics: c.topics, intent: c.intent, called_at: c.called_at,
+        notes: c.notes ?? null,
+        salesman: (Array.isArray(c.salesman) ? c.salesman[0]?.alias : c.salesman?.alias) ?? null,
+      })),
     sends,
   })
 }

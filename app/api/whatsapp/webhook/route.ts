@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { applyPlaceholders } from '@/lib/utils'
 import { setOptOut } from '@/lib/optout'
 import { markAppProductInterest } from '@/lib/app-features'
+import { sendCtwaLeadEvent } from '@/lib/meta/capi'
 
 // Module-level cache for the rate template — avoids 2 DB round trips on warm instances.
 // Expires after 1 hour so template edits eventually take effect.
@@ -247,6 +248,9 @@ async function handleInboundMessage(
         ctwa_clid: referral.ctwa_clid ?? null, headline: referral.headline ?? null,
       }, { onConflict: 'phone,ad_campaign', ignoreDuplicates: true })
     } catch { /* ad tables not present / ads not live — ignore */ }
+    // Tag "Ad Lead" as a first-class interest so ad leads are a visible, targetable
+    // group on the profile and in Reach (same attribute the backfill wrote, wa_069).
+    await tagInterestKey(customer?.id, phone, 'ad_lead', 'ad lead')
   }
 
   let threadId: string
@@ -409,6 +413,16 @@ async function handleInboundMessage(
   } catch (err) {
     console.error('[webhook] Automated response error:', err)
   }
+
+  // CTWA acquisition signal: a Click-to-WhatsApp lead who sends a 2nd message is a
+  // real, engaged human — report it to Meta once so the algorithm optimises for
+  // people who actually engage, not just people who open a chat. Best-effort and
+  // fully outside the reply path, so it can never delay or break an answer.
+  await maybeFireCtwaLead(phone, threadId)
+
+  // Smart interest tagging — build up the customer's interests automatically from
+  // what they say (typo-tolerant). Only on their own typed text, and only adds.
+  if (routableText) await autoTagInterests(phone, customer?.id, routableText)
 }
 
 // ---------------------------------------------------------------------------
@@ -740,6 +754,67 @@ async function ensureRateInterest(customerId?: string) {
   if (id) await addInterest(customerId, id)
 }
 
+// Look up a canonical interest topic by its stable `key` (wa_033). The topic
+// table is tiny, so this is cheap. Returns null if no topic carries that key.
+async function findTopicIdByKey(key: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from('wa_interest_topics').select('id')
+    .eq('key', key).eq('is_active', true).limit(1).maybeSingle()
+  return data?.id ?? null
+}
+
+// Tag a canonical interest KEY on a customer/phone. Prefers the topic path
+// (addInterest writes wa_customer_interests AND mirrors to wa_signals via the
+// topic's key); if no topic exists for the key, or we have no customer row yet,
+// writes the phone-keyed signal directly so the attribute still lands. Used by
+// ad-lead capture and by smart auto-tagging. Best-effort — never throws.
+async function tagInterestKey(customerId: string | undefined, phone: string, key: string, evidence = 'chat'): Promise<void> {
+  try {
+    const topicId = await findTopicIdByKey(key)
+    if (topicId && customerId) { await addInterest(customerId, topicId); return }
+    const p = phone.replace(/\D/g, '').slice(-10)
+    if (p.length !== 10) return
+    await supabaseAdmin.from('wa_signals').upsert(
+      { phone: p, interest: key, source: 'whatsapp', weight: 1, evidence, last_seen: new Date().toISOString() },
+      { onConflict: 'phone,interest,source' })
+  } catch (err) {
+    console.error('[webhook] tagInterestKey failed (non-fatal):', err)
+  }
+}
+
+// Webhook canonical category (singular: bangle/earring/locket…) → canonical
+// interest key (lib/signals INTERESTS, e.g. plural bangles/earrings, pendant).
+// nosepin has no interest key, so it is intentionally omitted (not tagged).
+const CANON_CATEGORY_TO_INTEREST: Record<string, string> = {
+  necklace: 'necklace', bangle: 'bangles', chain: 'chain', earring: 'earrings',
+  ring: 'ring', mangalsutra: 'mangalsutra', locket: 'pendant', bracelet: 'bracelet',
+  anklet: 'anklet',
+}
+
+// Smart interest tagging: as a customer converses, detect what they're asking
+// about — using the SAME typo-tolerant, conservative matchers that drive the bot
+// — and tag those interests automatically, so the chat "Interested in" banner and
+// the customer profile build up without the salesman tagging by hand. Only ADDS
+// signals, and only from the customer's own inbound text. Best-effort.
+async function autoTagInterests(phone: string, customerId: string | undefined, text: string): Promise<void> {
+  const raw = (text ?? '').trim()
+  if (raw.length < 2) return
+  const keys = new Set<string>()
+  const cat = canonicalCategory(raw)
+  if (cat && CANON_CATEGORY_TO_INTEREST[cat]) keys.add(CANON_CATEGORY_TO_INTEREST[cat])
+  const metal = guessMetal(raw)
+  if (metal) keys.add(metal)
+  if (isRateKeyword(raw))          keys.add('rate')
+  if (isOffersKeyword(raw))        keys.add('offers')
+  if (isSchemeKeyword(raw))        keys.add('scheme')
+  if (isGenericDesignRequest(raw)) keys.add('designs')
+  const t = raw.toLowerCase()
+  if (/\bexchange\b|purana sona|old gold/.test(t)) keys.add('exchange')
+  if (/instant cash|cash for gold/.test(t))        keys.add('cash')
+  if (keys.size === 0) return
+  for (const k of keys) await tagInterestKey(customerId, phone, k)
+}
+
 // Product list for the design funnel = sub-topics under "New Designs" (capped to
 // leave room for a "Talk to our team" row within WhatsApp's 10-row list limit).
 async function getDesignSubtopics(): Promise<Array<{ id: string; name: string }>> {
@@ -835,6 +910,45 @@ async function recentInboundCount(threadId: string, seconds: number): Promise<nu
     .select('id', { count: 'exact', head: true })
     .eq('thread_id', threadId).eq('direction', 'inbound').gte('created_at', since)
   return count ?? 0
+}
+
+// Total inbound messages recorded for a thread. The current inbound is stored
+// before routing runs, so a returning "2" here means "this is at least the 2nd
+// message" — our threshold for calling a Click-to-WhatsApp lead genuinely engaged.
+async function inboundCountForThread(threadId: string): Promise<number> {
+  const { count } = await supabaseAdmin.from('wa_messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('thread_id', threadId).eq('direction', 'inbound')
+  return count ?? 0
+}
+
+// Report an engaged Click-to-WhatsApp lead to Meta's Conversions API exactly once.
+// A lead who sends a 2nd message is a real human, not an accidental tap — the event
+// (keyed on the stored `ctwa_clid`, so no phone matching) teaches Meta to find more
+// people who actually engage. Guarded by `lead_event_sent_at` so later messages
+// never re-send, and no-ops for non-ad chats and until the CAPI env is provisioned
+// (wa_068). Best-effort: any error is swallowed and the conversation is untouched.
+const CTWA_LEAD_MIN_MESSAGES = 2
+async function maybeFireCtwaLead(phone: string, threadId: string): Promise<void> {
+  try {
+    const { data: lead } = await supabaseAdmin.from('wa_ad_leads')
+      .select('ctwa_clid, lead_event_sent_at')
+      .eq('phone', phone)
+      .not('ctwa_clid', 'is', null)
+      .is('lead_event_sent_at', null)
+      .order('first_seen', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (!lead?.ctwa_clid) return // not an ad lead, or its Lead event already fired
+    if (await inboundCountForThread(threadId) < CTWA_LEAD_MIN_MESSAGES) return
+    if (await sendCtwaLeadEvent(lead.ctwa_clid)) {
+      await supabaseAdmin.from('wa_ad_leads')
+        .update({ lead_event_sent_at: new Date().toISOString() })
+        .eq('phone', phone).eq('ctwa_clid', lead.ctwa_clid)
+    }
+  } catch (err) {
+    console.error('[webhook] maybeFireCtwaLead failed (non-fatal):', err)
+  }
 }
 // Flood guard: cap automated replies when one number spams the chat. Sends ONE
 // gentle "please hold" as they cross the line, then stays silent (staff still sees

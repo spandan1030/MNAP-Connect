@@ -26,6 +26,12 @@ const TIMING = [
   ['browsing', 'Just browsing'],
 ] as const
 
+// Optional "call them back in X days" — creates a scheduled follow-up alongside
+// the walk-in (reusing the ticked interests + note).
+const FOLLOWUP_DAYS: Array<[number, string]> = [
+  [3, '3 days'], [7, '1 week'], [15, '15 days'], [30, '1 month'],
+]
+
 export default function WalkInPage() {
   const supabase = createClient()
   const [name, setName] = useState('')
@@ -34,6 +40,7 @@ export default function WalkInPage() {
   const [timing, setTiming] = useState('')
   const [isVip, setIsVip] = useState(false)
   const [notes, setNotes] = useState('')
+  const [followupDays, setFollowupDays] = useState<number | null>(null)
   const [sendWelcome, setSendWelcome] = useState(true)
   const [hasWelcomeTemplate, setHasWelcomeTemplate] = useState(false)
   const [salesmen, setSalesmen] = useState<Array<{ id: string; name: string; alias: string }>>([])
@@ -90,7 +97,7 @@ export default function WalkInPage() {
 
   function reset() {
     setName(''); setPhone(''); setSelected(new Set()); setTiming(''); setIsVip(false); setNotes('')
-    setSendWelcome(true)
+    setFollowupDays(null); setSendWelcome(true)
     setError(''); setDone(null); setPicked(null); setSuggest([]); setShowSuggest(false)
   }
 
@@ -108,6 +115,7 @@ export default function WalkInPage() {
           name: name.trim(), phone: cleaned, interests: [...selected],
           timing: timing || undefined, notes: notes.trim() || undefined, isVip,
           salesmanId: salesmanId || undefined, sendWelcome,
+          followupDays: followupDays ?? undefined,
         }),
       })
       const data = await res.json()
@@ -255,6 +263,18 @@ export default function WalkInPage() {
                 </label>
               )}
               <input value={notes} onChange={e => setNotes(e.target.value)} className="input text-sm" placeholder="Note (optional) — e.g. wants bridal set for March wedding" />
+              <div>
+                <p className="text-[11px] font-medium text-gray-400 mb-1.5">Schedule a follow-up (optional)</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {FOLLOWUP_DAYS.map(([n, l]) => (
+                    <button key={n} type="button" onClick={() => setFollowupDays(followupDays === n ? null : n)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] border font-medium ${followupDays === n ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+                {followupDays && <p className="text-[11px] text-green-600 mt-1">Reminds you in {followupDays} days, with the interests ticked above.</p>}
+              </div>
             </div>
 
             {error && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}

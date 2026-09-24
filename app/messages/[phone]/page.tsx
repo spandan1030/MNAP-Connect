@@ -7,7 +7,19 @@ import { applyPlaceholders } from '@/lib/utils'
 import { describeError, shortError } from '@/lib/whatsapp/errors'
 import { compressImage } from '@/lib/image'
 import CustomerPeek from '@/components/ui/CustomerPeek'
+import { INTERESTS } from '@/lib/signals'
 import type { WaMessage, WaThread, MessageTemplate, InterestTopic } from '@/lib/types'
+
+// Follow-up horizons offered in the "Schedule follow-up" sheet.
+const FOLLOWUP_DAYS: Array<[number, string]> = [
+  [1, 'Tomorrow'], [3, '3 days'], [7, '1 week'], [15, '15 days'], [30, '1 month'],
+]
+const FOLLOWUP_GROUPS: Array<{ key: string; label: string }> = [
+  { key: 'engagement', label: 'Interested in' },
+  { key: 'product',    label: 'Product' },
+  { key: 'metal',      label: 'Metal' },
+  { key: 'occasion',   label: 'Occasion' },
+]
 
 interface TodayRates {
   rate_24kt: number | null
@@ -245,7 +257,7 @@ export default function ConversationPage({
   const [peekOpen, setPeekOpen] = useState(false)  // full customer profile
 
   // Templates + interests (in-chat tools)
-  const [sheet,            setSheet]            = useState<'none' | 'templates' | 'template-preview' | 'interests'>('none')
+  const [sheet,            setSheet]            = useState<'none' | 'templates' | 'template-preview' | 'interests' | 'followup' | 'call-outcome'>('none')
   const [templates,        setTemplates]        = useState<MessageTemplate[]>([])
   const [topics,           setTopics]           = useState<InterestTopic[]>([])
   const [todayRates,       setTodayRates]       = useState<TodayRates | null>(null)
@@ -257,6 +269,17 @@ export default function ConversationPage({
   const [previewBody,      setPreviewBody]      = useState('')
   const [tplSending,       setTplSending]       = useState(false)
   const [leads,            setLeads]            = useState<Array<{ intent: string | null; metal: string | null }>>([])
+
+  // Follow-up scheduling (chat)
+  const [followupDays,   setFollowupDays]   = useState<number | null>(null)
+  const [followupKeys,   setFollowupKeys]   = useState<Set<string>>(new Set())
+  const [followupNote,   setFollowupNote]   = useState('')
+  const [followupSaving, setFollowupSaving] = useState(false)
+  const [followupSaved,  setFollowupSaved]  = useState(false)
+  // Call outcome capture — set when a call is placed, prompted for on return.
+  const [pendingCallLogId, setPendingCallLogId] = useState<string | null>(null)
+  const [outcomeNote,      setOutcomeNote]      = useState('')
+  const [outcomeSaving,    setOutcomeSaving]    = useState(false)
 
   // Scroll to bottom
   const scrollToBottom = useCallback((smooth = false) => {
@@ -490,15 +513,83 @@ export default function ConversationPage({
   const displayName  = thread?.customer_name || formatPhone(phone)
   const customerName = thread?.customer_name || 'Customer'
 
-  // Log a call made from the inbox (simple registration, no outcome) tagged to the
-  // device's active salesman, then open the dialer.
+  // Log a call made from the inbox tagged to the device's active salesman, then
+  // open the dialer. We keep the new log's id so that when the salesman returns to
+  // the app we can prompt for the outcome (reached / no answer + note).
   async function logAndCall() {
     const salesmanId = typeof window !== 'undefined' ? localStorage.getItem('mc_salesman') : null
-    fetch('/api/calls/log', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, salesmanId }),
-    }).catch(() => {})
+    try {
+      const res = await fetch('/api/calls/log', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, salesmanId }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (d?.logId) setPendingCallLogId(d.logId as string)
+    } catch { /* still let them dial */ }
     window.location.href = `tel:+91${phone}`
+  }
+
+  // When the salesman comes back to the app after placing a call, prompt once for
+  // the outcome so inbox calls carry real details (not just "attempted").
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === 'visible' && pendingCallLogId) {
+        setSheet(s => (s === 'none' ? 'call-outcome' : s))
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [pendingCallLogId])
+
+  async function submitOutcome(success: boolean) {
+    if (!pendingCallLogId) { setSheet('none'); return }
+    setOutcomeSaving(true)
+    try {
+      await fetch('/api/calls/outcome', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logId: pendingCallLogId, success, notes: outcomeNote.trim() || undefined }),
+      })
+    } catch { /* best-effort */ }
+    setOutcomeSaving(false)
+    setPendingCallLogId(null)
+    setOutcomeNote('')
+    setSheet('none')
+  }
+
+  function dismissOutcome() {
+    setPendingCallLogId(null)
+    setOutcomeNote('')
+    setSheet('none')
+  }
+
+  function toggleFollowupKey(key: string) {
+    setFollowupKeys(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
+  }
+
+  async function saveFollowup() {
+    if (!followupDays || followupSaving) return
+    setFollowupSaving(true)
+    const salesmanId = typeof window !== 'undefined' ? localStorage.getItem('mc_salesman') : null
+    try {
+      // Phone-keyed only — we don't pass a customerId here (the chat's customerId is
+      // a Type-A id, while wa_followups.customer_id references Type-B). Phone links it.
+      const res = await fetch('/api/followups', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, salesmanId, dueInDays: followupDays, interests: [...followupKeys], note: followupNote.trim() || undefined }),
+      })
+      if (res.ok) {
+        setFollowupSaved(true)
+        setTimeout(() => {
+          setFollowupSaved(false); setSheet('none')
+          setFollowupDays(null); setFollowupKeys(new Set()); setFollowupNote('')
+        }, 1100)
+      }
+    } catch { /* leave the sheet open on failure */ }
+    finally { setFollowupSaving(false) }
   }
 
   // "Interested in" banner — the specific topics tagged across the whole
@@ -684,6 +775,18 @@ export default function ConversationPage({
             {thread.bot_state === 'active' ? 'BOT ON' : 'BOT OFF'}
           </button>
         )}
+
+        {/* Schedule a follow-up */}
+        <button
+          onClick={() => { setError(null); setSheet('followup') }}
+          className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-gray-500 hover:text-green-600 hover:bg-green-50 transition-colors"
+          aria-label="Schedule follow-up"
+          title="Schedule follow-up"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+        </button>
 
         {/* Assign interests */}
         <button
@@ -989,6 +1092,88 @@ export default function ConversationPage({
                 {interestsSaving ? 'Saving…' : interestsSaved ? '✓ Saved' : 'Save interests'}
               </button>
               <button onClick={() => setSheet('none')} className="btn-secondary w-full">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Schedule follow-up sheet ───────────────────────────────────────── */}
+      {sheet === 'followup' && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={() => setSheet('none')}>
+          <div className="bg-white rounded-t-2xl flex flex-col max-h-[88vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-5 pb-3">
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+              <p className="font-semibold text-gray-900">Schedule a follow-up</p>
+              <p className="text-xs text-gray-500 mt-0.5">Remind yourself to contact {displayName}. It appears in Follow-ups when due.</p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 space-y-4 pb-2">
+              <div>
+                <p className="text-[11px] font-medium text-gray-400 mb-1.5">Follow up in</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {FOLLOWUP_DAYS.map(([n, l]) => (
+                    <button key={n} type="button" onClick={() => setFollowupDays(followupDays === n ? null : n)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] border font-medium ${followupDays === n ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200'}`}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {FOLLOWUP_GROUPS.map(g => {
+                const items = INTERESTS.filter(i => i.group === g.key)
+                if (!items.length) return null
+                return (
+                  <div key={g.key}>
+                    <p className="text-[11px] font-medium text-gray-400 mb-1.5">{g.label}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {items.map(i => (
+                        <button key={i.key} type="button" onClick={() => toggleFollowupKey(i.key)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] border font-medium ${followupKeys.has(i.key) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+                          {i.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+              <input value={followupNote} onChange={e => setFollowupNote(e.target.value)} className="input text-sm"
+                placeholder="Note (optional) — e.g. wanted the bridal set, will decide after Diwali" />
+            </div>
+            <div className="flex-shrink-0 px-5 pt-3 pb-8 space-y-2">
+              <button onClick={saveFollowup} disabled={!followupDays || followupSaving}
+                className="btn-primary w-full disabled:opacity-50">
+                {followupSaving ? 'Saving…' : followupSaved ? '✓ Scheduled' : followupDays ? 'Schedule follow-up' : 'Pick a time first'}
+              </button>
+              <button onClick={() => setSheet('none')} className="btn-secondary w-full">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Call outcome sheet (after placing a call) ──────────────────────── */}
+      {sheet === 'call-outcome' && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={dismissOutcome}>
+          <div className="bg-white rounded-t-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-5 pb-3">
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+              <p className="font-semibold text-gray-900">How did the call go?</p>
+              <p className="text-xs text-gray-500 mt-0.5">Logs the outcome against {displayName}&apos;s profile.</p>
+            </div>
+            <div className="px-5 pb-2 space-y-3">
+              <input value={outcomeNote} onChange={e => setOutcomeNote(e.target.value)} className="input text-sm"
+                placeholder="Note (optional) — what was discussed / next step" />
+              <div className="flex gap-2">
+                <button onClick={() => submitOutcome(true)} disabled={outcomeSaving}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white bg-green-600 disabled:opacity-50">
+                  ✓ Reached
+                </button>
+                <button onClick={() => submitOutcome(false)} disabled={outcomeSaving}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-gray-700 bg-gray-100 border border-gray-200 disabled:opacity-50">
+                  No answer
+                </button>
+              </div>
+            </div>
+            <div className="flex-shrink-0 px-5 pt-2 pb-8">
+              <button onClick={dismissOutcome} disabled={outcomeSaving} className="btn-secondary w-full">Skip</button>
             </div>
           </div>
         </div>

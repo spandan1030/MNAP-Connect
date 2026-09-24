@@ -28,7 +28,7 @@ interface PeekData {
   visits: Array<{ at: string; timing: string | null; note: string | null; interests: string[]; isBackfill: boolean; salesman: string | null }>
   audiences: Array<{ id: string; name: string; is_dynamic: boolean }>
   interests: Record<string, string[]>
-  calls: Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string }>
+  calls: Array<{ success: boolean | null; topics: string[] | null; intent: string | null; called_at: string; notes: string | null; salesman: string | null }>
   sends: Array<{ label: string; category: string | null; status: string; cohort: string | null; sentAt: string; inCampaign: boolean }>
 }
 
@@ -67,8 +67,26 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showCalls, setShowCalls] = useState(false)  // call log is opt-in (collapsed by default)
+  const [optingIn, setOptingIn] = useState(false)
 
   useEffect(() => { setShowCalls(false) }, [phone])
+
+  // Opt this contact back IN to all communication. Uses set_opt_out(false,'manual')
+  // via the API, which clears STOP / call-DNC / manual together — so someone who
+  // opted out any way is truly re-enabled (a manual-only toggle could not do this).
+  async function optBackIn() {
+    if (!phone) return
+    setOptingIn(true)
+    try {
+      const res = await fetch('/api/contacts/optout', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, optOut: false }),
+      })
+      const d = await res.json()
+      if (res.ok) setData(prev => prev ? { ...prev, flags: { ...prev.flags, is_opted_out: d.isOptedOut ?? false } } : prev)
+    } catch { /* leave the badge as-is on failure */ }
+    finally { setOptingIn(false) }
+  }
 
   useEffect(() => {
     if (!phone) { setData(null); setError(null); return }
@@ -97,7 +115,15 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                 {data?.flags.app_user && <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full" title="Registered on the customer app">App user</span>}
                 {data?.flags.has_scheme && <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full" title="Holds a gold-savings scheme in the app">Scheme</span>}
                 {data?.flags.app_product_interest && <span className="text-[10px] font-bold text-fuchsia-700 bg-fuchsia-50 border border-fuchsia-200 px-1.5 py-0.5 rounded-full" title="Tapped “interested” / shared a product link in chat">App interest</span>}
-                {data?.flags.is_opted_out && <span className="text-[10px] font-bold text-gray-600 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full">Opted out (all comms)</span>}
+                {data?.flags.is_opted_out && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="text-[10px] font-bold text-gray-600 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full">Opted out (all comms)</span>
+                    <button onClick={optBackIn} disabled={optingIn}
+                      className="text-[10px] font-bold text-green-700 bg-green-50 border border-green-200 px-1.5 py-0.5 rounded-full active:bg-green-100 disabled:opacity-50">
+                      {optingIn ? 'Opting in…' : 'Opt back in'}
+                    </button>
+                  </span>
+                )}
               </div>
               <a href={`tel:+91${phone}`} className="text-xs text-gray-500">+91 {phone}</a>
             </div>
@@ -218,18 +244,25 @@ export default function CustomerPeek({ phone, onClose }: { phone: string | null;
                   action={<button onClick={() => setShowCalls(s => !s)} className="text-[11px] font-medium text-green-700">{showCalls ? 'Hide' : 'View'}</button>}>
                   {showCalls && (
                     <div className="space-y-1">
-                      {data.calls.map((c, i) => (
-                        <div key={i} className="flex items-center gap-2 text-xs">
-                          <span className={c.success === true ? 'text-green-600' : c.success === false ? 'text-red-500' : 'text-gray-300'}>
-                            {c.success === true ? '✓' : c.success === false ? '✗' : '•'}
-                          </span>
-                          <span className="text-gray-400 w-20 flex-shrink-0">{fmtDateTime(c.called_at)}</span>
-                          <span className="text-gray-700 truncate">
-                            {c.intent ? INTENT_LABEL[c.intent] : ''}
-                            {c.topics?.length ? ` · ${c.topics.map(t => TOPIC_LABEL[t] ?? t).join(', ')}` : ''}
-                          </span>
-                        </div>
-                      ))}
+                      {data.calls.map((c, i) => {
+                        const detail = [
+                          c.intent ? INTENT_LABEL[c.intent] : null,
+                          c.topics?.length ? c.topics.map(t => TOPIC_LABEL[t] ?? t).join(', ') : null,
+                          c.notes || null,
+                        ].filter(Boolean).join(' · ')
+                        return (
+                          <div key={i} className="flex items-start gap-2 text-xs">
+                            <span className={c.success === true ? 'text-green-600' : c.success === false ? 'text-red-500' : 'text-gray-300'}>
+                              {c.success === true ? '✓' : c.success === false ? '✗' : '•'}
+                            </span>
+                            <span className="text-gray-400 w-20 flex-shrink-0">{fmtDateTime(c.called_at)}</span>
+                            <span className="text-gray-700 min-w-0 flex items-center gap-1 flex-wrap">
+                              {c.salesman && <Tag>{c.salesman}</Tag>}
+                              {detail && <span className="truncate">{detail}</span>}
+                            </span>
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
                 </Section>

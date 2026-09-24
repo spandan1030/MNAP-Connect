@@ -39,11 +39,11 @@ export async function POST(req: NextRequest) {
     customerId = cust.id as string
   }
 
-  const { error: lErr } = await supabaseAdmin.from('wa_b_call_logs').insert({
+  const { data: log, error: lErr } = await supabaseAdmin.from('wa_b_call_logs').insert({
     customer_id: customerId, called_by: user.id,
     salesman_id: body.salesmanId || null, success: null,
-  })
+  }).select('id').single()
   if (lErr) return Response.json({ error: lErr.message }, { status: 500 })
 
-  return Response.json({ ok: true, customerId })
+  return Response.json({ ok: true, customerId, logId: log.id })
 }
