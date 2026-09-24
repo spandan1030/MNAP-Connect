@@ -347,6 +347,8 @@ The chat view (`app/messages/[phone]/page.tsx`) and the inbound webhook
   to confirm the booking + 15% advance. Without this, keyword routing caught the prefill's
   "gold rate" and replied with today's rate, losing the offer intent. _Tip: set the `offer`
   bot copy to the same text to also catch organic "offer" askers during the campaign._
+  **`rate_lock_offer` is now exposed in Admin → Engagement → Auto-reply messages (2026-09-24)**
+  so the owner can review/edit it (esp. the Odia) + attach a poster without a deploy.
 - **Not yet built:** quoted-reply display (inbound `context.id` is captured only for
   audience-step attribution, `recordStepReply`) and staff outbound reply-to a specific
   message.

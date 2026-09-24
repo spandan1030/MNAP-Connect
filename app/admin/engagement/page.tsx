@@ -14,6 +14,7 @@ const FIELDS: Array<{ key: string; label: string; help: string; image: boolean }
   { key: 'more_options',label: '“More options” heading',     help: 'Shown above the full list when a customer taps “More options”.', image: false },
   { key: 'offers_menu',   label: '“Offers & Sale” heading',     help: 'Shown above the Offers / Gold Exchange-Cash buttons.', image: false },
   { key: 'offer',         label: 'Offer / Sale message',        help: 'Sent when a customer taps “Offers”. Add a poster image if you like.', image: true },
+  { key: 'rate_lock_offer', label: 'Festive rate-lock reply (ad leads)', help: 'Sent automatically to anyone who messages from the Click-to-WhatsApp rate-lock ad or the festive banner. This is the copy your ad leads see first — review the Odia here. Add the offer poster if you like.', image: true },
   { key: 'exchange_menu', label: '“Gold Exchange/Cash” heading',help: 'Shown above the Gold Exchange / Instant Cash buttons.', image: false },
   { key: 'exchange_info', label: 'Gold Exchange message',       help: 'Sent when a customer taps “Gold Exchange”. Add an image if you like.', image: true },
   { key: 'cash_info',     label: 'Instant Cash message',        help: 'Sent when a customer taps “Instant Cash”. Add an image if you like.', image: true },

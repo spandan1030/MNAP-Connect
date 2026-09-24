@@ -86,6 +86,7 @@ const MORE = [
   { href: '/campaigns',      label: 'Campaigns',    icon: ICONS.reports },
   { href: '/send',           label: 'Send (1:1)',   icon: ICONS.messages },
   { href: '/admin/templates', label: 'Templates',   icon: ICONS.templates },
+  { href: '/admin/engagement', label: 'Auto-reply', icon: ICONS.messages },
   { href: '/admin/calls',    label: 'Call Control', icon: ICONS.phone },
   { href: '/admin/app-users', label: 'App users',   icon: ICONS.customers },
   { href: '/admin/invoices/import', label: 'Import invoices', icon: ICONS.reports },
