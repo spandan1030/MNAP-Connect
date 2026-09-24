@@ -236,7 +236,11 @@ async function handleInboundMessage(
   // target them. Defensive: no-op if the ad tables aren't there yet (pre-wa_042)
   // or ads aren't running. ---
   const referral = (msg as { referral?: { source_id?: string; headline?: string; ctwa_clid?: string } }).referral
-  if (referral && (referral.source_id || referral.ctwa_clid)) {
+  // True only on the FIRST message of a Click-to-WhatsApp conversation (Meta only
+  // attaches `referral` to that one). Used below to route the ad lead straight to
+  // the offer reply instead of letting keyword routing mis-handle the prefill.
+  const isAdLead = !!(referral && (referral.source_id || referral.ctwa_clid))
+  if (isAdLead) {
     try {
       await supabaseAdmin.from('wa_ad_leads').upsert({
         phone, ad_campaign: referral.source_id ?? null, source_id: referral.source_id ?? null,
@@ -354,6 +358,12 @@ async function handleInboundMessage(
       // ahead of the menu so a "…interested…" message never falls through to the
       // generic welcome. (interactive taps carry no `text`, so this can't eat one.)
       await handleAppProductInterest(phone, threadId, customer)
+    } else if (isAdLead) {
+      // First message of a Click-to-WhatsApp conversation (carries an ad `referral`).
+      // Route straight to the festive rate-lock offer + capture the lead — otherwise
+      // keyword routing sends "today's rate" (the prefill contains "gold rate") or a
+      // generic menu, and the ad's intent is lost.
+      await handleRateLockLead(phone, threadId, customer)
     } else if (interactiveReply) {
       // An explicit button/menu tap — always honour it
       await handleFlowReply(phone, threadId, interactiveReply.id, customer, displayName)
@@ -865,6 +875,14 @@ const BOT_DEFAULTS: Record<string, string> = {
   more_options:'Here are all the options. 🙏 Please choose one:',
   offers_menu: 'What would you like to know? 🙏',
   offer:       '✨ Our latest offers are running now! Please visit us to know more.',
+  rate_lock_offer:
+    '✨ Buy Gold, The Smart Way with M N Alankar!\n\n' +
+    "Book today's gold rate for your festive purchase:\n" +
+    '🔒 If the rate goes UP, you still pay the booked (lower) rate.\n' +
+    '📉 If it comes DOWN, you get the lower rate at billing.\n' +
+    "You're protected either way.\n\n" +
+    'To lock your rate, a minimum 15% advance is needed. Making charges & GST apply at the time of billing.\n\n' +
+    "Reply with your *name*, how much gold you're planning (grams or ₹ — approx is fine), and when you plan to buy. Our team will confirm your booking. 🙏",
   exchange_menu: 'Please choose one: 🙏',
   exchange_info: 'You can exchange your old gold for new jewellery at the best value. 🙏 Our team will share the details with you shortly.',
   cash_info:   'We offer instant cash for your gold. 🙏 Our team will contact you with the details shortly.',
@@ -1305,6 +1323,16 @@ async function sendOffer(phone: string, threadId: string, customer: { id: string
   await tagTopic(customer?.id, '%discount%')   // "Sale & Discounts"
   await recordLead(threadId, customer?.id, { intent: 'offer' })
   await sendBotWithCta(phone, threadId, 'offer', `See our latest collection 👉 ${APP_LINKS.shop()}`)
+}
+
+// Festive rate-lock offer — the reply for a Click-to-WhatsApp ad lead's FIRST
+// message. Sends the offer explainer (admin-editable copy `rate_lock_offer`, with
+// a code default), records the lead, and flags a human so staff confirm the booking
+// + take the 15% advance. The ad `referral` is already stored in wa_ad_leads.
+async function handleRateLockLead(phone: string, threadId: string, customer: { id: string } | null) {
+  await recordLead(threadId, customer?.id, { intent: 'rate_lock' })
+  await flagAgent(threadId)
+  await sendBotWithCta(phone, threadId, 'rate_lock_offer', `Track today's live gold rate 👉 ${APP_LINKS.rate()}`)
 }
 
 async function sendExchangeInfo(phone: string, threadId: string, customer: { id: string } | null) {

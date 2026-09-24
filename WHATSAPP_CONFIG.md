@@ -22,8 +22,8 @@
 WHATSAPP_VERIFY_TOKEN=mnap_connect_2603
 WHATSAPP_PHONE_NUMBER_ID=1127121583816269
 WHATSAPP_API_VERSION=v22.0
-WHATSAPP_APP_SECRET=33af718d1afa37072448fce4a24d7ce1
-WHATSAPP_ACCESS_TOKEN=EAAqD6Pw5MRQBRsMgDP2JalARgxoLJVdXHaIZBwa3Ho0HWmLAMpP2CxEukgQBerd4h54Qu5ibz0XQ0RMls87Jctqp5TQn2hPrj93VFinz08OelNUB5xZC5w2I7IyIpyVeezSnSzFIZAyduKbxlh45oFvpeEkWsQUbcTDoZBZB2xVFmcnOUjoegTqokd3wShivWAgZDZD
+WHATSAPP_APP_SECRET=<your-app-secret>          # never paste the real value here — .env.local only
+WHATSAPP_ACCESS_TOKEN=<your-permanent-system-user-token>   # never paste the real value here — .env.local only
 ```
 
 ## Webhook Registration (do this after deploying)
