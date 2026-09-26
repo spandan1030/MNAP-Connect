@@ -387,6 +387,20 @@ The chat view (`app/messages/[phone]/page.tsx`) and the inbound webhook
     does (it created the dataset); a pixel-scoped token gives "missing permissions".
     Also: the Lead fires only on a *new* inbound webhook — **no backfill** for leads
     already past 2 messages before deploy.
+  - **How to verify/operate:** from an ad-lead's chat send a 2nd message → Vercel
+    Realtime logs (filter `capi`) show `[capi] LeadSubmitted reported for <phone>`;
+    the event lands in Events-Manager dataset `2064741550836337` → Activity. On failure
+    the log prints the full Meta error + the sent payload. **Not yet steering delivery:**
+    the ad set still optimises for "conversations"; `LeadSubmitted` is *collected +
+    attributed* now and only *drives optimisation* once the ad set's performance goal is
+    switched to it (do that at ~50 events/week; dataset must be assigned to the ad account).
+  - **Two datasets, don't conflate (this is a common confusion):** dataset
+    `2064741550836337` = the **WhatsApp/WABA** channel (this CAPI, `LeadSubmitted`).
+    Dataset `1525339108658425` = the **website pixel** — a *separate* system on
+    [[project_mnap_marketing]] / `mnap-customer/src/lib/events.ts`, whose conversion is
+    the standard `Lead` event (fired on product-enquiry, rate-booking, payment-intent,
+    book-a-visit) plus a server CAPI `SchemePayment` on a confirmed scheme deposit. Both
+    datasets legitimately show "connected to Conversions API"; they never overlap.
 - **CRM enhancements batch (`wa_069`/`wa_070`, 2026-09-25):**
   - **Ad Lead attribute (`wa_069`):** new canonical interest `ad_lead` (`lib/signals.ts` INTERESTS + a `wa_interest_topics` row, `key='ad_lead'`). The webhook tags it on every Click-to-WhatsApp lead (`tagInterestKey` in the `isAdLead` block), and a one-time migration backfill writes it for all existing `wa_ad_leads`. It appears on the profile and, because `FilterBuilder` derives interest chips from `INTERESTS`, is automatically targetable in Reach.
   - **Smart auto-tagging:** `autoTagInterests(phone, customerId, text)` runs on each inbound customer message (webhook tail, best-effort), reusing the bot's own typo-tolerant matchers (`canonicalCategory`, `guessMetal`, `isRateKeyword`, `isOffersKeyword`, `isSchemeKeyword`, `isGenericDesignRequest`) mapped to canonical keys (`CANON_CATEGORY_TO_INTEREST`). Only ADDS signals, only from the customer's own text — the "Interested in" banner + profile build up without manual tagging. `tagInterestKey` prefers the topic path (`addInterest`, which mirrors to `wa_signals`), else writes the signal directly.
