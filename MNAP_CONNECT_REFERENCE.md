@@ -361,7 +361,7 @@ The chat view (`app/messages/[phone]/page.tsx`) and the inbound webhook
 - **CTWA Conversions-API "engaged Lead" (`wa_068`, 2026-09-25):** turns Meta from
   optimising for *chatters* (the free "conversation started" signal) toward *engaged
   humans*. When a Click-to-WhatsApp ad lead sends a **2nd message** (`CTWA_LEAD_MIN_MESSAGES`),
-  the webhook fires **one** CAPI `Lead` event to Meta, keyed on the stored `ctwa_clid`
+  the webhook fires **one** CAPI `LeadSubmitted` event to Meta, keyed on the stored `ctwa_clid`
   (from the referral, in `wa_ad_leads`) — **no phone matching**, so it survives a lead
   who messages from one number and bills from another. Path: `handleInboundMessage` →
   `maybeFireCtwaLead(phone, threadId)` (best-effort, outside the reply path) →
@@ -372,8 +372,16 @@ The chat view (`app/messages/[phone]/page.tsx`) and the inbound webhook
   `META_CAPI_DATASET_ID` (WABA's Events-Manager dataset), `META_WABA_ID`,
   `META_CAPI_ACCESS_TOKEN` (falls back to `WHATSAPP_ACCESS_TOKEN`); optional
   `META_CAPI_TEST_EVENT_CODE` (Test-events tab) and `META_CAPI_LEAD_EVENT_NAME`
-  (default `Lead`). `sendCtwaConversionEvent` also takes `value`/`currency` — the reuse
+  (default `LeadSubmitted`). `sendCtwaConversionEvent` also takes `value`/`currency` — the reuse
   point for a future real **Purchase** event once a sale can be tied back to a lead.
+  - **Go-live gotchas (2026-09-26, verified live):** (1) the event name **must** be a
+    `business_messaging` messaging event — the web name `Lead` is rejected (code 100,
+    subcode 2804066); use `LeadSubmitted` (or `Purchase`). (2) `META_CAPI_ACCESS_TOKEN`
+    **must** be a token with access to the dataset (Events-Manager → dataset → Generate
+    access token, or a System User with the dataset asset). The `WHATSAPP_ACCESS_TOKEN`
+    fallback lacks dataset permission → "Object … does not exist / missing permissions".
+    (3) The Lead fires only on a *new* inbound webhook — there is **no backfill** for
+    leads that already crossed 2 messages before deploy.
 - **CRM enhancements batch (`wa_069`/`wa_070`, 2026-09-25):**
   - **Ad Lead attribute (`wa_069`):** new canonical interest `ad_lead` (`lib/signals.ts` INTERESTS + a `wa_interest_topics` row, `key='ad_lead'`). The webhook tags it on every Click-to-WhatsApp lead (`tagInterestKey` in the `isAdLead` block), and a one-time migration backfill writes it for all existing `wa_ad_leads`. It appears on the profile and, because `FilterBuilder` derives interest chips from `INTERESTS`, is automatically targetable in Reach.
   - **Smart auto-tagging:** `autoTagInterests(phone, customerId, text)` runs on each inbound customer message (webhook tail, best-effort), reusing the bot's own typo-tolerant matchers (`canonicalCategory`, `guessMetal`, `isRateKeyword`, `isOffersKeyword`, `isSchemeKeyword`, `isGenericDesignRequest`) mapped to canonical keys (`CANON_CATEGORY_TO_INTEREST`). Only ADDS signals, only from the customer's own text — the "Interested in" banner + profile build up without manual tagging. `tagInterestKey` prefers the topic path (`addInterest`, which mirrors to `wa_signals`), else writes the signal directly.

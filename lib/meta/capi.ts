@@ -22,8 +22,9 @@
 //                              (falls back to WHATSAPP_ACCESS_TOKEN if unset)
 //   META_CAPI_TEST_EVENT_CODE — optional; routes events to the Events Manager
 //                               "Test events" tab for verification
-//   META_CAPI_LEAD_EVENT_NAME — optional; the event name to send (default "Lead").
-//                               Match whatever event you optimise the ad for.
+//   META_CAPI_LEAD_EVENT_NAME — optional; the event name to send (default
+//                               "LeadSubmitted"). business_messaging rejects web
+//                               names like "Lead"; match the ad's optimisation event.
 // ---------------------------------------------------------------------------
 
 const API_VERSION = process.env.WHATSAPP_API_VERSION || 'v22.0'
@@ -107,7 +108,10 @@ export async function sendCtwaConversionEvent(ev: CtwaEvent): Promise<boolean> {
 // so it can be aligned with whatever the ad set optimises for.
 export function sendCtwaLeadEvent(ctwaClid: string): Promise<boolean> {
   return sendCtwaConversionEvent({
-    eventName: process.env.META_CAPI_LEAD_EVENT_NAME || 'Lead',
+    // business_messaging rejects the web event name "Lead" (error subcode 2804066)
+    // — messaging events use their own vocabulary. "LeadSubmitted" is the engaged-
+    // lead equivalent Meta accepts for this action source.
+    eventName: process.env.META_CAPI_LEAD_EVENT_NAME || 'LeadSubmitted',
     ctwaClid,
   })
 }
