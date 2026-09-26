@@ -86,7 +86,14 @@ export async function sendCtwaConversionEvent(ev: CtwaEvent): Promise<boolean> {
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
-      console.error(`[capi] Meta rejected CTWA ${ev.eventName} event:`, data?.error?.message ?? res.status)
+      // "Invalid parameter" alone is useless — Meta puts the real reason in the
+      // user_msg / subcode fields. Log the full error and the exact event we sent
+      // so the offending field is unambiguous.
+      const e = (data as { error?: Record<string, unknown> })?.error ?? {}
+      console.error(`[capi] Meta rejected CTWA ${ev.eventName} event:`, JSON.stringify({
+        message: e.message, code: e.code, subcode: e.error_subcode,
+        user_title: e.error_user_title, user_msg: e.error_user_msg, details: e.error_data,
+      }), '| sent:', JSON.stringify(event))
       return false
     }
     return true
