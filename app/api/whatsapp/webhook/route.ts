@@ -939,28 +939,19 @@ async function maybeFireCtwaLead(phone: string, threadId: string): Promise<void>
       .order('first_seen', { ascending: false })
       .limit(1)
       .maybeSingle()
-    // A failed lookup here used to be swallowed — a real conversion would then go
-    // un-reported with no trace. Surface it.
+    // Surface a lookup failure rather than swallow it — otherwise a real
+    // conversion would go un-reported with no trace.
     if (error) {
       console.error('[capi] ad-lead lookup failed for', phone, '-', error.message)
       return
     }
-    if (!lead?.ctwa_clid) {
-      console.warn('[capi] no unsent ad-lead row for', phone, '(not an ad lead, or already fired)')
-      return
-    }
-    const inbound = await inboundCountForThread(threadId)
-    if (inbound < CTWA_LEAD_MIN_MESSAGES) {
-      console.warn('[capi] ad-lead', phone, 'inbound count', inbound, '< threshold — holding Lead')
-      return
-    }
-    console.warn('[capi] firing Lead for', phone, '— inbound', inbound, 'clid', lead.ctwa_clid.slice(0, 10) + '…')
-    const ok = await sendCtwaLeadEvent(lead.ctwa_clid)
-    console.warn('[capi] Lead send result for', phone, '=', ok)
-    if (ok) {
+    if (!lead?.ctwa_clid) return // not an ad lead, or its Lead event already fired
+    if (await inboundCountForThread(threadId) < CTWA_LEAD_MIN_MESSAGES) return
+    if (await sendCtwaLeadEvent(lead.ctwa_clid)) {
       await supabaseAdmin.from('wa_ad_leads')
         .update({ lead_event_sent_at: new Date().toISOString() })
         .eq('phone', phone).eq('ctwa_clid', lead.ctwa_clid)
+      console.log('[capi] LeadSubmitted reported for', phone)
     }
   } catch (err) {
     console.error('[webhook] maybeFireCtwaLead failed (non-fatal):', err)
