@@ -322,12 +322,24 @@ The chat view (`app/messages/[phone]/page.tsx`) and the inbound webhook
   (**Today / Yesterday / "24 Jul 2026"**); each bubble itself shows the time only.
 - **Clickable links:** `http(s)://…` URLs in a message body are auto-linkified
   (`linkify()`), trailing sentence punctuation kept out of the href.
-- **Inbound media:** the webhook downloads from Meta → stores in Supabase Storage
-  `wa-media` (`inbound/…`) → `wa_messages.media_url`, for **image, video, document,
-  and voice/audio** (was image-only before). `message_type` (wa_006) already allows all
-  of these — no migration. Bubbles render `<img>` (tap = open), `<video controls>`,
-  `<audio controls>`, or a document download link; a missing `media_url` shows a
-  placeholder. Thread previews use 📷/🎥/📄/🎤 prefixes.
+- **Inbound media (PRIVATE):** the webhook downloads from Meta → stores in the
+  **private `wa-inbound` bucket** (customer photos are not public like the catalogue),
+  for **image, video, document, and voice/audio**. `wa_messages.media_url` holds an
+  auth-gated proxy path — `/api/whatsapp/media?path=inbound/<file>` — which verifies the
+  staff session and **302s to a 5-min signed URL** (`app/api/whatsapp/media/route.ts`).
+  Bubbles render `<img>`/`<video>`/`<audio>`/doc-link against that proxy (same-origin, so
+  the session cookie rides along); a missing `media_url` shows a placeholder. Thread
+  previews use 📷/🎥/📄/🎤. **Outbound** media (send-media, share-product) stays in the
+  **public** `wa-media` bucket — Meta must fetch it by URL to deliver it. (Pre-2026-09-27
+  inbound files were migrated off the public bucket + public copies deleted.)
+- **Table security (audit 2026-09-27):** all 73 public tables/views checked against the
+  anon (browser) key. Everything sensitive denies anon read+write. Two leaks fixed:
+  **`customer_features`** (a VIEW — views bypass RLS by default — leaked all ~10.9k
+  customer rows; `wa_071` sets `security_invoker=on` + revokes anon) and **`item_master`**
+  (mnap; policy lacked an `auth.uid()` guard; mnap `017` restricts to authenticated). No
+  Supabase *table* is anon-public — the customer app reads catalogue from Firestore; only
+  the `wa-media` bucket (product images + Meta-fetched template headers + outbound) is
+  public. Any future `CREATE VIEW` over RLS tables MUST use `WITH (security_invoker=on)`.
 - **Universal inbound extraction (`extractInbound()` in the webhook):** every inbound
   shape yields the best human-readable text, so nothing stores as "[button message]"
   → "Unsupported message". Handled: **template quick-reply buttons** (`type:'button'` —
