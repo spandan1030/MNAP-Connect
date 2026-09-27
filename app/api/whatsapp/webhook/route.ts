@@ -1623,6 +1623,10 @@ async function handleFlowReply(
   }
 }
 
+// Inbound customer media goes to the PRIVATE `wa-inbound` bucket (a customer's photo
+// is not public like the catalogue). We store an auth-gated proxy path, not a public
+// URL — the messages view renders it through /api/whatsapp/media, which signs a
+// short-lived URL only for a logged-in staff session.
 async function fetchAndStoreInboundMedia(mediaId: string, mimeType: string): Promise<string> {
   const { url } = await getMediaDownloadUrl(mediaId)
   const { buffer, contentType } = await downloadMediaBuffer(url)
@@ -1631,16 +1635,13 @@ async function fetchAndStoreInboundMedia(mediaId: string, mimeType: string): Pro
   const filename = `inbound/${Date.now()}-${mediaId}.${ext}`
 
   const { data, error } = await supabaseAdmin.storage
-    .from('wa-media')
+    .from('wa-inbound')
     .upload(filename, buffer, { contentType, upsert: false })
 
   if (error || !data) throw new Error(error?.message ?? 'Storage upload failed')
 
-  const { data: { publicUrl } } = supabaseAdmin.storage
-    .from('wa-media')
-    .getPublicUrl(data.path)
-
-  return publicUrl
+  // Not a public URL — access is brokered by the auth-gated media proxy.
+  return `/api/whatsapp/media?path=${encodeURIComponent(data.path)}`
 }
 
 async function getRateTemplate() {
