@@ -269,6 +269,7 @@ export default function ConversationPage({
   const [previewBody,      setPreviewBody]      = useState('')
   const [tplSending,       setTplSending]       = useState(false)
   const [leads,            setLeads]            = useState<Array<{ intent: string | null; metal: string | null }>>([])
+  const [pendingFollowup,  setPendingFollowup]  = useState<{ due_on: string; note: string | null } | null>(null)
 
   // Follow-up scheduling (chat)
   const [followupDays,   setFollowupDays]   = useState<number | null>(null)
@@ -295,11 +296,12 @@ export default function ConversationPage({
 
       // Thread + supporting data (templates / topics / rates) in parallel.
       // Thread may not exist yet — the first outbound message creates it.
-      const [thRes, tplRes, topicRes, ratesRes] = await Promise.all([
+      const [thRes, tplRes, topicRes, ratesRes, fuRes] = await Promise.all([
         supabase.from('wa_threads').select('*').eq('phone', phone).single(),
         supabase.from('wa_message_templates').select('*').eq('is_active', true).order('name'),
         supabase.from('wa_interest_topics').select('*').eq('is_active', true).order('sort_order'),
         supabase.from('daily_rates').select('rate_24kt, rate_22kt, rate_18kt').eq('date', todayStr).maybeSingle(),
+        supabase.from('wa_followups').select('due_on, note').eq('phone', phone).eq('status', 'pending').order('due_on').limit(1).maybeSingle(),
       ])
 
       const th = thRes.data as WaThread | null
@@ -307,6 +309,7 @@ export default function ConversationPage({
       setTemplates((tplRes.data ?? []) as MessageTemplate[])
       setTopics((topicRes.data ?? []) as InterestTopic[])
       setTodayRates((ratesRes.data ?? null) as TodayRates | null)
+      setPendingFollowup((fuRes.data ?? null) as { due_on: string; note: string | null } | null)
 
       if (th) {
         const [msgsRes, interestsRes, leadRes] = await Promise.all([
@@ -582,6 +585,9 @@ export default function ConversationPage({
         body: JSON.stringify({ phone, salesmanId, dueInDays: followupDays, interests: [...followupKeys], note: followupNote.trim() || undefined }),
       })
       if (res.ok) {
+        // Reflect it in the in-chat banner right away.
+        const due = new Date(); due.setDate(due.getDate() + followupDays)
+        setPendingFollowup({ due_on: due.toLocaleDateString('en-CA'), note: followupNote.trim() || null })
         setFollowupSaved(true)
         setTimeout(() => {
           setFollowupSaved(false); setSheet('none')
@@ -818,6 +824,19 @@ export default function ConversationPage({
         <div className="flex-shrink-0 bg-blue-50 border-b border-blue-100 px-4 py-1.5">
           <p className="text-xs text-blue-800">
             <span className="font-semibold">Interested in:</span> {leadSummary}
+          </p>
+        </div>
+      )}
+
+      {/* Pending follow-up context — so staff see it without leaving the chat */}
+      {pendingFollowup && (
+        <div className="flex-shrink-0 bg-amber-50 border-b border-amber-100 px-4 py-1.5 flex items-center gap-1.5">
+          <svg className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p className="text-xs text-amber-800 truncate">
+            <span className="font-semibold">{followupLabel(pendingFollowup.due_on)}</span>
+            {pendingFollowup.note ? ` · ${pendingFollowup.note}` : ''}
           </p>
         </div>
       )}
@@ -1187,4 +1206,16 @@ export default function ConversationPage({
 function formatPhone(phone: string): string {
   if (phone.length === 10) return `+91 ${phone.slice(0, 5)} ${phone.slice(5)}`
   return phone
+}
+
+// "Follow-up overdue / today / in N days" from a due DATE (yyyy-mm-dd).
+function followupLabel(dueOn: string): string {
+  const todayStr = new Date().toLocaleDateString('en-CA')
+  const days = Math.round(
+    (new Date(dueOn + 'T00:00:00').getTime() - new Date(todayStr + 'T00:00:00').getTime()) / 86_400_000
+  )
+  if (days < 0)  return 'Follow-up overdue'
+  if (days === 0) return 'Follow-up due today'
+  if (days === 1) return 'Follow-up tomorrow'
+  return `Follow-up in ${days} days`
 }

@@ -261,11 +261,13 @@ export interface WaThread {
   customer_name: string | null
   customer_id: string | null
   last_message_at: string | null
+  last_human_at: string | null   // last REAL activity (inbound/bot-reply/manual send); NOT bumped by campaign blasts (wa_072). Drives the Chats vs Broadcasts split.
   last_message_preview: string | null
   unread_count: number
   bot_state: 'active' | 'awaiting_care' | 'with_agent'
   bot_paused_at: string | null   // set when paused to a human; drives the 6h auto-resume (wa_064)
   needs_agent: boolean
+  color: import('@/lib/threadColors').ThreadColor | null  // manual triage tag set by long-press (wa_072)
   created_at: string
 }
 

@@ -280,7 +280,8 @@ async function handleInboundMessage(
 
   if (existingThread) {
     threadId = existingThread.id
-    const threadUpdate: Record<string, unknown> = { last_message_at: now, last_message_preview: preview }
+    // Inbound is real conversation → bump last_human_at too (drives the Chats stream, wa_072).
+    const threadUpdate: Record<string, unknown> = { last_message_at: now, last_human_at: now, last_message_preview: preview }
     // Backfill the customer link on older threads created before auto-enroll
     if (!existingThread.customer_id && customer) {
       threadUpdate.customer_id   = customer.id
@@ -302,6 +303,7 @@ async function handleInboundMessage(
         customer_name:        customer?.name ?? contactName,
         customer_id:          customer?.id ?? null,
         last_message_at:      now,
+        last_human_at:        now,   // first contact is inbound → belongs in Chats (wa_072)
         last_message_preview: preview,
       })
       .select('id')
@@ -981,7 +983,8 @@ async function logOutbound(threadId: string, wamid: string, body: string) {
     }),
     supabaseAdmin
       .from('wa_threads')
-      .update({ last_message_at: now, last_message_preview: body.slice(0, 60) })
+      // A bot auto-reply is part of a live conversation → keep it in Chats (wa_072).
+      .update({ last_message_at: now, last_human_at: now, last_message_preview: body.slice(0, 60) })
       .eq('id', threadId),
   ])
 }
@@ -1759,7 +1762,8 @@ async function handleAutoReply(phone: string, threadId: string, customerName: st
     }),
     supabaseAdmin
       .from('wa_threads')
-      .update({ last_message_at: now, last_message_preview: messageBody.slice(0, 60) })
+      // Auto-reply to a live inbound → real conversation, keep in Chats (wa_072).
+      .update({ last_message_at: now, last_human_at: now, last_message_preview: messageBody.slice(0, 60) })
       .eq('id', threadId),
   ])
 }

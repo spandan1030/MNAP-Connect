@@ -144,7 +144,8 @@ export async function POST(req: NextRequest) {
         .update({ wa_message_id: wamid, status: 'sent', sent_at: now })
         .eq('id', message.id),
       supabase.from('wa_threads')
-        .update({ last_message_at: now, last_message_preview: messageBody.slice(0, 60), needs_agent: false })
+        // Staff 1:1 reply → real conversation (Chats) + clears the "Reply" flag (wa_072).
+        .update({ last_message_at: now, last_human_at: now, last_message_preview: messageBody.slice(0, 60), needs_agent: false })
         .eq('id', threadId),
     ])
 

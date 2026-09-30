@@ -119,7 +119,10 @@ export async function POST(req: NextRequest) {
         .eq('id', message.id),
       supabase
         .from('wa_threads')
-        .update({ last_message_at: now, last_message_preview: '📷 Photo' + (caption ? `: ${caption.slice(0, 40)}` : '') })
+        // Replying with a photo IS a reply → real conversation (Chats) + clears the
+        // stuck "Reply" flag (previously only /send cleared it, so a photo reply left
+        // it lit forever) (wa_072).
+        .update({ last_message_at: now, last_human_at: now, needs_agent: false, last_message_preview: '📷 Photo' + (caption ? `: ${caption.slice(0, 40)}` : '') })
         .eq('id', threadId),
     ])
 
